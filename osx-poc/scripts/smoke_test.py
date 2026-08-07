@@ -198,7 +198,8 @@ def check_osx_src_importable() -> bool:
         from eat.eat import ExpertAccessTable
         from tier.manager import TierManager
         from scheduler.ptpep import PTPEPClassifier
-        _pass("src/ packages importabili (eat, tier, scheduler)")
+        from led.manager import LEDManager
+        _pass("src/ packages importabili (eat, tier, scheduler, led)")
         return True
     except ImportError as e:
         _fail("src/ packages non importabili", str(e))

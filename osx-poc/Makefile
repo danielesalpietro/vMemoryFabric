@@ -34,6 +34,9 @@ test-tier:
 test-scheduler:
 	$(RUN) pytest tests/test_scheduler.py -v --tb=short
 
+test-led:
+	$(RUN) pytest tests/test_led.py -v --tb=short
+
 # ── Benchmarks ────────────────────────────────────────────────────────────────
 
 bench:
@@ -92,6 +95,7 @@ help:
 	@echo "  make test-eat     pytest M1 only"
 	@echo "  make test-tier    pytest M2 only"
 	@echo "  make test-scheduler pytest M3 only"
+	@echo "  make test-led     pytest M4 only"
 	@echo "  make bench        Benchmark M1 + M2"
 	@echo "  make lint         Ruff linter"
 	@echo "  make typecheck    mypy"
