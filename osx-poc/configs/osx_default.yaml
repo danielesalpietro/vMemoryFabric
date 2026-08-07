@@ -1,0 +1,62 @@
+# OSX-PoC — Configurazione default
+# Setup dev: Docker su Windows, RTX 3090 (single GPU), no PMEM, no io_uring
+
+# ── Hardware ────────────────────────────────────────────────────────────────────
+hardware:
+  gpu:
+    device_id: 0
+    name: "RTX 3090"
+    vram_gb: 24
+    pinned_memory: false          # non disponibile Docker/Windows
+  pmem:
+    enabled: false                # deferred — non disponibile in dev
+    path: null
+  nvme:
+    path: "/data/nvme"            # volume Docker montato
+    use_io_uring: false           # non disponibile su WSL2/Windows Docker
+
+# ── EMH tiers attivi (dev) ────────────────────────────────────────────────────
+# Tier attivi: VRAM (0) → DDR4 (1) → NVMe (2)
+# PMEM (tra DDR4 e NVMe) deferred.
+emh:
+  tiers_active: [0, 1, 2]   # VRAM, DDR4, NVME
+  shard_size_mb: 256
+
+# ── M1: Expert Access Table ────────────────────────────────────────────────────
+eat:
+  capacity: 16384             # 256 expert × 64 shard
+  bloom_error_rate: 0.01      # 1% false positive
+  slab_n_slots: 4             # slots DDR4 pre-allocati (dev: piccolo)
+
+# ── M2: Tier Manager ──────────────────────────────────────────────────────────
+tier_manager:
+  use_see_policy: true
+  see:
+    alpha: 0.3                # peso frequenza
+    beta:  0.3                # peso recency
+    gamma: 0.4                # peso similarità semantica (stub Sprint 2, attivo Sprint 3)
+  session_vram_quota_gb: 20   # quota VRAM per sessione (headroom per shadow pool)
+
+# ── M3: Expert Scheduler ──────────────────────────────────────────────────────
+scheduler:
+  ptpep:
+    model_path: null          # null = stub mode (Sprint 3: path ONNX)
+    confidence_threshold: 0.6
+    domains: [coding, math, language, science, medical, legal, creative, general]
+  gcsg:
+    theta_gate:          0.85
+    theta_entropy:       0.70
+    theta_contamination: 0.05
+    shadow_pool_size:    4    # top-4 expert INT4 (dev: 3090 24GB constraint)
+  aer:
+    enabled: false            # deferred — dual-GPU
+
+# ── Observability ─────────────────────────────────────────────────────────────
+metrics:
+  prometheus_port: 9090
+  scrape_interval_s: 5
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  level: INFO
+  format: json
