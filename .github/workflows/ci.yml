@@ -17,11 +17,15 @@ jobs:
           python-version: "3.12"
 
       # Lightweight, CPU-only subset of osx-poc/requirements.txt.
-      # torch/vllm/CUDA deps are intentionally NOT installed here: they are
-      # only needed by the GPU-marked tests, which this job excludes.
+      # vLLM/CUDA deps are intentionally NOT installed here (needed only by
+      # the GPU-marked tests, which this job excludes). torch IS installed,
+      # but as the small CPU-only wheel (~190 MB, no bundled CUDA libs):
+      # TierManager.__init__ always constructs a GPUTransfer, which needs
+      # `torch` to be importable even for tests that never touch real CUDA.
       - name: Install dependencies
         run: |
           pip install --upgrade pip
+          pip install torch==2.3.0 --index-url https://download.pytorch.org/whl/cpu
           pip install \
             pytest==8.2.1 \
             pytest-asyncio==0.23.7 \
