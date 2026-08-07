@@ -141,14 +141,16 @@ def check_nvme_volume() -> bool:
 
 
 def check_vllm() -> bool:
+    """vLLM è deliberatamente escluso dall'immagine base (vedi requirements-vllm.txt):
+    i hook GCSG che se ne servono sono ancora stub NotImplementedError (Sprint 3).
+    Non installato = atteso, non è un fallimento dello smoke test."""
     try:
         import vllm
-        _pass(f"vLLM {vllm.__version__} importabile")
-        return True
-    except ImportError as e:
-        _fail("vLLM non importabile", str(e))
-        _warn("vLLM richiede CUDA. Potrebbe fallire se CUDA non disponibile.")
-        return False
+        _pass(f"vLLM {vllm.__version__} importabile (requirements-vllm.txt installato)")
+    except ImportError:
+        _warn("vLLM non installato — atteso: escluso dall'immagine base fino a Sprint 3 "
+              "(installare manualmente con requirements-vllm.txt quando servirà)")
+    return True
 
 
 def check_transformers() -> bool:
@@ -174,7 +176,8 @@ def check_onnxruntime() -> bool:
 def check_prometheus_client() -> bool:
     try:
         import prometheus_client
-        _pass(f"prometheus_client {prometheus_client.__version__}")
+        from importlib.metadata import version
+        _pass(f"prometheus_client {version('prometheus_client')}")
         return True
     except ImportError as e:
         _fail("prometheus_client non importabile", str(e))
@@ -184,7 +187,8 @@ def check_prometheus_client() -> bool:
 def check_aiofiles() -> bool:
     try:
         import aiofiles
-        _pass(f"aiofiles {aiofiles.__version__} (proxy io_uring)")
+        from importlib.metadata import version
+        _pass(f"aiofiles {version('aiofiles')} (proxy io_uring)")
         return True
     except ImportError as e:
         _fail("aiofiles non importabile", str(e))
@@ -202,7 +206,7 @@ def check_osx_src_importable() -> bool:
         return True
     except ImportError as e:
         _fail("src/ packages non importabili", str(e))
-        _warn("Verifica: PYTHONPATH=/workspace/src impostato nel container")
+        _warn("Verifica: PYTHONPATH=/workspace/osx-poc/src impostato nel container")
         return False
 
 

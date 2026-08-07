@@ -9,10 +9,12 @@ FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 # ── system deps ────────────────────────────────────────────────────────────────
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
     python3.12 \
     python3.12-dev \
     python3.12-venv \
-    python3-pip \
     build-essential \
     git \
     curl \
@@ -20,9 +22,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nvtop \
     && rm -rf /var/lib/apt/lists/*
 
-# make python3.12 the default
+# make python3.12 the default and bootstrap pip for it
+# (the apt python3-pip package targets Ubuntu's default python3, not deadsnakes' 3.12)
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
  && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
+ && python3.12 -m ensurepip --upgrade \
  && python -m pip install --upgrade pip
 
 # ── Python deps ────────────────────────────────────────────────────────────────

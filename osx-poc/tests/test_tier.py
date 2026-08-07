@@ -33,6 +33,7 @@ class TestAsyncNVMeIO:
 
 # ── GPUTransfer ────────────────────────────────────────────────────────────────
 
+@pytest.mark.gpu
 class TestGPUTransfer:
 
     @pytest.fixture

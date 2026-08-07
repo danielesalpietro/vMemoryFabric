@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cpu-tests:
+    name: CPU Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Lightweight, CPU-only subset of osx-poc/requirements.txt.
+      # torch/vllm/CUDA deps are intentionally NOT installed here: they are
+      # only needed by the GPU-marked tests, which this job excludes.
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            pytest==8.2.1 \
+            pytest-asyncio==0.23.7 \
+            pytest-cov==5.0.0 \
+            numpy==1.26.4 \
+            aiofiles==23.2.1 \
+            pybloom-live==4.0.0
+
+      - name: Run CPU tests
+        working-directory: osx-poc
+        env:
+          PYTHONPATH: src
+        run: pytest tests/ -m "not gpu" -v
+
+  full-gpu-tests:
+    name: Full GPU Tests
+    runs-on: [self-hosted, gpu]
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build dev image
+        run: docker compose build
+
+      - name: Run full test suite (incl. GPU-marked tests)
+        run: docker compose run --rm osx-dev bash -c "cd osx-poc && PYTHONPATH=src pytest tests/ -v"

@@ -14,8 +14,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 import numpy as np
 
-SHARD_SIZE_MB: int = 256
-SHARD_SIZE_BYTES: int = SHARD_SIZE_MB * 1024 * 1024
+from .types import SHARD_SIZE_MB, SHARD_SIZE_BYTES
 
 
 @dataclass

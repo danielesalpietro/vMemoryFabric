@@ -9,6 +9,9 @@ import time
 ExpertID = int   # 0..N_experts-1  (2 bytes in layout finale)
 ShardID  = int   # 0..N_shards-1   (1 byte in layout finale)
 
+SHARD_SIZE_MB: int = 256
+SHARD_SIZE_BYTES: int = SHARD_SIZE_MB * 1024 * 1024
+
 
 class Tier(IntEnum):
     """EMH tier identifiers — adattati al setup dev corrente (no PMEM).
