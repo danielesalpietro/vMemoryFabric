@@ -122,6 +122,10 @@ Not part of the original Sprint 0 plan; added opportunistically while closing ou
 
 \- `.gitignore` (repo root) — excludes `\_\_pycache\_\_/`, `.pytest\_cache/`, `.mypy\_cache/`, `.ruff\_cache/`, `.coverage`
 
+\- `osx-poc/SELF-HOSTED.MD` (new) — setup guide for the self-hosted GPU runner: hardware/software prerequisites, pre-registration GPU-in-Docker check, registration steps with the required `gpu` label, security note on why the job stays gated to `workflow\_dispatch`
+
+\- Self-hosted runner \*\*Z8-G4-RTX3090\*\* registered against the repo, `gpu` custom label attached, running as a dedicated `GitRunner` local service account (member of `docker-users`, granted "Log on as a service")
+
 
 
 \### Fixed
@@ -154,6 +158,12 @@ Not part of the original Sprint 0 plan; added opportunistically while closing ou
 
 
 
+\*\*CI (found on the first real run, not by inspection)\*\*
+
+\- `.github/workflows/ci.yml` — `cpu-tests` now installs `torch==2.3.0+cpu` (\~190 MB, no bundled CUDA libs) instead of skipping torch entirely: `TierManager.\_\_init\_\_` unconditionally constructs a `GPUTransfer`, which needs `torch` importable even for tests that never touch real CUDA — `TestTierManager` was failing with 4 errors until this was added
+
+
+
 \### Dev constraints (documented, not bugs)
 
 
@@ -175,6 +185,8 @@ Not part of the original Sprint 0 plan; added opportunistically while closing ou
 
 
 \*\*Released.\*\* All module interfaces are defined; all methods raise `NotImplementedError` — the intended baseline for Sprint 1, `make test` shows all tests failing deterministically as expected. The dev environment itself is verified end-to-end: `make build` produces a working image and `make smoke` passes 13/13 checks (Python 3.12, PyTorch 2.3.0+cu121, CUDA, RTX 3090 24 GB VRAM, GPU tensor roundtrip, NVMe volume, all pinned packages, `src/` importable).
+
+Both CI jobs verified green through an actual run, not just by reading the YAML: `cpu-tests` on a real push, `full-gpu-tests` via manual `workflow\_dispatch` against the newly-registered `Z8-G4-RTX3090` runner (54 collected, 27 passed / 27 skipped, 0 failed).
 
 
 

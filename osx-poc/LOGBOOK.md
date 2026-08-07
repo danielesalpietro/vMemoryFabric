@@ -1,0 +1,122 @@
+# Logbook
+
+Dev diary for OSX-PoC — the "how we actually got here" story behind the
+`CHANGELOG.md` entries. One section per working session.
+
+---
+
+## 2026-08-07 — Karlshamn: environment stood up, CI wired, GPU runner live
+
+**Release:** [Karlshamn] v0.1.0-dev — closed out today.
+
+### What we set out to do
+
+Get `docker compose build` working, then everything that naturally follows
+from having a real working environment: CI, and a way to actually run the
+GPU-dependent tests somewhere other than a laptop.
+
+### The build fight
+
+`docker compose build` didn't work on the first try — or the second, or the
+fifth. In order:
+
+1. **Python 3.12 not found.** `nvidia/cuda:12.1.1-devel-ubuntu22.04` is
+   Ubuntu 22.04 (jammy), which only ships Python 3.10 in its default repos.
+   Fixed with the deadsnakes PPA.
+2. **`pip` missing after switching to 3.12.** `apt`'s `python3-pip` installs
+   pip for the *default* interpreter (3.10), not deadsnakes' 3.12. Fixed by
+   bootstrapping with `python3.12 -m ensurepip`.
+3. **torch/torchvision/vllm dependency conflict.** `torchvision==0.18.1`
+   wanted `torch==2.3.1`; `vllm==0.4.3` wanted `torch==2.3.0` exactly. Pinned
+   both to the `2.3.0` pairing.
+4. **`xformers` (a vllm dependency) failed to build** — its `setup.py`
+   imports `torch` outside pip's build-isolation sandbox, so it needs torch
+   pre-installed and `--no-build-isolation`. Tried scoping that flag to just
+   `vllm`; applying it too broadly then broke `gpustat`'s `setuptools_scm`
+   build step, which relies on normal isolation to fetch its own build deps.
+5. **The real wall: `vllm==0.4.3` pins `vllm-flash-attn==2.5.8.post2`, which
+   is gone from PyPI** (only `2.6.1`/`2.6.2` remain). At that point we
+   stepped back instead of hacking around it.
+
+**Decision:** the vLLM pin was premature. The GCSG hooks that would use it
+are still `NotImplementedError` stubs — there was no actual code depending
+on vLLM 0.4.3's internal API yet, so nothing to protect by forcing the
+version. Pulled `vllm` out of `requirements.txt` entirely into
+`requirements-vllm.txt`, to be revisited at Sprint 3 once the hook code
+exists and we can verify which version it actually needs against real code
+instead of a comment.
+
+Build went green right after. `make smoke` — 13/13 on the first real run
+(RTX 3090, 24 GB VRAM, CUDA tensor roundtrip, NVMe volume, all packages).
+
+Along the way, actually running the smoke test (as opposed to just getting
+the build to pass) surfaced three unrelated pre-existing bugs: `SHARD_SIZE_MB`
+imported from `eat.types` but only ever defined in `eat/slab.py`, and two
+smoke-test checks reading `.__version__` on packages that don't expose it
+(`aiofiles`, `prometheus_client`). Fixed all three same-day.
+
+### CI — extra scope
+
+Added `.github/workflows/ci.yml`: `cpu-tests` on every push/PR, `full-gpu-tests`
+gated to manual `workflow_dispatch` (GitHub Actions has no per-job trigger,
+so the whole workflow listens for push/PR/dispatch and the GPU job
+self-gates with an `if:`).
+
+**Tested it for real, not just by reading the YAML** — and that's exactly
+what caught the next bug: the first push-triggered run of `cpu-tests` failed.
+`TestTierManager`'s fixture constructs a real `TierManager`, whose
+`__init__` unconditionally builds a `GPUTransfer` — which needs `torch`
+*importable* (not real CUDA) to not raise. The CPU job didn't install torch
+at all. Fixed by installing `torch==2.3.0+cpu` (~190 MB, no bundled CUDA
+libs) instead of widening the `@pytest.mark.gpu` net over tests that don't
+actually need a GPU.
+
+### Standing up the self-hosted GPU runner
+
+Registered `Z8-G4-RTX3090` against the repo, added the `gpu` custom label
+via the API (`POST .../runners/{id}/labels` — faster than reconfiguring the
+runner). First `workflow_dispatch` test run failed twice before working:
+
+1. **PowerShell execution policy.** Windows runners execute each `run:` step
+   as a `.ps1` script; the box had `Restricted` policy, blocking all of them.
+   Fixed with `Set-ExecutionPolicy RemoteSigned -Scope LocalMachine`
+   (GitHub's own recommended policy for Windows runners).
+2. **`permission denied` on the Docker named pipe.** The runner service
+   account wasn't in the local `docker-users` group. Decided to stop running
+   the service under whatever default account it had and give it a proper
+   dedicated identity: created a local `GitRunner` account, added it to
+   `docker-users`, pointed the service at it via `sc.exe config obj=`.
+   Hit a second snag here — `sc.exe config` doesn't grant "Log on as a
+   service" the way the Services GUI does automatically, so the service
+   still wouldn't start until that right was granted through
+   `services.msc`.
+3. **Self-inflicted one:** the first generated password contained `$ZVQ`,
+   which PowerShell double-quoted strings interpolate as a variable
+   reference — silently truncating the password differently depending on
+   which command it was pasted into (`ConvertTo-SecureString "..."` vs. the
+   literal GUI text field). Two different effective passwords, one account —
+   guaranteed logon failure. Regenerated a password with no `$` in it and
+   used single-quoted strings throughout to make the mistake impossible to
+   repeat.
+
+Once the service ran as `GitRunner`, `full-gpu-tests` went green:
+**27 passed, 27 skipped, 0 failed** — the real suite, with real CUDA, not a
+skip-because-no-GPU stub.
+
+### Housekeeping
+
+Set up `.gitignore` (none existed — caught `__pycache__/` before it got
+committed), created a GitHub Project (`OSX-PoC Roadmap`) with one card per
+sprint plus the runner setup, wrote `SELF-HOSTED.MD` so the runner setup
+above doesn't have to be rediscovered from scratch next time.
+
+### End of day state
+
+- `docker compose build` → green
+- `make smoke` → 13/13
+- CI `cpu-tests` → green (push/PR)
+- CI `full-gpu-tests` → green (manual, real GPU, 27/27 non-skipped passed)
+- Project board created, Sprint 0 + runner setup marked Done
+- Everything pushed to `develop`
+
+Next session: Sprint 1 — M1 (EAT) implementation, `make test-eat` green.
