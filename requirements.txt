@@ -1,0 +1,51 @@
+# OSX-PoC requirements
+# Docker on Windows, single RTX 3090, no PMEM, no io_uring
+
+# ── Core ML stack ─────────────────────────────────────────────────────────────
+torch==2.3.1+cu121
+torchvision==0.18.1+cu121
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# ── vLLM (pinned — hooks on internal API) ─────────────────────────────────────
+vllm==0.4.3
+
+# ── Transformers (PT-PEP BERT-small) ──────────────────────────────────────────
+transformers==4.41.2
+tokenizers==0.19.1
+datasets==2.19.2
+accelerate==0.30.1
+
+# ── ONNX runtime (PT-PEP CPU inference, latency target <3ms) ──────────────────
+onnx==1.16.1
+onnxruntime==1.18.0
+
+# ── GPU monitoring ────────────────────────────────────────────────────────────
+pynvml==11.5.0
+gpustat==1.1.1
+
+# ── Async I/O (replaces io_uring — not available on WSL2/Windows Docker) ──────
+aiofiles==23.2.1
+anyio==4.4.0
+
+# ── Bloom filter (M1 EAT) ─────────────────────────────────────────────────────
+pybloom-live==4.0.0
+
+# ── Data & numerics ───────────────────────────────────────────────────────────
+numpy==1.26.4
+scipy==1.13.1
+scikit-learn==1.5.0
+
+# ── Observability ─────────────────────────────────────────────────────────────
+prometheus-client==0.20.0
+structlog==24.2.0
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest==8.2.1
+pytest-asyncio==0.23.7
+pytest-cov==5.0.0
+hypothesis==6.103.1
+
+# ── Dev tooling ───────────────────────────────────────────────────────────────
+ruff==0.4.7
+mypy==1.10.0
+types-aiofiles==23.2.0.20240403

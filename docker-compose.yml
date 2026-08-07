@@ -1,0 +1,39 @@
+services:
+  osx-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: osx-poc:dev
+    container_name: osx-dev
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0          # RTX 3090 only
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - .:/workspace                      # live code mount
+      - nvme-data:/data/nvme              # simulated EMH-3 (NVMe cold storage)
+    ports:
+      - "9090:9090"                       # Prometheus metrics daemon
+      - "3000:3000"                       # Grafana (if running locally)
+    stdin_open: true
+    tty: true
+    shm_size: '8gb'                       # needed for PyTorch multiprocessing
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+  # Optional: Prometheus for metrics scraping
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: osx-prometheus
+    volumes:
+      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9091:9090"
+    profiles: ["metrics"]
+
+volumes:
+  nvme-data:
+    driver: local
