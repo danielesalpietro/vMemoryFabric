@@ -52,3 +52,12 @@ jobs:
 
       - name: Run full test suite (incl. GPU-marked tests)
         run: docker compose run --rm osx-dev bash -c "cd osx-poc && PYTHONPATH=src pytest tests/ -v"
+
+      - name: Run M1 (EAT) benchmark on target hardware
+        run: docker compose run --rm osx-dev bash -c "cd osx-poc && PYTHONPATH=src python benchmarks/bench_eat.py > bench_eat_result.json"
+
+      - name: Upload benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-eat-result
+          path: osx-poc/bench_eat_result.json
