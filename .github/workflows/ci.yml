@@ -61,3 +61,12 @@ jobs:
         with:
           name: bench-eat-result
           path: osx-poc/bench_eat_result.json
+
+      - name: Run M2 (Tier Manager) benchmark on target hardware
+        run: docker compose run --rm osx-dev bash -c "cd osx-poc && PYTHONPATH=src python benchmarks/bench_tier.py > bench_tier_result.json"
+
+      - name: Upload tier benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-tier-result
+          path: osx-poc/bench_tier_result.json
