@@ -5,6 +5,98 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-08 — Möllstorp: M1 (EAT) implemented, `make test-eat` green
+
+**Release:** [Möllstorp] v0.2.0-dev — closed out today.
+
+### What we set out to do
+
+Pick up exactly where Karlshamn left off: implement the three M1 pieces — the
+2-level Bloom filter, the DDR4 Slab Allocator, and the `ExpertAccessTable`
+CRUD/lifecycle methods — and turn `tests/test_eat.py` from a suite that
+deliberately expects `NotImplementedError` into one that exercises real
+behavior.
+
+### The two real design calls
+
+1. **Should `EAT.insert()` reach into the SlabAllocator when `tier=DDR4`?**
+   `EATEntry`'s documented 28-byte layout has no `slot_idx` field, and doing
+   this properly would mean adding a reverse `(expert_id, shard_idx) → slot_idx`
+   index inside `SlabAllocator` that nothing currently asks for. Decided
+   against it: for Sprint 1, `SlabAllocator` stays a standalone, independently
+   tested component. `EAT.initialize()`/`shutdown()` still drive its lifecycle,
+   but physical DDR4 promotion/eviction is the Tier Manager's job — that's
+   M2, Sprint 2, and it's the natural place to decide how slot ownership
+   should actually be tracked.
+2. **Bloom filter keys.** Used explicit strings (`e:{expert_id}`,
+   `s:{expert_id}:{shard_idx}`) instead of passing raw ints/tuples into
+   `pybloom_live`, so correctness doesn't depend on how that library hashes
+   compound keys internally.
+
+### Implementation
+
+Straightforward once those two calls were made — `bloom.py`, `slab.py`,
+`eat.py` filled in against the docstrings and type hints already left by the
+Sprint 0 skeleton, which turned out to specify the contract precisely enough
+that there was very little guessing involved.
+
+### Tests
+
+Rewrote every test in `tests/test_eat.py`: replaced each
+`pytest.raises(NotImplementedError)` / `pytest.skip("TODO Sprint 1")` with a
+real assertion, and added a handful that didn't exist before —
+`test_initialize_shutdown` (the lifecycle methods had zero coverage),
+duplicate-insert / missing-key edge cases, and an LRU-ordering check for
+`eviction_candidates`. The concurrency tests actually spin up 8 threads: one
+inserts 10k disjoint keys and checks for lost writes, another mixes
+concurrent readers and writers, and a third fires many concurrent
+`update_tier` calls at a single entry and asserts the final `version` equals
+the exact call count — proving the `RLock` serializes the CAS bump instead of
+losing increments.
+
+### Verification — real run, not a read-through
+
+No local Python outside Docker in this environment, and the full CUDA dev
+image wasn't built here yet (would've meant a slow multi-minute rebuild just
+to run logic that never touches torch/CUDA). Instead mirrored what the CI
+`cpu-tests` job actually does — install the CPU-only dep subset directly,
+skip the CUDA image entirely — via a throwaway `python:3.12-slim` container:
+
+```
+docker run --rm -v "$(pwd)/osx-poc:/work" -w /work python:3.12-slim bash -c \
+  "pip install -q pytest==8.2.1 numpy==1.26.4 pybloom-live==4.0.0 && \
+   PYTHONPATH=src pytest tests/test_eat.py -v --tb=short"
+```
+
+**24 passed, 0 failed**, first try. `benchmarks/bench_eat.py` (rewritten from
+the `"status": "pending"` placeholder to a real P50/P95/P99 + throughput
+benchmark) came back with p50 ≈ 3.3 µs / p95 ≈ 3.5 µs / p99 ≈ 5.5 µs lookup
+latency and ≈ 99k inserts/sec on the verification container — well inside the
+documented <10 µs target, though that number is from a shared container host,
+not the RTX 3090 dev box, so it's a sanity check rather than a real
+benchmark run.
+
+One minor detour: the first `docker run` invocation failed with
+`the working directory 'C:/Program Files/Git/work' is invalid` — Git Bash's
+MSYS layer was rewriting `/work` as a Windows path before Docker ever saw it.
+Fixed with `MSYS_NO_PATHCONV=1`.
+
+### End of day state
+
+- `tests/test_eat.py` → 24/24 passing (verified via lightweight container, not `make test-eat`'s full CUDA image)
+- `benchmarks/bench_eat.py` → real numbers, no longer a placeholder
+- M1 (Bloom filter, Slab allocator, EAT CRUD) fully implemented
+- M2/M3 untouched — still Sprint 0 skeletons, as planned
+- CHANGELOG/README updated for the Möllstorp release
+
+Next session: Sprint 2 — M2 (Tier Manager): promotion/eviction, SEE policy,
+async NVMe I/O, `make test-tier` green. This is also where the
+SlabAllocator-standalone decision above gets revisited — the Tier Manager is
+the component that will actually call `slab.alloc()`/`free()` on promotion
+and eviction.
+
+---
+
 ## 2026-08-07 — Karlshamn: environment stood up, CI wired, GPU runner live
 
 **Release:** [Karlshamn] v0.1.0-dev — closed out today.

@@ -2,7 +2,7 @@
 
 **OSX** is a system-level framework for managing the lifecycle of experts in Mixture-of-Experts (MoE) large language models. It treats experts as first-class objects governed by a dedicated runtime — with hierarchical memory placement, predictive prefetching, gating-aware scheduling, and adaptive replication.
 
-> *Current release: **Karlshamn** (v0.1.0-dev) — August 7, 2026*
+> *Current release: **Möllstorp** (v0.2.0-dev) — August 8, 2026 — previous: Karlshamn (v0.1.0-dev)*
 
 ---
 
@@ -68,7 +68,7 @@ make build
 # 2. Verify hardware and environment
 make smoke
 
-# 3. Run all tests (all NotImplementedError at Sprint 0 — expected)
+# 3. Run all tests (M1/EAT passes as of Sprint 1; M2/M3 still NotImplementedError — expected)
 make test
 
 # 4. Interactive shell
@@ -133,7 +133,7 @@ vMemoryFabric/                  (repo root)
     │   └── test_scheduler.py
     │
     ├── benchmarks/
-    │   ├── bench_eat.py      # Sprint 1 target
+    │   ├── bench_eat.py      # Sprint 1 (Möllstorp) — implemented
     │   └── bench_tier.py     # Sprint 2 target
     │
     ├── scripts/
@@ -151,7 +151,7 @@ vMemoryFabric/                  (repo root)
 | Sprint | Module | Weeks | Status      |
 |--------|--------|-------|-------------|
 | 0      | Environment + skeleton | 1–2 | ✅ **Karlshamn** |
-| 1      | M1 — EAT               | 3–4 | 🔲 pending  |
+| 1      | M1 — EAT               | 3–4 | ✅ **Möllstorp** |
 | 2      | M2 — Tier Manager      | 5–6 | 🔲 pending  |
 | 3      | M3 — Expert Scheduler  | 7–8 | 🔲 pending  |
 | 4      | Integration + benchmarks | 9–12 | 🔲 pending |

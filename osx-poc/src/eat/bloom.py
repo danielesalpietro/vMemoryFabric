@@ -30,7 +30,8 @@ class BloomFilter:
 
     def add(self, expert_id: int, shard_idx: int) -> None:
         """Registra (expert_id, shard_idx) in entrambi i livelli."""
-        raise NotImplementedError("TODO Sprint 1")
+        self._expert_bf.add(f"e:{expert_id}")
+        self._shard_bf.add(f"s:{expert_id}:{shard_idx}")
 
     def remove_expert(self, expert_id: int) -> None:
         """Marca expert come non presente (bloom non supporta delete — richiede rebuild).
@@ -45,14 +46,14 @@ class BloomFilter:
 
     def may_contain_expert(self, expert_id: int) -> bool:
         """True se expert_id è *probabilmente* presente (falsi positivi possibili)."""
-        raise NotImplementedError("TODO Sprint 1")
+        return f"e:{expert_id}" in self._expert_bf
 
     def may_contain_shard(self, expert_id: int, shard_idx: int) -> bool:
         """True se (expert_id, shard_idx) è *probabilmente* presente."""
-        raise NotImplementedError("TODO Sprint 1")
+        return f"s:{expert_id}:{shard_idx}" in self._shard_bf
 
     # ── stats ──────────────────────────────────────────────────────────────────
 
     def __len__(self) -> int:
         """Numero di elementi nel shard-level BF."""
-        raise NotImplementedError("TODO Sprint 1")
+        return len(self._shard_bf)

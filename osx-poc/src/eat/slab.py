@@ -38,18 +38,20 @@ class SlabAllocator:
         self._shard_size = shard_size
         # Placeholder: in produzione sarà mmap PMEM / numpy su DDR4
         self._pool: Optional[np.ndarray] = None
-        self._free_slots: list[int] = []
+        self._free_slots: list[int] = list(range(n_slots))
         self._alloc_map: Dict[int, SlotMetadata] = {}  # slot_idx → metadata
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
 
     def initialize(self) -> None:
         """Pre-alloca il pool in DDR4. Chiamare prima di qualsiasi alloc/free."""
-        raise NotImplementedError("TODO Sprint 1")
+        self._pool = np.empty((self._n_slots, self._shard_size), dtype=np.uint8)
 
     def shutdown(self) -> None:
         """Rilascia la memoria del pool."""
-        raise NotImplementedError("TODO Sprint 1")
+        self._pool = None
+        self._free_slots = list(range(self._n_slots))
+        self._alloc_map = {}
 
     # ── alloc / free ───────────────────────────────────────────────────────────
 
@@ -62,22 +64,37 @@ class SlabAllocator:
         Raises:
             MemoryError: pool esaurito.
         """
-        raise NotImplementedError("TODO Sprint 1")
+        if self._pool is None:
+            raise RuntimeError("SlabAllocator non inizializzato — chiamare initialize()")
+        if not (0 <= size_bytes <= self._shard_size):
+            raise ValueError(f"size_bytes {size_bytes} fuori range [0, {self._shard_size}]")
+        if not self._free_slots:
+            raise MemoryError("slab pool esaurito")
+        slot_idx = self._free_slots.pop()
+        self._alloc_map[slot_idx] = SlotMetadata(expert_id, shard_idx, size_bytes, is_tail)
+        return slot_idx
 
     def free(self, slot_idx: int) -> None:
         """Restituisce uno slot al pool."""
-        raise NotImplementedError("TODO Sprint 1")
+        if slot_idx not in self._alloc_map:
+            raise KeyError(f"slot {slot_idx} non allocato")
+        del self._alloc_map[slot_idx]
+        self._free_slots.append(slot_idx)
 
     def get_buffer(self, slot_idx: int) -> np.ndarray:
         """Restituisce la view numpy del buffer associato allo slot."""
-        raise NotImplementedError("TODO Sprint 1")
+        if self._pool is None:
+            raise RuntimeError("SlabAllocator non inizializzato — chiamare initialize()")
+        if slot_idx not in self._alloc_map:
+            raise KeyError(f"slot {slot_idx} non allocato")
+        return self._pool[slot_idx]
 
     # ── stats ──────────────────────────────────────────────────────────────────
 
     @property
     def free_slots(self) -> int:
-        raise NotImplementedError("TODO Sprint 1")
+        return len(self._free_slots)
 
     @property
     def used_slots(self) -> int:
-        raise NotImplementedError("TODO Sprint 1")
+        return len(self._alloc_map)

@@ -18,6 +18,78 @@ Releases are named after cities where significant project milestones were reache
 
 
 
+\## \[Möllstorp] — v0.2.0-dev — 2026-08-08
+
+
+
+\*Named after Möllstorp, Öland, Sweden, where M1 — Expert Access Table was implemented.\*
+
+
+
+\### Added
+
+
+
+\*\*M1 — Expert Access Table (real implementation)\*\*
+
+
+
+\- `src/eat/bloom.py` — `BloomFilter.add/may\_contain\_expert/may\_contain\_shard/\_\_len\_\_` implemented on top of `pybloom\_live`, string-encoded keys (`e:{expert\_id}`, `s:{expert\_id}:{shard\_idx}`) for deterministic hashing. `remove\_expert` still raises `NotImplementedError` — standard Bloom filters can't delete; deferred to a future Counting Bloom Filter evaluation, unused by `EAT.evict()` by design (see Fixed/Dev constraints below)
+
+\- `src/eat/slab.py` — `SlabAllocator` pool lifecycle (`initialize`/`shutdown`), `alloc`/`free`/`get\_buffer`, `free\_slots`/`used\_slots`. Pool backed by `np.empty((n\_slots, shard\_size), dtype=np.uint8)` — `empty` not `zeros`, content is a placeholder for the future PMEM/DDR4 payload so there's no reason to zero-fill pages
+
+\- `src/eat/eat.py` — `ExpertAccessTable` full CRUD: `insert`, `lookup` (Bloom fast-negative before touching the dict), `update\_tier` (bumps `version`), `evict`, `access` (`touch()`), `get\_tier`, `eviction\_candidates` (LRU by `last\_access\_ts`, SEE score deferred to M2 per the existing docstring), `initialize`/`shutdown`, `stats()`
+
+
+
+\*\*Benchmarks\*\*
+
+
+
+\- `benchmarks/bench\_eat.py` — real P50/P95/P99 lookup latency + insert throughput, JSON output (replaces the `"status": "pending"` placeholder)
+
+
+
+\### Design decisions
+
+
+
+\- \*\*SlabAllocator stays standalone for M1\*\* — `EAT.insert()`/`evict()` operate only on the dict + Bloom filter; they do not call `slab.alloc()`/`free()`. `EATEntry`'s documented 28-byte layout has no `slot\_idx` field, and physical DDR4 promotion/eviction is the Tier Manager's responsibility (M2, Sprint 2). `EAT.initialize()`/`shutdown()` still drive the `SlabAllocator`'s lifecycle in lockstep so the two stay wired together for M2 to build on
+
+\- Bloom filter keys are explicit strings rather than raw tuples/ints, to not depend on `pybloom\_live`'s internal key-hashing behavior for compound keys
+
+
+
+\### Tests
+
+
+
+\- `tests/test\_eat.py` — every stub (`pytest.raises(NotImplementedError)` / `pytest.skip("TODO Sprint 1")`) replaced with real assertions: Bloom add/contains/false-positive-rate, Slab alloc/free/exhaustion/variable-tail, EAT CRUD + LRU eviction ordering, 8-thread concurrent insert/read-write/version-counter races, and a real lookup-latency smoke timing. Added `test\_initialize\_shutdown` (previously uncovered) and a couple of extra edge-case tests (`test\_insert\_duplicate\_raises`, `test\_update\_tier\_missing\_raises`, `test\_evict\_missing\_returns\_none`, `test\_access\_missing\_returns\_none`) not present in the Sprint 0 skeleton
+
+\- `make test-eat` — 24/24 passed (verified via a lightweight `python:3.12-slim` container mirroring CI's `cpu-tests` dependency set, not the full CUDA dev image — nothing in M1 touches torch/CUDA)
+
+
+
+\### Status
+
+
+
+\*\*Released.\*\* M1 (Expert Access Table) is fully implemented and tested: 24/24 tests passing in `tests/test\_eat.py`, real benchmark numbers from `benchmarks/bench\_eat.py` (p50 ≈ 3.3 µs / p95 ≈ 3.5 µs / p99 ≈ 5.5 µs lookup latency, ≈ 99k inserts/sec — measured on the verification container, not the target GPU dev box). M2/M3 remain Sprint 0 skeletons (`NotImplementedError`), as planned.
+
+
+
+\---
+
+
+
+\*Next release: Sprint 2 — M2 (Tier Manager) implementation complete, `make test-tier` passing green.\*
+
+
+
+\---
+
+
+
 \## \[Karlshamn] — v0.1.0-dev — 2026-08-07
 
 
