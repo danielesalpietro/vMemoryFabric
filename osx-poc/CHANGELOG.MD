@@ -68,15 +68,33 @@ Releases are named after cities where significant project milestones were reache
 
 
 
+\### Fixed
+
+
+
+\*\*`GPUTransfer`/`TierManager` — VRAM non liberata a livello driver dopo evict, trovato solo su hardware reale\*\*
+
+
+
+\- Il primo tentativo di verifica GPU (via `workflow\_dispatch` su `Z8-G4-RTX3090`) ha fatto fallire `test\_evict\_to\_free\_vram\_evicts\_candidate`: `evict\_to\_free\_vram()` continuava a ciclare e sollevava `MemoryError` anche dopo un'eviction riuscita. Causa: `torch.cuda.mem\_get\_info()` (usato da `vram\_free\_bytes()`) riporta la memoria libera a livello driver, non quella che il caching allocator di PyTorch trattiene per riuso dopo un `del tensor` — senza un `torch.cuda.empty\_cache()` esplicito, `vram\_free\_bytes()` restava invariato dopo ogni eviction
+
+\- Il primo fix (aggiungere `GPUTransfer.empty\_cache()` e chiamarlo da `TierManager.evict()`) non bastava: `torch.cuda.empty\_cache()` restituisce al driver solo i blocchi SENZA reference vive, e la variabile locale `tensor` dentro `evict()` continuava a referenziare il tensor anche dopo averlo rimosso da `self.\_vram` — un `del self.\_vram[key]` non è un `del tensor`. Fix definitivo: `self.\_vram.pop(key)` seguito da un `del tensor` esplicito prima di `empty\_cache()`, così l'ultima reference viene rilasciata prima che l'allocator possa restituire il blocco al driver
+
+\- Aggiunto un test di regressione dedicato (`test\_evict\_frees\_vram\_visible\_to\_mem\_get\_info`) che asserisce `vram\_free\_bytes()` aumenti davvero dopo un'eviction, non solo che l'eviction non sollevi eccezioni
+
+\- Bug non riproducibile in nessun test CPU-only o mock — esiste solo con CUDA reale, trovato exattamente eseguendo la verifica GPU che il Möllstorp/Eketorp precedente aveva lasciato in sospeso
+
+
+
 \### Tests
 
 
 
 \- `tests/test\_tier.py` — ogni stub (`pytest.raises(NotImplementedError)` / `pytest.skip("TODO Sprint 2")`) rimpiazzato con asserzioni reali, stesso pattern di riscrittura di `test\_eat.py` in M1. Split CPU/GPU che rispecchia i job CI `cpu-tests`/`full-gpu-tests`: I/O NVMe, policy LRU/SEE, promozione NVME→DDR4, `evict()` single-hop-only, prefetch, e il test di regressione sul double-promote girano ovunque torch sia importabile; tutto ciò che tocca CUDA reale (`GPUTransfer`, DDR4→VRAM, NVME→VRAM incatenato, `evict\_to\_free\_vram`, l'integration test lato VRAM) resta `@pytest.mark.gpu`
 
-\- 18/18 test non-GPU passati (verificati via lo stesso container leggero `python:3.12-slim` usato in Möllstorp, dependency set identico a `cpu-tests`) — insieme a `test\_eat.py` e `test\_scheduler.py`: 50 passed, 12 skipped (GPU-only), 9 deselected
+\- \*\*Verificato per davvero su hardware reale in questa sessione\*\*, non solo scritto: 28/28 in `test\_tier.py` (inclusi tutti i `@pytest.mark.gpu`), 60/72 nell'intera suite (12 skip sono stub M3 non correlati) — girato due volte, prima direttamente via `docker compose run` contro l'RTX 3090 locale (questa macchina è anche il runner self-hosted `Z8-G4-RTX3090`: nessun round-trip push/workflow\_dispatch necessario per iterare sul bug sopra), poi confermato via un `workflow\_dispatch` reale su CI (`31263503614`, entrambi i job verdi: CPU Tests 35s, Full GPU Tests 45s)
 
-\- I test `@pytest.mark.gpu` e la sezione DDR4→VRAM di `bench\_tier.py` NON sono stati verificati in questa sessione — nessun ambiente GPU/CUDA locale disponibile qui, stesso vincolo incontrato in Möllstorp. Restano da eseguire per davvero via `workflow\_dispatch` sul runner self-hosted `Z8-G4-RTX3090`, non ancora lanciato per M2
+\- 18/18 test non-GPU passati anche via il container leggero `python:3.12-slim` (dependency set identico a `cpu-tests`)
 
 
 
@@ -84,7 +102,17 @@ Releases are named after cities where significant project milestones were reache
 
 
 
-\- `.github/workflows/ci.yml` — `full-gpu-tests` esegue ora anche `benchmarks/bench\_tier.py` dopo la test suite, caricando il risultato come artifact `bench-tier-result` — stesso schema del passo `bench-eat-result` di M1. Non ancora verificato con un run reale in questa sessione (nessun `workflow\_dispatch` lanciato)
+\- `.github/workflows/ci.yml` — `full-gpu-tests` esegue ora anche `benchmarks/bench\_tier.py` dopo la test suite, caricando il risultato come artifact `bench-tier-result` — stesso schema del passo `bench-eat-result` di M1. \*\*Verificato con un run reale\*\*: `workflow\_dispatch` `31263503614`, entrambi gli artifact scaricati e confrontati (vedi Evaluation sotto)
+
+
+
+\### Evaluation — numeri reali su Z8-G4-RTX3090
+
+
+
+\- \*\*EAT (M1, in-memory) vs TierManager (M2, I/O reale)\*\*: lookup EAT p50≈2.6µs/p95≈2.9µs/p99≈4.7-4.9µs (in linea con Möllstorp, run-to-run entro il ~10% già documentato) contro promote NVMe→DDR4 p50≈5.2ms/p95≈p99≈20.6ms — circa 2000× più lento, atteso: I/O di file reale + overhead asyncio contro un dict in memoria
+
+\- \*\*DDR4→VRAM\*\*: p50≈77ms, ma p95≈p99≈1.3-1.4 secondi — riprodotto identico (stesso ordine di grandezza) sia nel run locale che nel run CI, quindi un effetto sistematico, non rumore. Causa quasi certa: costo one-time di inizializzazione del contesto/allocator CUDA sulla prima vera chiamata GPU del processo — `bench\_tier.py` non ha un'iterazione di warm-up prima di misurare, e con soli 20 campioni quella singola chiamata fredda domina p95/p99. Segnalato onestamente come limite del benchmark attuale, non del codice di `TierManager` — candidato per un refinement futuro (warm-up prima delle misure), non affrontato in questa sessione
 
 
 
@@ -92,7 +120,7 @@ Releases are named after cities where significant project milestones were reache
 
 
 
-\*\*Parzialmente verificato.\*\* M2 (Tier Manager) è implementato: `promote`/`evict`/`evict\_to\_free\_vram`/`prefetch`/`stats`, `AsyncNVMeIO`, `GPUTransfer`, `LRUPolicy`/`SEEPolicy`. Verificato per davvero solo il percorso CPU-runnable: 18/18 test di `test\_tier.py` passati (50/62 nell'intera suite, gli altri 12 skip GPU-only) via il container leggero `python:3.12-slim` — non `make test-tier` con l'immagine Docker CUDA completa, non disponibile in questo ambiente, stesso limite incontrato in Möllstorp. I path che toccano CUDA reale (`GPUTransfer`, DDR4→VRAM, NVME→VRAM incatenato, `evict\_to\_free\_vram`, l'integration test VRAM, la sezione `ddr4\_to\_vram` del benchmark) sono scritti e marcati `@pytest.mark.gpu` ma non ancora eseguiti su hardware reale — richiede un `workflow\_dispatch` sul runner `Z8-G4-RTX3090`, non lanciato in questa sessione. Segnalato onestamente come lavoro rimanente, non presentato come "M2 fatto" senza qualifica
+\*\*Verificato su hardware reale.\*\* M2 (Tier Manager) è implementato e verificato per davvero, non solo scritto: 28/28 test di `test\_tier.py` (inclusi tutti i `@pytest.mark.gpu`) passati sia via `docker compose run` diretto contro l'RTX 3090 locale sia via `workflow\_dispatch` su CI (`31263503614`, entrambi i job verdi). 60/72 nell'intera suite (12 skip M3, non correlati). Un bug reale — VRAM non liberata a livello driver dopo evict, vedi Fixed sopra — è stato trovato e corretto proprio grazie a questa verifica: invisibile in ogni test CPU-only/mock, avrebbe fatto ciclare all'infinito `evict\_to\_free\_vram()` in produzione. `benchmarks/bench\_tier.py` ha girato per davvero su hardware target, artifact `bench-tier-result` caricato e confrontato con `bench-eat-result` (vedi Evaluation)
 
 
 
@@ -100,7 +128,7 @@ Releases are named after cities where significant project milestones were reache
 
 
 
-\*Next release: Sprint 2 continua — verifica GPU reale di M2 su `Z8-G4-RTX3090`, poi Sprint 3 — M3 (Expert Scheduler).\*
+\*Next release: Sprint 3 — M3 (Expert Scheduler): PT-PEP classifier, GCSG guard, AER stub.\*
 
 
 

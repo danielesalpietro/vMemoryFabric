@@ -5,6 +5,106 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-08 — Eketorp, continued: real GPU verification, a real bug, honest benchmark numbers
+
+**Release:** [Eketorp] v0.3.0-dev — same release as below, closed out for real this time.
+
+### What we set out to do
+
+Finish what the first Eketorp session left explicitly open: actually run
+the `@pytest.mark.gpu` tests and `benchmarks/bench_tier.py` on real
+hardware, instead of shipping M2 "done" on CPU-only coverage alone.
+
+### The machine is the runner
+
+Learned partway through this session: the box this Claude Code session
+runs on **is** the self-hosted `Z8-G4-RTX3090` runner — confirmed via
+`nvidia-smi` (RTX 3090 present) and the `GitHub Actions Runner` Windows
+service running locally. That changed the iteration loop for the rest
+of the session: instead of push → `workflow_dispatch` → wait → read
+logs for every attempt, later iterations ran `docker compose run`
+directly against the live-mounted repo. Saved at least two full CI
+round-trips once the first attempt turned up a real bug.
+
+### First `workflow_dispatch` run: a real bug, not flakiness
+
+Pushed the M2 work (3 commits: implementation, CI step, docs) and
+triggered `workflow_dispatch`. `CPU Tests` passed; `Full GPU Tests`
+failed at the test-suite step —
+`TestTierManagerGPU::test_evict_to_free_vram_evicts_candidate`, with
+`evict_to_free_vram()` raising `MemoryError` ("tier VRAM vuoto") right
+after successfully evicting the only VRAM entry. 58/59 GPU-marked
+assertions passed; this was the one real gap.
+
+Root cause: `vram_free_bytes()` wraps `torch.cuda.mem_get_info()`,
+which reports **driver-level** free memory. PyTorch's caching
+allocator doesn't return freed blocks to the driver on `del tensor` —
+it holds them for reuse. So after `evict()` dropped its VRAM tensor,
+`vram_free_bytes()` didn't move, the `evict_to_free_vram()` loop ran
+again, found no more VRAM candidates, and correctly raised. First fix:
+added `GPUTransfer.empty_cache()` (`torch.cuda.empty_cache()`), called
+from `TierManager.evict()`'s VRAM branch. Pushed, re-triggered.
+
+### Second attempt: same failure, more precisely
+
+Still failed — `free_after_evict > free_with_shard` asserted
+`24167579648 > 24167579648`, exactly equal down to the byte.
+`empty_cache()` only returns blocks with **zero live references**, and
+the local `tensor` variable inside `evict()` still referenced the
+tensor after `del self._vram[key]` — that only dropped the *dict's*
+reference. Fixed for real: `self._vram.pop(key)` followed by an
+explicit `del tensor` before `empty_cache()` runs, so the last
+reference is gone before asking the allocator to release the block.
+
+### Verifying the real fix — locally first, then officially
+
+Given the "this machine is the runner" finding, ran
+`docker compose run --rm osx-dev bash -c "cd osx-poc && PYTHONPATH=src pytest tests/test_tier.py -v"`
+directly against the local RTX 3090 before pushing again — **28/28
+passed**, including a new regression test
+(`test_evict_frees_vram_visible_to_mem_get_info`) asserting
+`vram_free_bytes()` actually increases after an eviction, not just
+that eviction doesn't raise. Ran the full suite too: 60/72 (12 skips
+are unrelated M3 stubs). Then pushed the real fix and triggered
+`workflow_dispatch` one more time for the official record — green in
+both jobs (`CPU Tests` 35s, `Full GPU Tests` 45s), confirming the local
+run wasn't specific to some container-state difference.
+
+### Comparing M1 vs M2 on real numbers
+
+Ran both `benchmarks/bench_eat.py` and `benchmarks/bench_tier.py`
+locally and via the official CI artifacts (`bench-eat-result`,
+`bench-tier-result`) — consistent between the two runs. EAT lookups
+(pure in-memory): p50≈2.6µs. `TierManager.promote()` NVMe→DDR4 (real
+file I/O via aiofiles, 4MB synthetic shard): p50≈5.2ms — about 2000×
+slower, which is exactly the expected shape (disk I/O vs. a dict).
+DDR4→VRAM: p50≈77ms but p95/p99 spike to 1.3-1.4 **seconds**,
+reproduced near-identically in both runs. That's not noise — it's the
+one-time CUDA context/allocator warm-up cost on the first real GPU
+call in a fresh process, and `bench_tier.py` has no warm-up iteration
+before timing, so with only 20 samples that one cold call dominates
+the tail. Recorded as an honest benchmark-methodology limitation in
+the CHANGELOG rather than a `TierManager` performance problem — not
+fixed this session, flagged for whoever picks up the benchmark next.
+
+### End of day state
+
+- `src/tier/gpu.py` / `src/tier/manager.py` — real fix committed (pop +
+  explicit `del` before `empty_cache()`), not just the first attempt
+- `tests/test_tier.py` — 28/28 passing on real CUDA, new regression
+  test for the VRAM-release bug
+- CI run `31263503614` — both jobs green, `bench-tier-result` artifact
+  uploaded and compared against `bench-eat-result`
+- CHANGELOG updated from "partially verified" to actually verified,
+  with the bug and the real numbers both recorded
+- Saved a memory note: this machine == the GPU runner, useful for every
+  future GPU-dependent debugging session on this repo
+
+Next session: Sprint 3 — M3 (Expert Scheduler): PT-PEP classifier, GCSG
+guard, AER stub.
+
+---
+
 ## 2026-08-08 — Eketorp: M2 (Tier Manager) implemented, CPU-runnable subset green
 
 **Release:** [Eketorp] v0.3.0-dev — closed out today (partially — see Status below).
