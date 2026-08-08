@@ -139,29 +139,122 @@ class TestGCSG:
 
     def test_should_activate_shadow_all_conditions_met(self, gcsg):
         ctx = GatingContext(
-            token_id=1,
-            gating_scores=[0.9, 0.05, 0.05],
-            token_entropy=0.3,
+            token_id=1, request_id="req-1",
+            gating_scores=[0.9, 0.05, 0.05], token_entropy=0.3,
         )
-        with pytest.raises(NotImplementedError):
-            gcsg.should_activate_shadow(ctx)
+        should, _ = gcsg.should_activate_shadow(ctx)
+        assert should is True
 
     def test_should_not_activate_low_gating_score(self, gcsg):
-        pytest.skip("TODO Sprint 3 — richiede should_activate implementato")
+        ctx = GatingContext(
+            token_id=1, request_id="req-1",
+            gating_scores=[0.5, 0.3, 0.2], token_entropy=0.3,   # max 0.5 <= theta_gate 0.85
+        )
+        should, reason = gcsg.should_activate_shadow(ctx)
+        assert should is False
+        assert "gating_score" in reason
 
     def test_should_not_activate_high_entropy(self, gcsg):
-        pytest.skip("TODO Sprint 3")
+        ctx = GatingContext(
+            token_id=1, request_id="req-1",
+            gating_scores=[0.9, 0.05, 0.05], token_entropy=0.9,   # >= theta_entropy 0.70
+        )
+        should, reason = gcsg.should_activate_shadow(ctx)
+        assert should is False
+        assert "entropy" in reason
+
+    def test_should_not_activate_bf16_available(self, gcsg):
+        ctx = GatingContext(
+            token_id=1, request_id="req-1",
+            gating_scores=[0.99], token_entropy=0.1, bf16_available=True,
+        )
+        should, reason = gcsg.should_activate_shadow(ctx)
+        assert should is False
+        assert reason == "bf16_available"
 
     def test_should_not_activate_high_contamination(self, gcsg):
-        pytest.skip("TODO Sprint 3")
+        # Primo token della richiesta: contamination_rate("req-1") = 0/1, passa.
+        ctx1 = GatingContext(
+            token_id=1, request_id="req-1",
+            gating_scores=[0.9, 0.05, 0.05], token_entropy=0.3,
+        )
+        should1, _ = gcsg.should_activate_shadow(ctx1)
+        assert should1 is True
+        gcsg.run_shadow(ctx1, shadow_pool={0: lambda ctx: None})
+
+        # Secondo token, stessa richiesta: ora contamination_rate("req-1") = 1/2 = 0.5,
+        # ben sopra theta_contamination=0.05 — deve bloccare.
+        ctx2 = GatingContext(
+            token_id=2, request_id="req-1",
+            gating_scores=[0.9, 0.05, 0.05], token_entropy=0.3,
+        )
+        should2, reason2 = gcsg.should_activate_shadow(ctx2)
+        assert should2 is False
+        assert "contamination" in reason2
+
+    def test_contamination_is_per_request_not_global(self, gcsg):
+        # Contaminare req-1 non deve influenzare la decisione per req-2.
+        ctx1 = GatingContext(
+            token_id=1, request_id="req-1",
+            gating_scores=[0.9], token_entropy=0.1,
+        )
+        gcsg.should_activate_shadow(ctx1)
+        gcsg.run_shadow(ctx1, shadow_pool={0: lambda ctx: None})
+
+        ctx2 = GatingContext(
+            token_id=1, request_id="req-2",
+            gating_scores=[0.9], token_entropy=0.1,
+        )
+        should2, _ = gcsg.should_activate_shadow(ctx2)
+        assert should2 is True   # req-2 non ha contaminazione propria
+
+    def test_run_shadow_picks_highest_ranked_available_expert(self, gcsg):
+        ctx = GatingContext(
+            token_id=1, request_id="req-1",
+            gating_scores=[0.1, 0.9, 0.3], token_entropy=0.2,   # ranking: 1 > 2 > 0
+        )
+        calls = []
+        shadow_pool = {0: lambda c: calls.append(c), 2: lambda c: calls.append(c)}  # expert 1 non cachato
+        result = gcsg.run_shadow(ctx, shadow_pool)
+        assert result.activated is True
+        assert result.shadow_expert_id == 2   # il più alto in classifica REALMENTE nel pool
+        assert result.contamination_flag is True
+        assert len(calls) == 1
+
+    def test_run_shadow_no_expert_in_pool(self, gcsg):
+        ctx = GatingContext(
+            token_id=1, request_id="req-1",
+            gating_scores=[0.9, 0.1], token_entropy=0.2,
+        )
+        result = gcsg.run_shadow(ctx, shadow_pool={})
+        assert result.activated is False
+        assert result.shadow_expert_id is None
+        assert result.reason_skip is not None
 
     def test_contamination_rate_starts_at_zero(self, gcsg):
-        with pytest.raises(NotImplementedError):
-            gcsg.contamination_rate()
+        assert gcsg.contamination_rate() == 0.0
+        assert gcsg.contamination_rate("never-seen-request") == 0.0
+
+    def test_reset_contamination_counter_per_request(self, gcsg):
+        ctx = GatingContext(
+            token_id=1, request_id="req-1", gating_scores=[0.9], token_entropy=0.1,
+        )
+        gcsg.should_activate_shadow(ctx)
+        gcsg.run_shadow(ctx, shadow_pool={0: lambda c: None})
+        assert gcsg.contamination_rate("req-1") == 1.0
+
+        gcsg.reset_contamination_counter("req-1")
+        assert gcsg.contamination_rate("req-1") == 0.0
 
     def test_update_thresholds(self, gcsg):
-        with pytest.raises(NotImplementedError):
-            gcsg.update_thresholds(theta_gate=0.90)
+        gcsg.update_thresholds(theta_gate=0.90)
+        assert gcsg.theta_gate == 0.90
+        assert gcsg.theta_entropy == 0.70   # non toccato
+
+    def test_stats_reports_thresholds_and_pool_size(self, gcsg):
+        stats = gcsg.stats()
+        assert stats["thresholds"]["theta_gate"] == 0.85
+        assert stats["shadow_pool_size"] == gcsg.shadow_pool_size
 
     def test_quality_degradation_under_2pct(self):
         """Perplexity degradazione < 2% con θ_contamination=5% — MMLU-5shot."""
