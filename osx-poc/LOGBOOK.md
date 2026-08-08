@@ -5,6 +5,102 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-08 — Möllstorp, continued: technical report, real-hardware benchmarking, honest negative results
+
+**Release:** [Möllstorp] v0.2.0-dev — same release as below, later the same day.
+
+### What we set out to do
+
+Write up M1 formally — a PhD-style technical report, deliberately not
+oversold as a peer-reviewed contribution — and then actually stress-test the
+claims in it instead of letting a first draft stand. Two rounds of that
+stress-testing happened this session.
+
+### Round 1: get off the wrong hardware
+
+The report's first draft measured everything on a throwaway
+`python:3.12-slim` container, because that's what was available locally —
+flagged honestly in the draft as a "wrong hardware" limitation. Since the
+project's self-hosted GPU runner (`Z8-G4-RTX3090`) turned out to be online,
+closed that gap for real instead of leaving it as a caveat: added a step to
+`full-gpu-tests` that runs `benchmarks/bench_eat.py` on the actual target
+workstation and uploads the JSON as a workflow artifact, then triggered it
+via `workflow_dispatch`. Target hardware came back faster (as expected) but
+not qualitatively different — lookup latency was still microseconds, not the
+nanoseconds the original module docstring implies, which is itself a useful
+result: it rules out "the container was the problem" as an explanation for
+that gap.
+
+### Round 2: the questions a reviewer would actually ask
+
+Went back to the report with a reviewer's eye (prompted by a very specific,
+useful piece of feedback) and it was right: §5 demonstrated feasibility, not
+benefit. Fixed that by extending `benchmarks/bench_eat.py` with three more
+measurements, all without touching `src/eat/*` — deliberately, since the
+28-byte `EATEntry` layout gap is real but not worth optimizing before M2
+exists to tell us which component is actually the bottleneck:
+
+1. **A plain-dict baseline**, no Bloom filter, same workload, same seed.
+   Result was not the one we expected going in: the baseline is **~5× faster
+   on lookups and ~14.6× faster on inserts**. The Bloom filter's fast-negative
+   path doesn't save time here — it costs 1.4–2.1 µs extra per lookup —
+   because the thing it's protecting against (a dict miss) is already O(1)
+   in-memory. A Bloom filter earns its keep against something slow (disk,
+   network); it doesn't earn much against another hash table. Worth stating
+   plainly rather than quietly keeping the Bloom filter because it was
+   already built.
+2. **A contention profile** — 4 readers + 1 writer against a shared EAT.
+   Reader p50 latency degraded a predictable ~10×, but p95 degraded 482× and
+   p99 degraded **1,360×** (single-digit µs to several milliseconds). Python's
+   `RLock` has no fairness guarantee, so under sustained writer activity a
+   minority of readers queue behind bad luck rather than bad average-case
+   behavior. This turns the "CAS counter" documentation gap flagged in the
+   report's design section from a wording nitpick into something with a
+   measured cost — updated that section to say so.
+3. **Slab allocator at 32 slots (8 GB) vs. the 4-slot (1 GB) default.**
+   No latency growth — consistent with the free-list's O(1) design, at least
+   across that 8× increase. Still two orders of magnitude short of the
+   ~1,000-slot production target, so this narrows that limitation rather than
+   closing it.
+
+Also caught, and reported rather than smoothed over: running the identical
+benchmark on the identical RTX 3090 twice gave insert throughput numbers
+133,406 and 176,720 ops/s — a ~32% spread with no code change between runs.
+Added "single-run measurements, no statistical repetition" as its own
+limitation rather than quietly picking the better number.
+
+### Why this matters going into Sprint 2
+
+Both new findings are now concrete M2-adjacent design questions instead of
+open-ended ones: whether the Bloom filter belongs in the hot path at all
+(§8, future work), and whether the RLock needs to become a real
+reader-writer lock or lock-free structure before M2's Tier Manager and M3's
+Scheduler start generating the concurrent traffic the contention benchmark
+approximated. Recorded both as Sprint 2 candidates rather than fixing them
+now, per the same reasoning as the SlabAllocator-standalone decision below:
+don't optimize a component in isolation before the system that will actually
+stress it exists.
+
+### End of day state
+
+- Technical report: title, abstract, 9 sections + appendices, revised twice
+  (container-only draft → real-hardware confirmation → baseline/contention/
+  scale extension). Not committed to the repository (delivered directly).
+- `benchmarks/bench_eat.py` — now four sections: EAT-with-Bloom, plain-dict
+  baseline, contention, slab-scale. Committed.
+- `.github/workflows/ci.yml` — `full-gpu-tests` runs the benchmark and
+  uploads `bench-eat-result` on every `workflow_dispatch`. Committed.
+- Two full-gpu-tests runs completed green on real hardware this session
+  (`31259547453`, `31260457679`), both pytest and the benchmark.
+
+Next session: Sprint 2 — "Eketorp" — M2 (EMH Tier Manager): promotion/
+eviction, SEE policy, async NVMe I/O, `make test-tier` green. First items on
+the list, straight from this session's findings: decide the Bloom filter's
+fate, and design the concurrency model the contention benchmark says the
+current RLock won't survive unchanged.
+
+---
+
 ## 2026-08-08 — Möllstorp: M1 (EAT) implemented, `make test-eat` green
 
 **Release:** [Möllstorp] v0.2.0-dev — closed out today.

@@ -70,11 +70,35 @@ Releases are named after cities where significant project milestones were reache
 
 
 
+\### CI/CD
+
+
+
+\- `.github/workflows/ci.yml` — `full-gpu-tests` now also runs `benchmarks/bench\_eat.py` on the self-hosted `Z8-G4-RTX3090` runner after the test suite, uploading the result as the `bench-eat-result` workflow artifact. Every manual `workflow\_dispatch` re-measures M1 on real target hardware instead of the numbers staying container-host-only
+
+
+
+\### Evaluation — extended benchmark + technical report
+
+
+
+\- `benchmarks/bench\_eat.py` — extended past the initial P50/P95/P99 + insert-throughput numbers with three additional measurements, requested during report review to close the gaps an OSDI-style reviewer would flag first:
+
+  \- \*\*Baseline comparison\*\* — a plain-dict, no-Bloom-filter baseline (`\_PlainDictBaseline`, benchmark-only, not part of the EAT's public API) run against the identical workload. Result: the Bloom filter measured \~5× slower on lookups and \~14.6× slower on inserts than the plain dict — it costs latency rather than saving it, because the structure it guards is already an O(1) in-memory dict. Flagged in the report as an open question for M2/M3 rather than a justified design choice
+
+  \- \*\*Contention profile\*\* — 4 concurrent reader threads + 1 writer thread against a shared EAT. Reader p99 lookup latency rose \~1,360× under contention (single-digit µs → several ms), exposing a real tail-latency cost from the `RLock`-based concurrency model in `eat.py` (see the "CAS counter" design note in Möllstorp's Design decisions above)
+
+  \- \*\*Slab allocator at scale\*\* — alloc/free timing at 4 vs. 32 slots (1 GB vs. 8 GB). No measurable latency growth, consistent with the free-list's claimed O(1) behavior across that 8× increase (still \~2 orders of magnitude below the \~1,000-slot production target)
+
+\- \*OSX Technical Report — M1: Expert Access Table\* (internal document, not committed to this repository) — formal design/implementation/evaluation writeup including the baseline, contention, and slab-scale results above, and an explicit limitations section. Re-run against real target hardware twice via CI (`workflow\_dispatch` runs `31259547453` and `31260457679`), after an initial container-host-only draft — the two same-hardware runs differed by \~32% in measured insert throughput, noted in the report as unquantified run-to-run variance rather than smoothed over
+
+
+
 \### Status
 
 
 
-\*\*Released.\*\* M1 (Expert Access Table) is fully implemented and tested: 24/24 tests passing in `tests/test\_eat.py`, real benchmark numbers from `benchmarks/bench\_eat.py` (p50 ≈ 3.3 µs / p95 ≈ 3.5 µs / p99 ≈ 5.5 µs lookup latency, ≈ 99k inserts/sec — measured on the verification container, not the target GPU dev box). M2/M3 remain Sprint 0 skeletons (`NotImplementedError`), as planned.
+\*\*Released.\*\* M1 (Expert Access Table) is fully implemented, tested, and benchmarked: 24/24 tests passing in `tests/test\_eat.py`; real hardware numbers from `benchmarks/bench\_eat.py` on `Z8-G4-RTX3090` (p50 ≈ 2.6 µs / p95 ≈ 3.8 µs / p99 ≈ 4.6 µs lookup latency, ≈ 177k inserts/sec); and, per the extended evaluation above, two open design questions with measured costs attached — the Bloom filter's net benefit in the current single-process design, and the RLock's tail-latency behavior under concurrent read/write load — both recorded as Sprint 2/M2 candidates rather than fixed here, per the decision to leave `EATEntry`'s layout and M1's core design untouched until end-to-end numbers exist (Sprint 4). M2/M3 remain Sprint 0 skeletons (`NotImplementedError`), as planned.
 
 
 
@@ -82,7 +106,7 @@ Releases are named after cities where significant project milestones were reache
 
 
 
-\*Next release: Sprint 2 — M2 (Tier Manager) implementation complete, `make test-tier` passing green.\*
+\*Next release: Sprint 2 — “Eketorp” — M2 (Tier Manager) implementation complete, `make test-tier` passing green.\*
 
 
 

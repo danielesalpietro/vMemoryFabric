@@ -86,9 +86,11 @@ make shell
 | Job | Trigger | Runner | What it runs |
 |-----|---------|--------|---------------|
 | `cpu-tests` | `push`, `pull_request` | `ubuntu-latest` | `pytest tests/ -m "not gpu"` — CPU-only subset of deps, no torch/vLLM/CUDA |
-| `full-gpu-tests` | `workflow_dispatch` only (manual) | `[self-hosted, gpu]` | `docker compose build` then the full suite via the dev image |
+| `full-gpu-tests` | `workflow_dispatch` only (manual) | `[self-hosted, gpu]` | `docker compose build`, full test suite via the dev image, then `benchmarks/bench_eat.py` — uploaded as the `bench-eat-result` workflow artifact |
 
 Tests requiring real CUDA hardware are marked `@pytest.mark.gpu` (see `TestGPUTransfer` in `tests/test_tier.py`) and registered in `pytest.ini`, so `-m "not gpu"` excludes them deterministically instead of relying on a runtime `pytest.skip()`.
+
+Every manual `workflow_dispatch` run of `full-gpu-tests` re-measures M1 on the actual target hardware (`Z8-G4-RTX3090`) — see the M1 technical report for the latest numbers and their evolution across runs.
 
 ---
 
