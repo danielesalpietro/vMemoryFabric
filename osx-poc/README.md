@@ -2,7 +2,7 @@
 
 **OSX** is a system-level framework for managing the lifecycle of experts in Mixture-of-Experts (MoE) large language models. It treats experts as first-class objects governed by a dedicated runtime — with hierarchical memory placement, predictive prefetching, gating-aware scheduling, and adaptive replication.
 
-> *Current release: **Möllstorp** (v0.2.0-dev) — August 8, 2026 — previous: Karlshamn (v0.1.0-dev)*
+> *Current release: **Eketorp** (v0.3.0-dev) — August 8, 2026 — previous: Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev)*
 
 ---
 
@@ -68,7 +68,7 @@ make build
 # 2. Verify hardware and environment
 make smoke
 
-# 3. Run all tests (M1/EAT passes as of Sprint 1; M2/M3 still NotImplementedError — expected)
+# 3. Run all tests (M1/M2 pass as of Sprint 2; M3 still NotImplementedError — expected)
 make test
 
 # 4. Interactive shell
@@ -86,11 +86,11 @@ make shell
 | Job | Trigger | Runner | What it runs |
 |-----|---------|--------|---------------|
 | `cpu-tests` | `push`, `pull_request` | `ubuntu-latest` | `pytest tests/ -m "not gpu"` — CPU-only subset of deps, no torch/vLLM/CUDA |
-| `full-gpu-tests` | `workflow_dispatch` only (manual) | `[self-hosted, gpu]` | `docker compose build`, full test suite via the dev image, then `benchmarks/bench_eat.py` — uploaded as the `bench-eat-result` workflow artifact |
+| `full-gpu-tests` | `workflow_dispatch` only (manual) | `[self-hosted, gpu]` | `docker compose build`, full test suite via the dev image, then `benchmarks/bench_eat.py` and `benchmarks/bench_tier.py` — uploaded as the `bench-eat-result` / `bench-tier-result` workflow artifacts |
 
-Tests requiring real CUDA hardware are marked `@pytest.mark.gpu` (see `TestGPUTransfer` in `tests/test_tier.py`) and registered in `pytest.ini`, so `-m "not gpu"` excludes them deterministically instead of relying on a runtime `pytest.skip()`.
+Tests requiring real CUDA hardware are marked `@pytest.mark.gpu` (see `TestGPUTransfer`/`TestTierManagerGPU` in `tests/test_tier.py`) and registered in `pytest.ini`, so `-m "not gpu"` excludes them deterministically instead of relying on a runtime `pytest.skip()`.
 
-Every manual `workflow_dispatch` run of `full-gpu-tests` re-measures M1 on the actual target hardware (`Z8-G4-RTX3090`) — see the M1 technical report for the latest numbers and their evolution across runs.
+Every manual `workflow_dispatch` run of `full-gpu-tests` re-measures M1 and M2 on the actual target hardware (`Z8-G4-RTX3090`) — see the M1/M2 technical reports for the latest numbers and their evolution across runs. This machine doubles as both the dev workstation and the self-hosted runner, so GPU-dependent bugs can be iterated on locally via `docker compose run` before spending a `workflow_dispatch` cycle on the final, recorded verification.
 
 ---
 
@@ -136,7 +136,7 @@ vMemoryFabric/                  (repo root)
     │
     ├── benchmarks/
     │   ├── bench_eat.py      # Sprint 1 (Möllstorp) — implemented
-    │   └── bench_tier.py     # Sprint 2 target
+    │   └── bench_tier.py     # Sprint 2 (Eketorp) — implemented
     │
     ├── scripts/
     │   └── smoke_test.py     # Hardware + env validation — 13/13 passing
@@ -154,7 +154,7 @@ vMemoryFabric/                  (repo root)
 |--------|--------|-------|-------------|
 | 0      | Environment + skeleton | 1–2 | ✅ **Karlshamn** |
 | 1      | M1 — EAT               | 3–4 | ✅ **Möllstorp** |
-| 2      | M2 — Tier Manager      | 5–6 | 🔲 pending  |
+| 2      | M2 — Tier Manager      | 5–6 | ✅ **Eketorp**  |
 | 3      | M3 — Expert Scheduler  | 7–8 | 🔲 pending  |
 | 4      | Integration + benchmarks | 9–12 | 🔲 pending |
 | 5      | PoC delivery + paper   | 13–16 | 🔲 pending |
@@ -165,6 +165,25 @@ Non-functional targets (acceptance criteria for PoC):
 - PT-PEP hit rate > 70% on labeled test set
 - GCSG quality degradation < 2% (MMLU-5shot)
 - Shard promotion latency within 1.5× theoretical bandwidth
+
+Live roadmap board: [OSX-PoC Roadmap](https://github.com/users/danielesalpietro/projects/1) (GitHub Project — one card per sprint plus tracked open issues).
+
+---
+
+## Known limitations / open issues
+
+Findings from M1/M2 benchmarking that were deliberately left unresolved, each with the measurement behind it — tracked as GitHub Issues rather than left as LOGBOOK notes, so they survive past whoever wrote the LOGBOOK entry:
+
+| # | Issue | Why it matters |
+|---|-------|-----------------|
+| [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) | Bloom filter ~5-14× slower than a plain dict | Undecided whether it belongs in the EAT hot path at all |
+| [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) | EAT `RLock` p99 degrades ~1360× under contention | M3 adds real concurrent traffic on top of this |
+| [#3](https://github.com/danielesalpietro/vMemoryFabric/issues/3) | `bench_tier.py` DDR4→VRAM p95/p99 skewed by CUDA cold-start | No warm-up iteration before timing |
+| [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) | `BloomFilter.remove_expert()` unimplemented | Evicted shards remain permanent false positives |
+| [#5](https://github.com/danielesalpietro/vMemoryFabric/issues/5) | No CUDA stream pipelining in `GPUTransfer` | Deferred since Sprint 0, needs real compute to overlap with |
+| [#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6) | No `pyproject.toml`/`ruff.toml` | Pre-existing style debt across the whole codebase |
+| [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) | PMEM (EMH-2) integration | Blocked on hardware availability |
+| [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival |
 
 ---
 

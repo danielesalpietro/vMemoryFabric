@@ -5,6 +5,75 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-08 — Eketorp, wrap-up: issues filed, roadmap board updated, docs closed out
+
+**Release:** [Eketorp] v0.3.0-dev — no code change, pure housekeeping to close the sprint out properly before starting M3.
+
+### What we set out to do
+
+Turn everything left as a LOGBOOK/CHANGELOG note across Möllstorp and
+Eketorp into something that survives independently of those files:
+GitHub Issues, so a future session (or a different person) picking up
+this repo doesn't have to re-read three LOGBOOK sessions to know what's
+still open.
+
+### Filed 8 issues, evaluated before creating
+
+Went through Karlshamn → Möllstorp → Eketorp looking for items
+explicitly marked deferred/carried-over, not vague "could be nicer"
+observations. Landed on 8: Bloom filter fate (#1) and RLock contention
+(#2) — both measured, both deferred twice now; the `bench_tier.py`
+warm-up gap (#3) found earlier today; `BloomFilter.remove_expert()`
+leaving evicted shards as permanent false positives (#4), never
+actually tracked anywhere before; missing CUDA stream pipelining (#5),
+deferred since Karlshamn; no `ruff`/`pyproject.toml` config (#6),
+noticed this session while verifying M2; and the two hardware-blocked
+ones, PMEM (#7) and dual-GPU/AER (#8), which have been sitting as dev
+constraints since day one with nowhere to track "what to do once the
+hardware shows up."
+
+Asked before creating rather than just doing it — issue creation is
+visible/shared-state, and the user picked all 8.
+
+### Project board
+
+`OSX-PoC Roadmap` (GitHub Project) predates this session — created in
+Karlshamn with draft-issue cards, one per sprint. Updated it to match
+reality instead of drifting further from the CHANGELOG:
+
+- Sprint 2 card → Done, body replaced with the real outcome (GPU
+  verification, the bug found+fixed, real bench numbers) instead of
+  the stale "Target: make test-tier passing green" placeholder
+- Sprint 3 card → left at Todo (not started), but body now references
+  issues #1/#2/#5 since they're directly relevant to how M3 should be
+  approached
+- All 8 new issues added to the board as real linked items, not just
+  floating in the Issues tab
+
+### Docs
+
+`README.md` (both root and `osx-poc/`) updated to Eketorp — release
+banner, CI section (`bench_tier.py` step, `TestTierManagerGPU`), repo
+structure comments, roadmap table (Sprint 2 now ✅), and a new "Known
+limitations / open issues" table linking all 8 issues with a one-line
+reason each. `CHANGELOG.md`'s Eketorp entry got a `### Tracking`
+section pointing at the same 8 issues and the board update, so the
+release entry and the issue tracker cross-reference each other instead
+of one silently going stale.
+
+### End of day state
+
+- 8 GitHub Issues filed and linked from README/CHANGELOG/project board
+- Project board reflects actual sprint status, not Sprint-0-era
+  placeholders
+- README (root + osx-poc) current as of Eketorp
+
+Next session: Sprint 3 — M3 (Expert Scheduler). Planning conversation
+starts fresh, informed by issues #1/#2/#5 rather than re-deriving them
+from LOGBOOK archaeology.
+
+---
+
 ## 2026-08-08 — Eketorp, continued: real GPU verification, a real bug, honest benchmark numbers
 
 **Release:** [Eketorp] v0.3.0-dev — same release as below, closed out for real this time.

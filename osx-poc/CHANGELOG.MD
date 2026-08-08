@@ -124,6 +124,16 @@ Releases are named after cities where significant project milestones were reache
 
 
 
+\### Tracking
+
+
+
+\- Aperte 8 GitHub Issue per i finding lasciati deliberatamente irrisolti tra M1 ed M2, invece di lasciarli solo come note in LOGBOOK.md: \[#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) destino Bloom filter, \[#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) tail latency RLock sotto contention, \[#3](https://github.com/danielesalpietro/vMemoryFabric/issues/3) manca warm-up in `bench\_tier.py`, \[#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) `BloomFilter.remove\_expert()` non implementato, \[#5](https://github.com/danielesalpietro/vMemoryFabric/issues/5) pipeline CUDA stream mancante, \[#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6) manca config ruff/pyproject.toml, \[#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) integrazione PMEM (bloccata da hardware), \[#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) dual-GPU/AER (bloccata da hardware)
+
+\- Board \[OSX-PoC Roadmap](https://github.com/users/danielesalpietro/projects/1) aggiornata: card Sprint 2 spostata a Done col riepilogo reale, card Sprint 3 arricchita coi riferimenti alle issue #1/#2/#5 rilevanti per il kickoff, tutte le 8 issue aggiunte alla board
+
+
+
 \---
 
 
