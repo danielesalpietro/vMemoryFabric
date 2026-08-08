@@ -22,6 +22,11 @@ jobs:
       # but as the small CPU-only wheel (~190 MB, no bundled CUDA libs):
       # TierManager.__init__ always constructs a GPUTransfer, which needs
       # `torch` to be importable even for tests that never touch real CUDA.
+      # scikit-learn: PT-PEP's TF-IDF classifier is CPU-only by design, no
+      # reason to gate it behind the GPU job. nvidia-ml-py: `import scheduler`
+      # pulls in GCSGGuard, which imports pynvml (nvidia-ml-py's module name)
+      # at module load time even though its NVML calls no-op gracefully here
+      # with no GPU/driver present.
       - name: Install dependencies
         run: |
           pip install --upgrade pip
@@ -32,7 +37,9 @@ jobs:
             pytest-cov==5.0.0 \
             numpy==1.26.4 \
             aiofiles==23.2.1 \
-            pybloom-live==4.0.0
+            pybloom-live==4.0.0 \
+            scikit-learn==1.5.0 \
+            nvidia-ml-py==13.610.43
 
       - name: Run CPU tests
         working-directory: osx-poc

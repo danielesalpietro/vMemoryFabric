@@ -48,7 +48,9 @@ from typing import List, Optional, Dict
 import logging
 import time
 
-import pynvml
+import pynvml   # provided by the `nvidia-ml-py` package (requirements.txt) —
+                # the standalone `pynvml` PyPI package is deprecated, this
+                # is the same import name from NVIDIA's maintained bindings
 
 log = logging.getLogger(__name__)
 

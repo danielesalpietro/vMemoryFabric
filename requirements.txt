@@ -23,7 +23,13 @@ onnx==1.16.1
 onnxruntime==1.18.0
 
 # ── GPU monitoring ────────────────────────────────────────────────────────────
-pynvml==11.5.0
+# pynvml (the standalone PyPI package) is deprecated in favor of nvidia-ml-py,
+# which ships the same importable `pynvml` module with NVIDIA's maintained
+# bindings. Installing both is actively dangerous (the deprecated one takes
+# precedence and can error) — nvidia-ml-py was already showing up as a
+# transitive dependency of the vLLM overlay, which is what surfaced the
+# deprecation warning in the first place.
+nvidia-ml-py==13.610.43
 gpustat==1.1.1
 
 # ── Async I/O (replaces io_uring — not available on WSL2/Windows Docker) ──────

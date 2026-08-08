@@ -40,7 +40,10 @@ tier_manager:
 # ── M3: Expert Scheduler ──────────────────────────────────────────────────────
 scheduler:
   ptpep:
-    model_path: null          # null = stub mode (Sprint 3: path ONNX)
+    # TF-IDF+centroidi (Sprint 3 baseline, non ONNX/BERT-small — vedi
+    # scripts/build_ptpep_classifier.py e src/scheduler/ptpep.py). Path
+    # relativo alla working directory di osx-poc; null = stub mode.
+    model_path: models/ptpep_tfidf_v1.joblib
     confidence_threshold: 0.6
     domains: [coding, math, language, science, medical, legal, creative, general]
     expert_map:  # empirical routing statistics, not ground truth — Mixtral MoE
