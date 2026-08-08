@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 from typing import Optional
 import aiofiles
+import aiofiles.os
 import numpy as np
 
 from eat.types import ExpertID, ShardID, SHARD_SIZE_MB
@@ -52,7 +53,18 @@ class AsyncNVMeIO:
         Returns:
             numpy array uint8 con il contenuto dello shard.
         """
-        raise NotImplementedError("TODO Sprint 2")
+        path = self._shard_path(expert_id, shard_idx)
+        async with aiofiles.open(path, "rb") as f:
+            raw = await f.read()
+        # dtype esplicito e deliberatamente uint8: attraverso tutta questa
+        # pipeline uno shard è un blob di byte opachi (stesso dtype del
+        # pool di SlabAllocator in eat/slab.py) — nessuna reinterpretazione
+        # float32/altro avviene qui.
+        data = np.frombuffer(raw, dtype=np.uint8)
+        if out is None:
+            return data.copy()
+        out[: len(data)] = data
+        return out
 
     # ── write (DDR4 → NVMe) ────────────────────────────────────────────────────
 
@@ -65,14 +77,17 @@ class AsyncNVMeIO:
             shard_idx: Indice shard.
             data:      numpy array uint8 sorgente.
         """
-        raise NotImplementedError("TODO Sprint 2")
+        path = self._shard_path(expert_id, shard_idx)
+        path.parent.mkdir(parents=True, exist_ok=True)  # sync: non è il bottleneck
+        async with aiofiles.open(path, "wb") as f:
+            await f.write(data.tobytes())
 
     # ── utils ──────────────────────────────────────────────────────────────────
 
     async def exists(self, expert_id: ExpertID, shard_idx: ShardID) -> bool:
         """Verifica esistenza shard su NVMe (non-blocking)."""
-        raise NotImplementedError("TODO Sprint 2")
+        return await aiofiles.os.path.exists(self._shard_path(expert_id, shard_idx))
 
     async def delete(self, expert_id: ExpertID, shard_idx: ShardID) -> None:
         """Cancella shard da NVMe dopo promozione completata."""
-        raise NotImplementedError("TODO Sprint 2")
+        await aiofiles.os.remove(self._shard_path(expert_id, shard_idx))

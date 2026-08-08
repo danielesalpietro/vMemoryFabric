@@ -53,7 +53,10 @@ class GPUTransfer:
         Returns:
             torch.Tensor su GPU (dtype uint8).
         """
-        raise NotImplementedError("TODO Sprint 2")
+        if stream is not None:
+            with torch.cuda.stream(stream):
+                return torch.from_numpy(data).to(self._device, non_blocking=True)
+        return torch.from_numpy(data).to(self._device)
 
     # ── device → host (eviction VRAM → DDR4) ──────────────────────────────────
 
@@ -66,18 +69,20 @@ class GPUTransfer:
         Returns:
             numpy array uint8 in DDR4.
         """
-        raise NotImplementedError("TODO Sprint 2")
+        return tensor.detach().cpu().numpy()
 
     # ── utils ──────────────────────────────────────────────────────────────────
 
     def vram_free_bytes(self) -> int:
         """VRAM libera corrente su device (bytes)."""
-        raise NotImplementedError("TODO Sprint 2")
+        free, _total = torch.cuda.mem_get_info(self._device_id)
+        return free
 
     def vram_total_bytes(self) -> int:
         """VRAM totale su device (bytes). Atteso: 24 GB per RTX 3090."""
-        raise NotImplementedError("TODO Sprint 2")
+        _free, total = torch.cuda.mem_get_info(self._device_id)
+        return total
 
     def create_stream(self) -> "torch.cuda.Stream":
         """Crea un nuovo CUDA stream per trasferimenti asincroni."""
-        raise NotImplementedError("TODO Sprint 2")
+        return torch.cuda.Stream(device=self._device)
