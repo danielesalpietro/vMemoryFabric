@@ -177,17 +177,20 @@ class TierManager:
             current = entry.tier
 
             if current == Tier.VRAM:
-                tensor = self._vram[key]
+                tensor = self._vram.pop(key)
                 data = self._gpu.to_ddr4(tensor)
                 slot_idx = self._eat.slab.alloc(expert_id, shard_idx, data.nbytes)
                 buffer = self._eat.slab.get_buffer(slot_idx)
                 buffer[: len(data)] = data
                 self._slots[key] = slot_idx
-                del self._vram[key]
-                # Vedi GPUTransfer.empty_cache(): senza questo, vram_free_bytes()
-                # non riflette la memoria appena liberata (il caching allocator
-                # di PyTorch la trattiene per riuso) e evict_to_free_vram()
-                # continuerebbe a ciclare oltre il necessario.
+                # `tensor` è ancora una live reference qui — self._vram.pop()
+                # toglie solo il riferimento del dict. torch.cuda.empty_cache()
+                # può restituire al driver solo i blocchi SENZA reference vive,
+                # quindi il `del` esplicito è necessario, non solo cosmetico:
+                # senza, empty_cache() è un no-op silenzioso e vram_free_bytes()
+                # resta invariato (bug reale trovato su hardware reale — vedi
+                # GPUTransfer.empty_cache()).
+                del tensor
                 self._gpu.empty_cache()
                 self._eat.update_tier(expert_id, shard_idx, Tier.DDR4)
                 return
