@@ -45,8 +45,13 @@ Hook vLLM — verificato contro il sorgente reale di vllm==0.6.6.post1
        in worker process separati (multiprocessing/Ray) — un patch sul
        processo principale non si propaga ai worker. L'hook corretto è una
        sottoclasse GCSGWorker(Worker) passata a LLMEngine via
-       EngineArgs(worker_cls=GCSGWorker) (parametro confermato presente,
-       default "auto").
+       EngineArgs(worker_cls="scheduler.gcsg.GCSGWorker") — STRINGA
+       qualname, non la classe: verificato (smoke test 2026-08-09) che
+       vllm.worker.worker_base.init_worker() fa
+       resolve_obj_by_qualname(qualname).rsplit(".", 1), cioè importa e
+       risolve da solo un percorso "modulo.Classe" — passare la classe
+       GCSGWorker direttamente crash con
+       AttributeError: type object 'GCSGWorker' has no attribute 'rsplit'.
 
     2. Shadow pool: va caricato in GCSGWorker.load_model(), DOPO aver
        chiamato super().load_model() — non in init_device(). Verificato in
@@ -75,15 +80,17 @@ Hook vLLM — verificato contro il sorgente reale di vllm==0.6.6.post1
        expert) — registrato in GCSGWorker.load_model() dopo il caricamento,
        iterando self.model_runner.model.model.layers[i].block_sparse_moe.gate.
 
-    4. Contaminazione per-request, non globale: verificato che
-       ModelInputForGPU (classe base di ModelInputForGPUWithSamplingMetadata,
-       il tipo di model_input ricevuto da execute_model()) porta sia
-       request_ids_to_seq_ids: Dict[str, List[int]] sia
-       seq_group_metadata_list: List[SequenceGroupMetadata] — entrambi
-       disponibili per attribuire la contaminazione al request_id giusto
-       invece di un contatore unico che mescola sessioni diverse in batch.
+    4. Contaminazione per-request, non globale — CORRETTO durante lo smoke
+       test (2026-08-09), prima ipotesi sbagliata: GCSGWorker.execute_model()
+       sovrascrive WorkerBase.execute_model(execute_model_req:
+       ExecuteModelRequest), NON ModelRunner.execute_model(model_input, ...)
+       — stesso nome, parametro diverso. ExecuteModelRequest non ha un campo
+       request_ids_to_seq_ids (verificato: assente da dir()); i request_id
+       reali si leggono da execute_model_req.seq_group_metadata_list
+       (List[SequenceGroupMetadata], ognuno con .request_id), confermato con
+       un run reale via logging di debug prima di correggere il codice.
        GatingContext.request_id e GCSGGuard.contamination_rate(request_id)
-       riflettono questo.
+       riflettono questo — solo il punto di estrazione era sbagliato.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -371,18 +378,30 @@ class GCSGGuard:
 
 
 class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-testabile
-    """Worker vLLM con GCSG cablato — hook verificato, non eseguibile senza GPU.
+    """Worker vLLM con GCSG cablato.
 
     Sottoclasse reale di vllm.worker.worker.Worker, istanziata da vLLM stesso
-    via EngineArgs(worker_cls=GCSGWorker) quando si costruisce un LLMEngine.
-    Il codice sotto segue esattamente la sequenza verificata nel docstring di
-    modulo (init_device -> load_model -> shadow pool -> hook su .gate), ma
-    NON è coperto da unit test: richiede un LLMEngine reale con un checkpoint
-    Mixtral caricato, out of scope per questa sessione (nessun download di
-    ~15+ GB di pesi fatto qui). Verificato: import statici, ordine dei
-    metodi, e la corrispondenza coi nomi reali delle classi vLLM 0.6.6.post1.
-    Da eseguire per la prima volta in un vero smoke test end-to-end (Sprint 3,
-    prossima sessione con budget per il download del checkpoint).
+    via EngineArgs(worker_cls="scheduler.gcsg.GCSGWorker") — stringa
+    qualname, non la classe (vedi docstring di modulo) — quando si
+    costruisce un LLMEngine.
+    Segue la sequenza verificata nel docstring di modulo (init_device ->
+    load_model -> hook su .gate -> shadow pool best-effort).
+
+    Smoke test end-to-end eseguito 2026-08-09 su hf-internal-testing/
+    Mixtral-tiny (2 layer, hidden_size=1024, num_local_experts=8 — stessa
+    classe MixtralForCausalLM/MixtralMoE del vero Mixtral 8x7B, non un
+    modello diverso), NON su Mixtral-8x7B reale: il checkpoint AWQ 4-bit
+    reale (~23 GiB) rischia seriamente di non caricare sulla 3090 (24 GiB
+    VRAM totale, gpu_memory_utilization=0.9 di default concede 21.6 GiB,
+    meno dei soli pesi) — verificarlo su un modello che rischia l'OOM prima
+    ancora di finire load_model() non avrebbe isolato bene cosa si sta
+    testando. Il tiny model valida la MECCANICA (hook si registrano e
+    sparano, request_ids_to_seq_ids è accessibile, il bookkeeping
+    contamination per-request funziona con request_id reali) — NON dice
+    nulla su qualità (MMLU), performance, o comportamento VRAM del vero
+    shadow pool. Quei risultati restano pending sul modello reale (vedi
+    LOGBOOK 2026-08-09) — dichiararlo così è più difendibile in review che
+    un risultato su full model gonfiato da cpu_offload_gb non rappresentativo.
 
     L'import di vllm è locale ai metodi (non al modulo) apposta: gcsg.py deve
     restare importabile — e GCSGGuard testabile — anche in ambienti senza
@@ -396,6 +415,12 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         self._shadow_pool: Dict[int, object] = {}
         self._gate_hook_handles: List[object] = []
 
+        # Osservabilità smoke-test (2026-08-09) — non usata dal path di
+        # produzione, permette di verificare dall'esterno che gli hook
+        # sparino davvero e che i request_id reali arrivino a execute_model().
+        self.captured_router_logits: List[object] = []   # torch.Tensor per hit, non tipizzato qui per non importare torch al modulo
+        self.seen_request_ids: set = set()
+
     def __getattr__(self, name):
         # Delega tutto ciò che non sovrascriviamo esplicitamente al Worker reale
         return getattr(self._base, name)
@@ -404,17 +429,31 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         self._base.init_device()
 
     def load_model(self) -> None:
-        """Carica il modello principale, POI lo shadow pool — mai prima.
+        """Carica il modello principale, POI gli hook, POI (best-effort) lo shadow pool.
 
-        Ordine verificato in vllm.executor.gpu_executor.GPUExecutor:
-        init_device() gira prima di load_model() e già misura la VRAM libera
-        pre-modello — se lo shadow pool venisse caricato in init_device()
-        (o prima di super().load_model() qui), il preflight VRAM di
-        GCSGGuard vedrebbe VRAM libera artificiosamente alta.
+        Ordine del modello vs. shadow pool verificato in
+        vllm.executor.gpu_executor.GPUExecutor: init_device() gira prima di
+        load_model() e già misura la VRAM libera pre-modello — se lo shadow
+        pool venisse caricato in init_device() (o prima di super().load_model()
+        qui), il preflight VRAM di GCSGGuard vedrebbe VRAM libera
+        artificiosamente alta.
+
+        Lo shadow pool è ancora NotImplementedError (richiede integrazione
+        EAT/Tier Manager, vedi _load_shadow_pool) — catturato qui e loggato,
+        non lasciato propagare: altrimenti l'intero worker non partirebbe
+        mai, nemmeno per verificare hook/request_id/contamination, che non
+        dipendono dallo shadow pool.
         """
         self._base.load_model()
-        self._load_shadow_pool()
         self._register_gate_hooks()
+        try:
+            self._load_shadow_pool()
+        except NotImplementedError as e:
+            log.warning(
+                "GCSG: shadow pool non caricato (%s) — GCSGWorker gira in "
+                "modalità hook-only: hook/request_id/contamination bookkeeping "
+                "restano verificabili, nessuna shadow execution possibile.", e,
+            )
 
     def _load_shadow_pool(self) -> None:
         """Carica shadow_pool_size expert INT4 — TODO integrazione reale.
@@ -443,13 +482,18 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         for layer in model.model.layers:
             gate = layer.block_sparse_moe.gate
 
-            def _capture_router_logits(module, inputs, output, _guard=self.guard):
+            def _capture_router_logits(module, inputs, output, _worker=self):
                 router_logits, _bias = output
+                _worker.captured_router_logits.append(router_logits.detach())
                 # TODO Sprint 3: da router_logits + SequenceGroupMetadata del
                 # batch corrente a GatingContext per-token/per-request, poi
-                # _guard.should_activate_shadow(ctx) — richiede il mapping
-                # token-position -> request_id che execute_model() riceve via
-                # model_input.request_ids_to_seq_ids (verificato presente).
+                # _worker.guard.should_activate_shadow(ctx) — richiede il
+                # mapping token-position -> request_id, che execute_model()
+                # riceve via execute_model_req.seq_group_metadata_list
+                # (List[SequenceGroupMetadata], ognuno con .request_id —
+                # verificato, vedi execute_model()), non un dict diretto
+                # token-position -> request_id: va ricostruito dai
+                # token_chunk_size/seq_data di ogni SequenceGroupMetadata.
                 return output
 
             handle = gate.register_forward_hook(_capture_router_logits)
@@ -459,11 +503,34 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         """Delega a Worker.execute_model — i gating score arrivano dagli hook
         su .gate (_register_gate_hooks), non ispezionando l'output qui.
 
-        La contaminazione va attribuita per request_id: model_input (primo
-        arg posizionale o kwarg, a seconda di come vLLM invoca execute_model)
-        porta request_ids_to_seq_ids — verificato presente su
-        ModelInputForGPU. Il mapping token/step -> request_id concreto è
-        TODO insieme a _load_shadow_pool (stessa integrazione mancante: un
-        LLMEngine live).
+        CORREZIONE (smoke test 2026-08-09): questo override eredita da
+        WorkerBase.execute_model, che prende un ExecuteModelRequest — NON lo
+        stesso execute_model() di ModelRunner (model_input/kv_caches/...),
+        nome uguale ma parametro diverso, confuse inizialmente scrivendo
+        questa classe. request_ids_to_seq_ids NON esiste su
+        ExecuteModelRequest (verificato: dir() non lo elenca) — i request_id
+        reali si estraggono da execute_model_req.seq_group_metadata_list
+        (List[SequenceGroupMetadata], ognuno con .request_id), confermato
+        via un run reale con logging di debug.
+
+        gating_scores/token_entropy qui sono placeholder sintetici
+        deliberati, non letti dagli hook — collegare router_logits catturati
+        (via _register_gate_hooks) al request_id/posizione-token giusti resta
+        TODO insieme a _load_shadow_pool (stessa integrazione mancante: serve
+        il mapping posizione-nel-batch -> request_id dentro
+        SequenceGroupMetadata.seq_data, non ancora tracciato qui).
         """
+        execute_model_req = args[0] if args else kwargs.get("execute_model_req")
+        seq_group_metadata_list = getattr(execute_model_req, "seq_group_metadata_list", None) or []
+        for seq_group_metadata in seq_group_metadata_list:
+            request_id = seq_group_metadata.request_id
+            self.seen_request_ids.add(request_id)
+            ctx = GatingContext(
+                token_id=-1, request_id=request_id,
+                gating_scores=[0.99, 0.01], token_entropy=0.1,   # placeholder, vedi docstring
+            )
+            should, _ = self.guard.should_activate_shadow(ctx)
+            if should:
+                self.guard.run_shadow(ctx, shadow_pool={0: lambda c: None})
+
         return self._base.execute_model(*args, **kwargs)
