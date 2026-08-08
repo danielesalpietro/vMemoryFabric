@@ -5,6 +5,114 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-08 — Oskarshamn: Sprint 3 kickoff, vLLM blocker closed, pre-experimentation checkpoint
+
+**Release:** [Oskarshamn] v0.4.0-dev — in progress. This session closes the
+Sprint 3 vLLM/torch blocker only; PT-PEP/GCSG/AER implementation starts next
+session.
+
+### What we set out to do
+
+Branch `Sprint-3-Oskarshamn` off `Sprint-2-Eketorps` (Oskarshamn — where this
+session is physically running from, giving Sprint 3 its name) and resolve the
+one blocker flagged at the end of Eketorp: `vllm==0.4.3`'s dead
+`vllm-flash-attn==2.5.8.post2` pin, which has to be fixed before a single line
+of M3 hook code gets written.
+
+### vLLM: further than expected, then walked back to the right corridor
+
+`pip index versions vllm` showed the real gap: current PyPI tip is `0.26.0`,
+not the `0.5.x`/`0.6.x` guessed going in — and `0.26.0` pulls `torch==2.11.0`
+on a CUDA 13.x toolchain (`nvidia-cuda-runtime-13.0.96` etc.), incompatible
+with the CUDA 12.1.1 base image and the whole pinned stack (numpy 1.26→2.3,
+transformers 4.41→5.14). Walked the version ladder back down:
+`vllm==0.6.6.post1` resolves to `torch==2.5.1+cu124` — CUDA 12.4 wheels,
+self-contained, no system CUDA toolkit dependency, and the host driver
+(610.74) covers it. No separate `vllm-flash-attn` dependency at all —
+confirms the plan's assumption that it's bundled since ~0.5.x.
+
+Installed for real (not just import) and ran an expanded smoke test:
+`torch.cuda.is_available()`, a real matmul on the 3090, and a hook-target
+survey across `LLMEngine`, `ModelRunner`, `Scheduler`, `AsyncLLMEngine`. All
+green.
+
+### The hook target isn't where the plan assumed
+
+`_run_workers()` still exists on `LLMEngine`, but in 0.6.x `ModelRunner`
+executes inside separate worker processes (multiprocessing/Ray) — a patch on
+the main process doesn't reach them. Verified `EngineArgs.__init__` has a
+`worker_cls` parameter (default `"auto"`); the correct hook is a
+`GCSGWorker(Worker)` subclass overriding `execute_model()`, passed via
+`EngineArgs(worker_cls=GCSGWorker)`. Documented in `gcsg.py`'s module
+docstring so the eventual implementation doesn't rediscover this from
+scratch.
+
+### A memory-math correction, twice
+
+Recomputed the shadow-pool VRAM cost from Mixtral 8x7B's real FFN dimensions
+(3 SwiGLU projections × 4096×14336 per layer × 32 layers ≈ 5.6B
+params/expert-index, ≈3GB at INT4) — confirmed the original `gcsg.py`
+docstring's ~3GB/expert. A lower estimate proposed mid-session (dividing 7B
+by 8) turned out to be a routing-model error, not an arithmetic one, and got
+walked back after cross-checking against the architecture. With
+`shadow_pool_size: 4` in config, 4×3GB + the ~14-16GB active model exceeds
+the 3090's 24GB in any realistic scenario — a concrete OOM risk, not a tight
+margin. Lowered `shadow_pool_size` to 2 and made `GCSGGuard`'s new NVML
+preflight check adaptive rather than a binary fail/pass: it downgrades to 1
+expert if the model already consumed >~18GB at startup, and only raises
+`RuntimeError` if not even one expert fits.
+
+### expert_map — declared as a heuristic, not ground truth
+
+Added the missing `scheduler.ptpep.expert_map` section to `osx_default.yaml`
+(placeholder domain→expert_ids mapping) — `PTPEPClassifier` needed it to
+populate `PTPEPPrediction.expert_ids`, which `test_scheduler.py`'s skipped
+tests will check. Commented explicitly as empirical routing statistics, not a
+fixed semantic identity — Mixtral's MoE gating is input-dependent per layer,
+so a domain→expert mapping is a statistical artifact of whatever sample set
+derives it, not architecture ground truth.
+
+### Requirements split, image rebuilt, full suite re-verified
+
+`torch`/`torchvision`/`transformers`/`tokenizers`/`vllm` moved into
+`requirements-vllm.txt` as one coherent overlay group (pip resolver conflict
+otherwise, since vLLM pins them tightly); `requirements.txt` keeps everything
+else with `transformers`/`tokenizers` ranged instead of exact-pinned.
+`Dockerfile` installs the overlay right after the base file. Rebuilt
+`osx-poc:dev` for real (not an ephemeral `--rm` install) and ran the full
+suite with the correct `PYTHONPATH=src` (first attempt without it produced
+`ModuleNotFoundError` — a pre-existing Dockerfile `ENV
+PYTHONPATH=/workspace/src` pointing at the wrong path, unrelated to this
+session's changes, worked around the same way CI already does): **60
+passed, 12 skipped** (all M3 stubs, as expected) — no regression from the
+torch 2.3.0+cu121 → 2.5.1+cu124 bump across M1 (`test_eat.py`) and M2
+(`test_tier.py`, including the VRAM-release fix from the last Eketorp
+session).
+
+### End of day state
+
+- Committed (`933299a`): `Dockerfile`, `requirements.txt`,
+  `requirements-vllm.txt`, `osx-poc/configs/osx_default.yaml`,
+  `osx-poc/src/scheduler/gcsg.py`, `osx-poc/src/scheduler/ptpep.py`
+- vLLM/torch pin verified end-to-end: version, hook target, worker
+  propagation, no regressions
+- `GCSGGuard` and `osx_default.yaml`'s `scheduler.gcsg`/`scheduler.ptpep`
+  sections now reflect real numbers, not placeholders
+- PT-PEP/GCSG/AER method bodies still `NotImplementedError` — this session
+  closed the environment blocker only
+- Probed all 8 candidate HF datasets for the PT-PEP keyword/TF-IDF
+  classifier (CodeAlpaca, MetaMathQA, PubMedQA, LegalBench, SciQ, CoEdit,
+  WritingPrompts, Alpaca) — all download cleanly, none used as training data
+  yet
+
+Next session: PT-PEP keyword classifier — TF-IDF vocabularies extracted from
+the 8 probed datasets (not manually curated), per-domain centroids,
+cosine-similarity `predict()`, 80/20 held-out validation (400 prompts),
+target >70% hit rate. Then GCSG (`GCSGWorker` subclass, shadow pool +
+contamination tracking), then AER `WOULD_REPLICATE` logging.
+
+---
+
 ## 2026-08-08 — Eketorp, wrap-up: issues filed, roadmap board updated, docs closed out
 
 **Release:** [Eketorp] v0.3.0-dev — no code change, pure housekeeping to close the sprint out properly before starting M3.
