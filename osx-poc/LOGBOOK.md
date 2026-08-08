@@ -5,6 +5,118 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-08 — Oskarshamn, continued: AER trigger logic, GCSG verified against real vLLM source
+
+**Release:** [Oskarshamn] v0.4.0-dev — in progress. All three Sprint 3 nodes
+(PT-PEP, AER, GCSG) now have real logic; GCSGWorker's live-engine wiring
+(shadow pool loading, request_id-to-gating attribution) is the one piece
+still `NotImplementedError`, deliberately — needs a real Mixtral checkpoint
+loaded, not attempted this session.
+
+### AER first, on purpose — closed small before opening GCSG
+
+Explicit call this session: AER (small, ~15-20 min) before GCSG (the big
+one), so the GCSG commit wouldn't carry an unrelated loose end behind it.
+`AERManager.replication_factor()` stays 1 in single-GPU dev — no second
+device to replicate onto — but the stub stopped being silent about it.
+Added `trigger_conditions` (exposed, `load_threshold_qps`) and
+`evaluate_load(expert_id, requests_per_second)`, which logs every
+`WOULD_REPLICATE` decision with its reason and records it in `stats()`.
+Lets a soak test validate the trigger logic is correct now, independent of
+whether the RTX 5080 has arrived yet to execute a real replica.
+
+### GCSG: three architectural claims, verified before writing a line
+
+Before touching `gcsg.py`, three specific claims about vLLM 0.6.6.post1's
+internals needed checking against the real source, not assumed from the
+general plan — each one would have meant rewriting the worker differently
+if wrong:
+
+1. **Shadow pool timing.** Claim: load it in `GCSGWorker.init_device()` (or
+   equivalent), *after* the main model has claimed its VRAM, not before —
+   otherwise the adaptive VRAM preflight (`GCSGGuard._check_vram_budget`,
+   from the vLLM-gate session) measures free VRAM before the model exists
+   and overestimates headroom. Checked `GPUExecutor`: it calls
+   `driver_worker.init_device()` then `driver_worker.load_model()` — and
+   `init_device()` itself already snapshots `self.init_gpu_memory =
+   torch.cuda.mem_get_info()[0]` *before* the model loads. Confirms the
+   worry exactly. Landed on: shadow pool loads inside `load_model()`, after
+   `super().load_model()` — not `init_device()`, which was the specific
+   hook point guessed going in.
+
+2. **Where gating scores actually live.** Claim: not visible from
+   `ModelRunner.execute_model()`'s return value in vLLM 0.6.x with Mixtral;
+   need a forward hook on `MixtralSparseMoeBlock`. That exact class doesn't
+   exist in 0.6.6.post1 — it's `MixtralMoE`. More importantly, `MixtralMoE.
+   forward()` computes `router_logits, _ = self.gate(hidden_states)` and
+   never returns it — a hook on `MixtralMoE` itself would only see the
+   final mixed hidden state, not the router logits, which get discarded as
+   a local variable. Traced one level deeper: `self.gate` is a
+   `ReplicatedLinear`, and *its* `forward()` returns `(output, output_bias)`
+   where `output` is exactly `router_logits`. The real hook target is
+   `layer.block_sparse_moe.gate`, not the MoE block that contains it.
+
+3. **Contamination must be per-request.** Claim: `execute_model()` batches
+   multiple sequences together, so a single global contamination counter
+   would mix unrelated requests and make `theta_contamination` meaningless
+   — needs keying by `request_id` via whatever `SequenceGroupMetadata`
+   `execute_model()` receives. Confirmed: `ModelInputForGPU` (the base class
+   of `execute_model()`'s `model_input` parameter) carries both
+   `request_ids_to_seq_ids: Dict[str, List[int]]` and
+   `seq_group_metadata_list`. `GatingContext` gained a required `request_id`
+   field, and `GCSGGuard` now tracks contamination in per-request dicts,
+   with `contamination_rate(request_id=None)` falling back to an aggregate
+   view only for `stats()`/observability, never for the per-token gating
+   decision itself.
+
+All three matched what was proposed, but not the exact class/method names
+guessed — verifying against the real 0.6.6.post1 source (already installed
+and working from the earlier vLLM-gate session) caught the precise
+attachment points before any worker code got written around wrong
+assumptions.
+
+### What got implemented vs. what stayed a stub, and why
+
+`GCSGGuard`'s decision logic (`should_activate_shadow`, `run_shadow`,
+`contamination_rate`, `reset_contamination_counter`, `update_thresholds`,
+`stats`) is fully implemented and unit-tested — none of it needs a real
+model, just `GatingContext` values and a `shadow_pool` dict of callables.
+`GCSGWorker` is real code (subclasses `Worker`, wires `load_model()` and a
+`_register_gate_hooks()` that attaches the verified forward hook per layer),
+but two pieces stay `NotImplementedError` on purpose:
+`_load_shadow_pool()` (which experts to cache and how to quantize them to
+INT4 is an EAT/Tier-Manager integration question, not a GCSG one) and the
+router-logits-to-`GatingContext` wiring inside the hook callback (needs the
+token-position-to-request_id mapping that only exists inside a live
+`LLMEngine`). Both need a real Mixtral checkpoint loaded to exercise at all
+— not attempted this session (no multi-GB download), flagged plainly as the
+next session's starting point rather than glossed over. `vllm` is imported
+locally inside `GCSGWorker`'s methods, not at module level, specifically so
+`gcsg.py` — and all of `GCSGGuard`'s real unit tests — stay importable
+without vLLM installed, matching how CI's `cpu-tests` job is scoped.
+
+### End of day state
+
+- Committed: `d521c46` (AER trigger logic), `8c89437` (GCSG guard + worker)
+- Full suite: **79 passed, 3 skipped** — the 3 skips are `GCSGWorker`'s
+  live-engine-dependent behavior, the already-flagged MMLU/PagedAttention
+  integration tests, and the M2+M3 prefetch integration test, all
+  legitimately deferred, none newly broken
+- All three Sprint 3 nodes (PT-PEP, AER, GCSG) have real, tested logic now
+- `GCSGWorker._load_shadow_pool()` and its gate-hook-to-`GatingContext`
+  wiring are the one remaining `NotImplementedError` in the whole scheduler
+  package — both need a live `LLMEngine` + real Mixtral checkpoint
+
+Next session: first real end-to-end smoke test — load an actual Mixtral 8x7B
+checkpoint (quantized, ~14-16 GB per the memory math worked out earlier this
+sprint) through `EngineArgs(worker_cls=GCSGWorker)`, confirm the `.gate`
+forward hooks actually fire and the shadow pool loads without OOM, then
+finish wiring `_load_shadow_pool()` and the request_id attribution. That's
+also the first point real GCSG behavior (activation rate, contamination,
+MMLU quality degradation) can be measured instead of just unit-tested.
+
+---
+
 ## 2026-08-08 — Oskarshamn, continued: PT-PEP TF-IDF classifier, 87.2% hit rate
 
 **Release:** [Oskarshamn] v0.4.0-dev — in progress. PT-PEP implemented; GCSG
