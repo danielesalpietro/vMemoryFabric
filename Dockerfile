@@ -37,6 +37,12 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
+# vLLM + coupled torch/transformers overlay (Sprint 3) — see requirements-vllm.txt
+# header for why this is a separate install rather than merged into the file above.
+COPY requirements-vllm.txt /tmp/requirements-vllm.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-vllm.txt \
+    --extra-index-url https://download.pytorch.org/whl/cu124
+
 # ── workspace ─────────────────────────────────────────────────────────────────
 WORKDIR /workspace
 ENV PYTHONPATH=/workspace/src

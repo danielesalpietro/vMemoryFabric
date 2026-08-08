@@ -15,16 +15,42 @@ Shadow execution attivata solo se TUTTE le condizioni:
     - contamination < θ_contamination
 
 Vincolo dev (single GPU 3090 24 GB):
-    Shadow pool = top-8 expert INT4 (~3 GB ciascuno ≈ 24 GB totali).
-    In pratica: shadow pool ridotto a top-4 per lasciare headroom
-    al modello BF16 attivo. Calibrare in Sprint 3.
+    Memory math (Mixtral 8x7B, verificata 2026-08-08): un "expert" INT4 qui
+    significa l'FFN con indice i su tutti e 32 i layer (il routing MoE è
+    per-layer, non c'è un unico blocco "expert i"). Per layer: 3 proiezioni
+    SwiGLU × 4096×14336 ≈ 176M parametri; × 32 layer ≈ 5.6B parametri/expert;
+    a INT4 (~0.5 B/param + overhead scale) ≈ 2.8–3.2 GB, quindi ~3 GB/expert.
 
-Hook vLLM: monkey-patch su _run_workers() post-gating, pre-expert-execution.
+    Con il modello attivo a ~14 GB (lower bound, scheduler/__init__.py):
+    restano ~10 GB → max 3 shadow expert prima di intaccare il budget
+    KV-cache di vLLM. A ~16 GB (upper bound): restano ~8 GB → max 2.
+    shadow_pool_size in config è quindi 2, non 4 — top-4 supererebbe i 24 GB
+    in ogni scenario realistico, anche solo col modello + shadow pool, prima
+    ancora di contare KV-cache e overhead CUDA context.
+
+    Il preflight in GCSGGuard.__init__ non si limita a un fail-fast binario:
+    se il modello ha consumato più di ~18 GB all'avvio (restano <6 GB, non
+    bastano 2 expert × 3 GB), abbassa shadow_pool_size effettivo a 1 e
+    prosegue — GCSG degradato ma operativo. Fallisce fast solo se non entra
+    nemmeno 1 expert (altrimenti l'OOM arriverebbe a runtime sotto carico,
+    molto peggio da diagnosticare).
+
+Hook vLLM: NON un monkey-patch su _run_workers(). In vLLM 0.6.x ModelRunner
+gira in worker process separati (multiprocessing/Ray) — un patch sul processo
+principale non si propaga ai worker. L'hook corretto è una sottoclasse
+GCSGWorker(Worker) che fa override di execute_model(), passata a LLMEngine via
+EngineArgs(worker_cls=GCSGWorker). Punto di aggancio: ModelRunner.execute_model()
+(gating scores post-router disponibili lì), non _run_workers() su LLMEngine.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
+import logging
 import time
+
+import pynvml
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -53,6 +79,17 @@ class GCSGGuard:
         theta_gate:          Soglia gating score (default 0.85).
         theta_entropy:       Soglia entropia token (default 0.70).
         theta_contamination: Soglia tasso contaminazione KV-Cache (default 0.05).
+        shadow_pool_size:    Numero di shadow expert INT4 richiesti (default 2,
+                              vedi memory math nel docstring del modulo).
+        per_expert_vram_gb:  VRAM stimata per expert INT4 (default 3.0 GB).
+        min_headroom_gb:     Margine oltre al budget expert per CUDA context e
+                              frammentazione (default 1.0 GB).
+        gpu_index:           Indice GPU da controllare (default 0, unica su dev).
+        check_vram:          Se True (default), verifica la VRAM disponibile via
+                              NVML e adatta shadow_pool_size di conseguenza —
+                              abbassato se serve, RuntimeError solo se non entra
+                              nemmeno 1 expert. Disattivare solo nei unit test
+                              che non toccano una GPU reale.
     """
 
     def __init__(
@@ -60,12 +97,67 @@ class GCSGGuard:
         theta_gate:          float = 0.85,
         theta_entropy:       float = 0.70,
         theta_contamination: float = 0.05,
+        shadow_pool_size:    int = 2,
+        per_expert_vram_gb:  float = 3.0,
+        min_headroom_gb:     float = 1.0,
+        gpu_index:           int = 0,
+        check_vram:          bool = True,
     ) -> None:
         self.theta_gate          = theta_gate
         self.theta_entropy       = theta_entropy
         self.theta_contamination = theta_contamination
+        self.shadow_pool_size    = shadow_pool_size
         self._contamination_counter: int = 0
         self._total_tokens:          int = 0
+
+        if check_vram:
+            self.shadow_pool_size = self._check_vram_budget(
+                shadow_pool_size, per_expert_vram_gb, min_headroom_gb, gpu_index,
+            )
+
+    @staticmethod
+    def _check_vram_budget(
+        requested_pool_size: int,
+        per_expert_vram_gb:  float,
+        min_headroom_gb:     float,
+        gpu_index:           int,
+    ) -> int:
+        """Adatta shadow_pool_size alla VRAM libera invece di un fail-fast binario.
+
+        Se il modello attivo ha già consumato molta VRAM (es. > ~18 GB su 24,
+        vedi memory math nel docstring del modulo), abbassa shadow_pool_size a
+        quanti expert entrano davvero — GCSG degradato ma operativo. Fallisce
+        fast (RuntimeError) solo se non entra nemmeno 1 expert: l'alternativa
+        sarebbe un OOM a runtime sotto carico, molto peggio da diagnosticare.
+
+        Returns:
+            shadow_pool_size effettivo (<= requested_pool_size).
+        """
+        try:
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
+            free_gb = pynvml.nvmlDeviceGetMemoryInfo(handle).free / (1024 ** 3)
+            pynvml.nvmlShutdown()
+        except pynvml.NVMLError:
+            return requested_pool_size  # nessuna GPU/driver NVML — non bloccare (es. CI)
+
+        usable_experts = int((free_gb - min_headroom_gb) // per_expert_vram_gb)
+
+        if usable_experts < 1:
+            raise RuntimeError(
+                f"GCSG: {free_gb:.1f} GB VRAM libera su GPU {gpu_index} — non "
+                f"basta nemmeno per 1 shadow expert INT4 (~{per_expert_vram_gb:.1f} GB "
+                f"+ {min_headroom_gb:.1f} GB headroom richiesti). GCSG non può avviarsi."
+            )
+
+        effective = min(requested_pool_size, usable_experts)
+        if effective < requested_pool_size:
+            log.warning(
+                "GCSG: shadow_pool_size abbassato da %d a %d — solo %.1f GB VRAM "
+                "libera su GPU %d (modello attivo ha consumato più del previsto).",
+                requested_pool_size, effective, free_gb, gpu_index,
+            )
+        return effective
 
     # ── core logic ─────────────────────────────────────────────────────────────
 

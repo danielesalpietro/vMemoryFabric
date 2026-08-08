@@ -52,6 +52,13 @@ class PTPEPClassifier:
     Args:
         model_path:    Path al file ONNX esportato (None = non caricato/stub).
         expert_map:    Dict dominio → lista expert_ids (da config OSX).
+                       NOTE: su Mixtral 8x7B il routing MoE non ha identità
+                       semantica fissa per expert — i gating score dipendono
+                       dall'input, non da un mapping dominio->expert hardcoded.
+                       expert_map è quindi una statistica di routing empirica
+                       (derivata da sample set), non ground truth. Dichiararlo
+                       esplicitamente in config con un commento tipo
+                       "# empirical routing statistics, not guaranteed".
         confidence_th: Soglia minima per considerare una predizione affidabile.
     """
 

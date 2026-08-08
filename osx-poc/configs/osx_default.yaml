@@ -43,11 +43,27 @@ scheduler:
     model_path: null          # null = stub mode (Sprint 3: path ONNX)
     confidence_threshold: 0.6
     domains: [coding, math, language, science, medical, legal, creative, general]
+    expert_map:  # empirical routing statistics, not ground truth — Mixtral MoE
+                 # gating is input-dependent, not a fixed domain->expert identity.
+                 # Placeholder until derived from real routing stats on a sample set.
+      coding:   [0, 3]
+      math:     [1, 4]
+      language: [2, 5]
+      science:  [1, 3]
+      medical:  [6, 7]
+      legal:    [6, 7]
+      creative: [2, 5]
+      general:  [0, 1, 2, 3, 4, 5, 6, 7]
   gcsg:
     theta_gate:          0.85
     theta_entropy:       0.70
     theta_contamination: 0.05
-    shadow_pool_size:    4    # top-4 expert INT4 (dev: 3090 24GB constraint)
+    # top-2 expert INT4, non top-4: a ~3 GB/expert (vedi memory math in
+    # src/scheduler/gcsg.py), 4 experti + modello attivo (~14-16 GB) supera i
+    # 24 GB della 3090 in ogni scenario realistico. Il preflight VRAM in
+    # GCSGGuard.__init__ abbassa comunque a runtime a 1 se il modello ha
+    # consumato più di ~18 GB all'avvio, o fallisce fast se non basta neanche 1.
+    shadow_pool_size:    2
   aer:
     enabled: false            # deferred — dual-GPU
 
