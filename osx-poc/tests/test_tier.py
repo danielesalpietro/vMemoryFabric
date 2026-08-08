@@ -258,6 +258,22 @@ class TestTierManagerGPU:
         assert manager._eat.lookup(2, 0).tier == Tier.DDR4
 
     @pytest.mark.asyncio
+    async def test_evict_frees_vram_visible_to_mem_get_info(self, manager, tmp_path):
+        """Regressione: evict() da VRAM deve liberare memoria visibile a
+        vram_free_bytes() (torch.cuda.mem_get_info), non solo alla EAT —
+        senza GPUTransfer.empty_cache() il caching allocator di PyTorch la
+        trattiene per riuso e vram_free_bytes() resta invariato, facendo
+        ciclare all'infinito evict_to_free_vram(). Trovato eseguendo i test
+        su hardware reale, mai riprodotto senza CUDA vera."""
+        manager._eat.insert(expert_id=4, shard_idx=0, tier=Tier.NVME)
+        _write_shard_file(tmp_path, 4, 0, payload=bytes(64 * 1024 * 1024))  # 64MB, misurabile
+        await manager.promote(expert_id=4, shard_idx=0, target_tier=Tier.VRAM)
+        free_with_shard = manager._gpu.vram_free_bytes()
+        await manager.evict(expert_id=4, shard_idx=0)
+        free_after_evict = manager._gpu.vram_free_bytes()
+        assert free_after_evict > free_with_shard
+
+    @pytest.mark.asyncio
     async def test_evict_to_free_vram_raises_when_tier_empty(self, manager):
         with pytest.raises(MemoryError):
             await manager.evict_to_free_vram(

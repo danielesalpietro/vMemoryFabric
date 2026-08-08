@@ -184,6 +184,11 @@ class TierManager:
                 buffer[: len(data)] = data
                 self._slots[key] = slot_idx
                 del self._vram[key]
+                # Vedi GPUTransfer.empty_cache(): senza questo, vram_free_bytes()
+                # non riflette la memoria appena liberata (il caching allocator
+                # di PyTorch la trattiene per riuso) e evict_to_free_vram()
+                # continuerebbe a ciclare oltre il necessario.
+                self._gpu.empty_cache()
                 self._eat.update_tier(expert_id, shard_idx, Tier.DDR4)
                 return
 

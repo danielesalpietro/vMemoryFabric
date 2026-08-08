@@ -86,3 +86,18 @@ class GPUTransfer:
     def create_stream(self) -> "torch.cuda.Stream":
         """Crea un nuovo CUDA stream per trasferimenti asincroni."""
         return torch.cuda.Stream(device=self._device)
+
+    def empty_cache(self) -> None:
+        """Rilascia al driver CUDA i blocchi liberati dal caching allocator
+        di PyTorch.
+
+        torch.cuda.mem_get_info() (usato da vram_free_bytes()) riporta la
+        memoria libera a livello driver, non quella già liberata da un
+        `del tensor` ma ancora trattenuta in cache dall'allocator di
+        PyTorch per riuso. Senza questa chiamata dopo un'eviction,
+        vram_free_bytes() resta invariato e un ciclo evict_to_free_vram()
+        che si affida a quel numero per decidere quando fermarsi continua
+        a evictare oltre il necessario — bug reale, trovato eseguendo i
+        test su hardware reale (mai riprodotto in nessun mock/CPU test).
+        """
+        torch.cuda.empty_cache()
