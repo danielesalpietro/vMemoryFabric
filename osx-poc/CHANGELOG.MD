@@ -18,6 +18,96 @@ Releases are named after cities where significant project milestones were reache
 
 
 
+\## \[Eketorp] — v0.3.0-dev — 2026-08-08
+
+
+
+\*Named after Eketorp, Öland, Sweden, where M2 — EMH Tier Manager was implemented.\*
+
+
+
+\### Added
+
+
+
+\*\*M2 — EMH Tier Manager (real implementation)\*\*
+
+
+
+\- `src/tier/policies.py` — `LRUPolicy.rank` (ordina per `last\_access\_ts` crescente) e `SEEPolicy.score`/`rank`: quando `context\_vec` è `None`, gamma viene ridistribuito su alpha/beta (LRU pesata, entrambi i termini normalizzati a (0, 1] per restare comparabili a prescindere dalla scala assoluta di access\_count/age); quando `context\_vec` è fornito, σ resta uno stub a 0.0 senza ridistribuire i pesi — comportamento deliberatamente diverso dal caso `None`, non un fallback silenzioso
+
+\- `src/tier/io.py` — `AsyncNVMeIO.read\_shard`/`write\_shard`/`exists`/`delete` via `aiofiles`/`aiofiles.os`. dtype esplicito `uint8` in `read\_shard` (non il default implicito di `np.frombuffer`), coerente col dtype del pool di `SlabAllocator`
+
+\- `src/tier/gpu.py` — `GPUTransfer.to\_vram`/`to\_ddr4`/`vram\_free\_bytes`/`vram\_total\_bytes`/`create\_stream` via `torch.cuda`. Nessuna pipeline multi-stream in M2 — deferred, come già indicato nel docstring del modulo
+
+\- `src/tier/manager.py` — `TierManager` completo: `promote` (NVME→DDR4, DDR4→VRAM, e NVME→VRAM incatenando i due hop sotto lo stesso lock), `evict` (single-hop soltanto — asimmetria intenzionale rispetto a `promote`, documentata esplicitamente nel docstring), `evict\_to\_free\_vram` (ranking SEE/LRU), `prefetch` (`asyncio.gather` con `return\_exceptions=True`: un fallimento su un singolo shard viene loggato, non propagato, così non abortisce il batch), `stats`
+
+\- `src/eat/eat.py` — `ExpertAccessTable.slab` (nuova property read-only): espone la `SlabAllocator` privata la cui lifecycle è già guidata da `initialize()`/`shutdown()`. Unico touch a un file M1 in questo sprint — un accessor puro, nessun cambio a locking, layout o `EATEntry`
+
+
+
+\*\*Benchmarks\*\*
+
+
+
+\- `benchmarks/bench\_tier.py` — P50/P95/P99 reali per NVMe→DDR4 e DDR4→VRAM (quest'ultimo con guardia esplicita su `torch.cuda.is\_available()`: riporta `status: skipped` invece di inventare numeri da un path che non ha toccato GPU reale), JSON output — rimpiazza il placeholder `"status": "pending"`
+
+
+
+\### Design decisions
+
+
+
+\- \*\*Concorrenza: lock per-key, non un redesign dell'RLock di EAT.\*\* Il finding di Möllstorp sulla tail latency dell'RLock sotto contention resta un limite noto e non risolto qui — la regola di Sprint 2 è invece un vincolo di design: EAT viene toccata solo per operazioni sincrone rapide (`lookup`, `update\_tier`), mai mentre un transfer NVMe/GPU è in corso. Questo da solo non bastava: due `promote()` concorrenti sulla stessa key vedrebbero entrambi lo stesso tier di partenza prima dell'`await` sull'I/O, allocando due slot slab per un solo shard logico — un leak reale sotto asyncio, non un edge case teorico, individuato in fase di planning prima di scrivere il codice. Risolto con un `dict[key, asyncio.Lock]` per-key in `TierManager`, creato lazy, che serializza l'intera transizione di tier per una data key. Un test di regressione dedicato (`test\_concurrent\_double\_promote\_no\_slab\_leak`) verifica che due `promote()` concorrenti sulla stessa key producano un solo slot slab allocato
+
+\- \*\*Bloom filter: lasciato invariato.\*\* Il finding di Möllstorp (Bloom filter ~5-14x più lento di un dict semplice) resta parcheggiato — nessuna modifica a `src/eat/bloom.py` o al fast-path di `EAT.lookup()` in questo sprint
+
+\- \*\*Slot ownership: bookkeeping nel TierManager, non in EATEntry.\*\* Nessun campo `slot\_idx` aggiunto a `EATEntry` — `TierManager` traccia da sé quale slot slab (`self.\_slots`) e quale tensor VRAM (`self.\_vram`) appartengono a quale shard, rispettando il layout a 28 byte documentato in M1
+
+\- \*\*DDR4 come staging-only.\*\* Una volta promosso a VRAM, lo slot DDR4 viene liberato immediatamente — nessuna doppia copia residente, bookkeeping più semplice
+
+
+
+\### Tests
+
+
+
+\- `tests/test\_tier.py` — ogni stub (`pytest.raises(NotImplementedError)` / `pytest.skip("TODO Sprint 2")`) rimpiazzato con asserzioni reali, stesso pattern di riscrittura di `test\_eat.py` in M1. Split CPU/GPU che rispecchia i job CI `cpu-tests`/`full-gpu-tests`: I/O NVMe, policy LRU/SEE, promozione NVME→DDR4, `evict()` single-hop-only, prefetch, e il test di regressione sul double-promote girano ovunque torch sia importabile; tutto ciò che tocca CUDA reale (`GPUTransfer`, DDR4→VRAM, NVME→VRAM incatenato, `evict\_to\_free\_vram`, l'integration test lato VRAM) resta `@pytest.mark.gpu`
+
+\- 18/18 test non-GPU passati (verificati via lo stesso container leggero `python:3.12-slim` usato in Möllstorp, dependency set identico a `cpu-tests`) — insieme a `test\_eat.py` e `test\_scheduler.py`: 50 passed, 12 skipped (GPU-only), 9 deselected
+
+\- I test `@pytest.mark.gpu` e la sezione DDR4→VRAM di `bench\_tier.py` NON sono stati verificati in questa sessione — nessun ambiente GPU/CUDA locale disponibile qui, stesso vincolo incontrato in Möllstorp. Restano da eseguire per davvero via `workflow\_dispatch` sul runner self-hosted `Z8-G4-RTX3090`, non ancora lanciato per M2
+
+
+
+\### CI/CD
+
+
+
+\- `.github/workflows/ci.yml` — `full-gpu-tests` esegue ora anche `benchmarks/bench\_tier.py` dopo la test suite, caricando il risultato come artifact `bench-tier-result` — stesso schema del passo `bench-eat-result` di M1. Non ancora verificato con un run reale in questa sessione (nessun `workflow\_dispatch` lanciato)
+
+
+
+\### Status
+
+
+
+\*\*Parzialmente verificato.\*\* M2 (Tier Manager) è implementato: `promote`/`evict`/`evict\_to\_free\_vram`/`prefetch`/`stats`, `AsyncNVMeIO`, `GPUTransfer`, `LRUPolicy`/`SEEPolicy`. Verificato per davvero solo il percorso CPU-runnable: 18/18 test di `test\_tier.py` passati (50/62 nell'intera suite, gli altri 12 skip GPU-only) via il container leggero `python:3.12-slim` — non `make test-tier` con l'immagine Docker CUDA completa, non disponibile in questo ambiente, stesso limite incontrato in Möllstorp. I path che toccano CUDA reale (`GPUTransfer`, DDR4→VRAM, NVME→VRAM incatenato, `evict\_to\_free\_vram`, l'integration test VRAM, la sezione `ddr4\_to\_vram` del benchmark) sono scritti e marcati `@pytest.mark.gpu` ma non ancora eseguiti su hardware reale — richiede un `workflow\_dispatch` sul runner `Z8-G4-RTX3090`, non lanciato in questa sessione. Segnalato onestamente come lavoro rimanente, non presentato come "M2 fatto" senza qualifica
+
+
+
+\---
+
+
+
+\*Next release: Sprint 2 continua — verifica GPU reale di M2 su `Z8-G4-RTX3090`, poi Sprint 3 — M3 (Expert Scheduler).\*
+
+
+
+\---
+
+
+
 \## \[Möllstorp] — v0.2.0-dev — 2026-08-08
 
 

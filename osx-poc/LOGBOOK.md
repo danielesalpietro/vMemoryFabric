@@ -5,6 +5,156 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-08 — Eketorp: M2 (Tier Manager) implemented, CPU-runnable subset green
+
+**Release:** [Eketorp] v0.3.0-dev — closed out today (partially — see Status below).
+
+### What we set out to do
+
+Pick up where Möllstorp's LOGBOOK left off: implement M2 — `AsyncNVMeIO`,
+`GPUTransfer`, `LRUPolicy`/`SEEPolicy`, and `TierManager` — turning
+`src/tier/*` from Sprint-0 `NotImplementedError` skeletons into working
+NVMe→DDR4→VRAM promotion/eviction, and decide what to actually do about
+the two open findings Möllstorp flagged as "Sprint 2 candidates": the
+Bloom filter's net-negative cost, and the RLock's tail-latency behavior
+under contention.
+
+### Planning first, before any code
+
+Given how much M1 left genuinely open, this session started with a
+planning pass rather than diving straight into the skeletons. Three
+scoping questions got settled explicitly before writing anything:
+
+1. **Bloom filter** — leave it alone. Nothing in M2 depends on its
+   behavior, and revisiting it now would reopen "closed" M1 files for a
+   finding that's better addressed once there are end-to-end numbers
+   (Sprint 4, per Möllstorp's own CHANGELOG note).
+2. **EAT's RLock** — also leave it alone, but with a concrete rule
+   instead of ignoring the finding: `TierManager` only touches EAT for
+   fast synchronous ops (`lookup`, `update_tier`), never while an NVMe
+   read or GPU transfer is in flight. No new contention on top of what
+   M1 already measured, no RLock redesign needed for M2 to function.
+3. **Slot ownership** — `TierManager` keeps its own
+   `{key: slot_idx}`/`{key: tensor}` bookkeeping rather than adding a
+   `slot_idx` field to `EATEntry`. Keeps M1's documented 28-byte layout
+   untouched, per the LOGBOOK's own note that M2 is "the natural place
+   to decide how slot ownership should actually be tracked" — decided
+   here as *don't put it in EATEntry*, not *don't decide at all*.
+
+One thing that *did* require touching an M1 file, flagged explicitly
+rather than folded in quietly: `ExpertAccessTable` needed a read-only
+`slab` property. `EAT.initialize()`/`shutdown()` already drive the
+`SlabAllocator`'s lifecycle — `TierManager` needs to alloc/free DDR4
+slots on that *same* instance, not spin up a second, disconnected
+allocator. Pure accessor, no change to locking or `EATEntry`.
+
+### The bug planning actually caught
+
+Draft one of the concurrency model said "TierManager never holds the
+EAT lock across an `await`, and asyncio's cooperative scheduling
+handles the rest." That's true for the *slab mutation itself* (no
+`await` in the middle of `alloc`/`free`), but it missed a real race:
+two concurrent `promote()` calls for the same `(expert_id, shard_idx)`
+— the normal shape of a prefetch batch with overlapping shards — both
+see the shard at NVME before either one's `await io.read_shard()`
+returns, both allocate their own slab slot, both call
+`eat.update_tier(DDR4)`. One slot ends up leaked. This is a real bug
+under asyncio's single-threaded event loop, no OS threads required —
+caught during the plan-review pass, not after writing the code.
+
+Fix: `TierManager` keeps a lazily-created `dict[(expert_id, shard_idx), asyncio.Lock]`
+and acquires the key's lock for the *entire* transition — from the
+initial `eat.lookup()` through the final `eat.update_tier()`/slab
+free — not just around the slow I/O. A regression test
+(`test_concurrent_double_promote_no_slab_leak`) runs two `promote()`
+calls concurrently via `asyncio.gather(..., return_exceptions=True)`
+and asserts exactly one slab slot ends up allocated — the second call
+legitimately raises `ValueError` (same-tier, since the lock serializes
+it behind the first) rather than silently losing a slot.
+
+Two smaller review points, both folded into the implementation:
+`AsyncNVMeIO.read_shard` needed an *explicit* `dtype=np.uint8` in
+`np.frombuffer` (not the implicit default) — deliberately matching
+`SlabAllocator`'s pool dtype, since shards are opaque byte payloads
+through this whole pipeline. And `evict()` needed its single-hop-only
+behavior stated explicitly in the docstring and covered by a test,
+specifically *because* `promote()` does chain NVME→VRAM in one call —
+the asymmetry needs to be obvious to a reader, not inferred.
+
+### Implementation
+
+Once the design was settled, filling in `policies.py` → `io.py` →
+`gpu.py` → `manager.py` against the docstrings/type hints left by the
+Sprint 0 skeleton was straightforward — same experience as M1.
+`SEEPolicy.score` normalizes access-count and recency to `(0, 1]`
+before weighting them (no natural common scale between a counter and a
+duration in seconds); σ stays a `0.0` stub in both branches, but
+*doesn't* redistribute weight when a caller passes `context_vec` — a
+deliberate difference from the `None` branch, so it doesn't silently
+imply PT-PEP integration that doesn't exist until M3.
+
+### Tests
+
+Rewrote every test in `tests/test_tier.py`, same pattern as M1's
+`test_eat.py`: every `pytest.raises(NotImplementedError)` /
+`pytest.skip(...)` replaced with a real assertion. Split by what
+actually needs CUDA, mirroring the existing `cpu-tests`/`full-gpu-tests`
+CI job split — `TestTierManagerGPU`, the GPU half of `TestGPUTransfer`,
+and the VRAM-side integration test are all `@pytest.mark.gpu`.
+
+### Verification — CPU-runnable subset only, said plainly
+
+No local GPU/CUDA image in this environment, same wall M1 hit. Verified
+the non-GPU path the same way M1 did: a throwaway `python:3.12-slim`
+container with the CI `cpu-tests` dependency set.
+
+```
+docker run --rm -v "$(pwd)/osx-poc:/work" -w /work python:3.12-slim bash -c \
+  "pip install -q torch==2.3.0 --index-url https://download.pytorch.org/whl/cpu && \
+   pip install -q pytest==8.2.1 pytest-asyncio==0.23.7 numpy==1.26.4 aiofiles==23.2.1 pybloom-live==4.0.0 && \
+   PYTHONPATH=src pytest tests/ -m 'not gpu' -v"
+```
+
+**50 passed, 12 skipped (GPU-only), 9 GPU-marked deselected** — first
+try, across `test_eat.py`, `test_scheduler.py`, and the rewritten
+`test_tier.py` (18/18 on its own). `ran ruff` out of curiosity on the
+touched files; it flagged pre-existing typing-style debt
+(`Dict`/`List`/`Optional` vs. `dict`/`list`/`X | None`) that predates
+this session across the whole codebase — no `pyproject.toml`/`ruff.toml`
+exists, so `ruff check` runs on bare defaults against files this
+session didn't touch too. Left alone as out of scope for M2.
+
+**Not verified this session, and saying so plainly**: every
+`@pytest.mark.gpu` test, the `ddr4_to_vram` section of the new
+`benchmarks/bench_tier.py`, and the `full-gpu-tests` CI step added for
+it. All of that needs a real `workflow_dispatch` run against the
+self-hosted `Z8-G4-RTX3090` runner, same as M1's benchmark — not
+triggered in this session. `make test-tier` (the full CUDA Docker
+image) also wasn't run for the same reason; the lightweight container
+above approximates the CPU-only subset of it, not the target itself.
+
+### End of day state
+
+- `src/tier/{policies,io,gpu,manager}.py` — fully implemented
+- `src/eat/eat.py` — one new `slab` read-only property, otherwise
+  untouched
+- `tests/test_tier.py` — rewritten; 18/18 CPU-runnable tests pass, GPU
+  half written but unexecuted
+- `benchmarks/bench_tier.py` — real NVMe→DDR4 numbers obtainable
+  anywhere; DDR4→VRAM section implemented but unexecuted (needs CUDA)
+- `.github/workflows/ci.yml` — `bench_tier.py` step added to
+  `full-gpu-tests`, unexecuted this session
+- CHANGELOG/LOGBOOK updated, explicitly marked "partially verified"
+  rather than claiming GPU coverage that wasn't run
+
+Next session: trigger `workflow_dispatch` on `Z8-G4-RTX3090` to actually
+run the `@pytest.mark.gpu` tests and the full `bench_tier.py` (including
+`ddr4_to_vram`) on target hardware — the same close-the-loop step M1
+took in its second Möllstorp session — before calling M2 done. After
+that: Sprint 3 — M3 (Expert Scheduler).
+
+---
+
 ## 2026-08-08 — Möllstorp, continued: technical report, real-hardware benchmarking, honest negative results
 
 **Release:** [Möllstorp] v0.2.0-dev — same release as below, later the same day.
