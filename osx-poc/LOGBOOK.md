@@ -5,6 +5,156 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-09 — Oskarshamn, continued: GCSGWorker end-to-end smoke test, GREEN
+
+**Release:** [Oskarshamn] v0.4.0-dev — in progress. GCSGWorker's wiring
+mechanics (hook registration, request_id extraction, per-request
+contamination bookkeeping) are now verified against a real running vLLM
+engine, not just read against source. Quality/performance/real shadow-pool
+behavior on actual Mixtral-8x7B remain the one open item for Sprint 3.
+
+### Before downloading 25 GB: did the math first
+
+Asked to run GCSGWorker against a real Mixtral-8x7B AWQ checkpoint (~24.66 GB
+on disk). Checked the real numbers before downloading anything: 3090 VRAM is
+24 GiB exactly (24576 MiB); the checkpoint is 22.96 GiB. That leaves ~1 GiB
+for CUDA context + activations + KV-cache — and vLLM's default
+`gpu_memory_utilization=0.9` caps total usage at 21.6 GiB, *less than the
+weights alone*. Loading would very likely fail outright, not just run with a
+cramped shadow pool. Also cleared up a real misconception along the way:
+`docker-compose.yml`'s `shm_size: 8gb` is Linux `/dev/shm` (multiprocessing/
+NCCL IPC), not a way to extend GPU VRAM — unrelated to whether a model fits.
+
+Switched to `hf-internal-testing/Mixtral-tiny` instead: 494 MB, real
+`MixtralForCausalLM`/`MixtralMoE` classes (`num_local_experts=8`,
+`num_experts_per_tok=2` — same routing shape as the real model), just
+`num_hidden_layers=2` instead of 32 and much smaller `hidden_size`. This
+validates wiring *mechanics* — hooks fire, request_ids are readable,
+contamination bookkeeping works — not quality or real VRAM behavior. That
+distinction is recorded explicitly (module docstring, smoke test script,
+here) specifically because a reviewer would rightly discount a "full model"
+result that was actually run with `cpu_offload_gb` masking non-representative
+latency. An honest tiny-model mechanics result plus "pending on the real
+model" is more defensible than a full-model number that isn't really one.
+
+### Six real bugs, found by actually running it
+
+Getting from "GCSGWorker imports cleanly" to "SMOKE TEST: GREEN" took six
+separate failures, each a genuine finding, not noise:
+
+1. **`_load_shadow_pool()`'s `NotImplementedError` blocked the entire
+   worker.** It's called from `load_model()`, unconditionally, before hook
+   registration — so the worker couldn't even start, let alone let anyone
+   check whether the hooks work. Reordered `load_model()` to register hooks
+   first, and catch-and-log the shadow-pool `NotImplementedError` instead of
+   letting it propagate. Shadow pool loading is still explicitly TODO; it
+   just no longer takes hook verification down with it.
+
+2. **The tiny model ships no tokenizer files at all**, and vLLM's
+   auto-resolution for `model_type: mixtral` fell back to
+   `MistralCommonTokenizer`, which rejected kwargs this transformers/vLLM
+   pairing passes. Fixed by pointing `tokenizer=` at a real, matching-vocab
+   (32000) standalone tokenizer repo (`hf-internal-testing/llama-tokenizer`)
+   — irrelevant to what the smoke test actually checks.
+
+3. **`worker_cls` doesn't accept a class object in this vLLM version.**
+   `AttributeError: type object 'GCSGWorker' has no attribute 'rsplit'` —
+   `vllm.worker.worker_base.init_worker()` does
+   `resolve_obj_by_qualname(qualname).rsplit(".", 1)`, i.e. it expects a
+   `"module.ClassName"` string it resolves itself. Every earlier docstring
+   claim of `EngineArgs(worker_cls=GCSGWorker)` was wrong on this specific
+   point (right about the mechanism, wrong about the calling convention) —
+   fixed to `worker_cls="scheduler.gcsg.GCSGWorker"` everywhere it's
+   documented, not just in the script that hit the crash.
+
+4. **FlashAttention (vLLM's default backend) crashed** with `cu_seqlens_q
+   must have dtype int32` on the tiny model's unusual shapes. Worked around
+   with `VLLM_ATTENTION_BACKEND=XFORMERS`, set inside the smoke test script
+   itself (`os.environ.setdefault`, before the `vllm` import) so running it
+   doesn't depend on remembering an external env var. Tiny-model-specific —
+   not expected to matter for the real checkpoint.
+
+5. **`get_cache_block_size()` crashed with `'int' * 'NoneType'`.** Traced to
+   `get_head_size()`: `transformers==4.57.6`'s `MixtralConfig` exposes
+   `head_dim` as an attribute that *exists* but is `None` when `config.json`
+   doesn't set it explicitly — and vLLM 0.6.6.post1's `get_head_size()` does
+   a bare `hasattr(config, "head_dim")` check, which is `True` even when the
+   value is `None`, so it returns `None` instead of falling through to
+   `hidden_size // num_attention_heads`. Checked whether this was
+   tiny-model-specific before treating it as a one-off: it isn't — real
+   Mixtral-8x7B's `config.json` also doesn't set `head_dim`. This is a real
+   gap in the `vllm==0.6.6.post1` / `transformers==4.57.6` pin combination
+   from the earlier vLLM-gate session, not a tiny-model quirk — worth
+   remembering when the real checkpoint finally gets loaded. Worked around
+   with vLLM's documented `hf_overrides={"head_dim": 32}` (1024 // 32, this
+   model's actual head size) rather than editing the HF cache directly.
+
+6. **The real architectural bug, in `GCSGWorker` itself.** Points 3 and 4 of
+   the smoke test failed with `seen_request_ids` empty even after the model
+   loaded and generated cleanly. Root cause: `GCSGWorker.execute_model()`
+   overrides `WorkerBase.execute_model(execute_model_req: ExecuteModelRequest)`
+   — *not* `ModelRunner.execute_model(model_input, kv_caches, ...)`, which is
+   what the module docstring's original verification (from the GCSG-writing
+   session) actually inspected. Same method name, different class, different
+   parameter — conflated the two while writing `GCSGWorker`.
+   `request_ids_to_seq_ids` doesn't exist on `ExecuteModelRequest` at all
+   (confirmed via `dir()`); real request_ids come from
+   `execute_model_req.seq_group_metadata_list[i].request_id`. Confirmed this
+   by adding a temporary debug log inside `execute_model()`, running the
+   smoke test, and reading what was actually in the object — not by
+   reasoning from the source in the abstract a second time. Fixed the
+   extraction logic and every docstring that repeated the wrong claim, not
+   just the code path that crashed.
+
+### Verified, not just claimed: SMOKE TEST: GREEN
+
+```
+[1/4 OK] load_model() completed — GCSGWorker attached without crash
+[2/4 OK] .gate hooks fired 18 times, all router_logits shapes end in
+         8 experts (last dim) — sample shape (2048, 8)
+[3/4 OK] real request_ids ('0', '1') read from
+         ExecuteModelRequest.seq_group_metadata_list
+[4/4 OK] per-request contamination: both requests independently tracked at
+         0.125 — first token of each passes (contamination starts at 0),
+         every subsequent token for that request correctly blocked once its
+         own contamination_rate crosses theta_contamination
+```
+
+`scripts/smoke_test_gcsg_worker.py` is self-contained and reproducible —
+`PYTHONPATH=src python scripts/smoke_test_gcsg_worker.py`, no manual env
+vars needed, confirmed by rerunning it clean after all six fixes landed.
+
+### End of day state
+
+- `src/scheduler/gcsg.py`: `load_model()` reordered (hooks before shadow
+  pool, shadow-pool `NotImplementedError` caught and logged instead of
+  fatal), `execute_model()` fixed to read `ExecuteModelRequest.
+  seq_group_metadata_list` instead of a nonexistent `request_ids_to_seq_ids`,
+  smoke-test observability added (`captured_router_logits`,
+  `seen_request_ids`), every docstring claim that turned out wrong
+  corrected in place rather than left stale
+- `scripts/smoke_test_gcsg_worker.py`: new, real, reproducible, green
+- Full unit suite re-verified after all `gcsg.py` changes: 79 passed, 3
+  skipped, no regressions
+- Confirmed (not assumed): the `transformers==4.57.6`/`vllm==0.6.6.post1`
+  `head_dim` gap affects real Mixtral-8x7B too, not just the tiny test model
+  — flagged for whoever loads the real checkpoint next, so it isn't
+  rediscovered from scratch
+- Real Mixtral-8x7B AWQ (~23 GiB) not downloaded this session — the VRAM math
+  suggests it needs `cpu_offload_gb` or a smaller quantization to load at all
+  on the 3090, a decision deliberately deferred rather than made under a
+  25 GB download already in flight
+
+Next session: `_load_shadow_pool()` and the router-logits-to-`GatingContext`
+wiring are the two remaining `NotImplementedError`s in the scheduler
+package — both need the real Mixtral-8x7B checkpoint loaded (with the
+`head_dim` override and probably `cpu_offload_gb`, given the VRAM math
+above) to implement and test for real. That session is also where GCSG's
+actual behavior (activation rate, contamination, MMLU quality degradation)
+gets measured for the first time, instead of only unit- and mechanics-tested.
+
+---
+
 ## 2026-08-08 — Oskarshamn, continued: AER trigger logic, GCSG verified against real vLLM source
 
 **Release:** [Oskarshamn] v0.4.0-dev — in progress. All three Sprint 3 nodes
