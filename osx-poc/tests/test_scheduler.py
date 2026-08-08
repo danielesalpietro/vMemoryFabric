@@ -3,6 +3,7 @@
 Coverage target: > 90%.
 """
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -186,6 +187,35 @@ class TestAER:
         aer = AERManager(device_ids=[0])
         stats = aer.stats()
         assert stats["replication_enabled"] is False
+
+    def test_trigger_conditions_exposed(self):
+        aer = AERManager(device_ids=[0], load_threshold_qps=30.0)
+        assert aer.trigger_conditions == {"load_threshold_qps": 30.0}
+
+    def test_evaluate_load_below_threshold_no_trigger(self):
+        aer = AERManager(device_ids=[0], load_threshold_qps=50.0)
+        assert aer.evaluate_load(expert_id=2, requests_per_second=10.0) is False
+        assert aer.stats()["would_replicate_count"] == 0
+
+    def test_evaluate_load_above_threshold_triggers_and_logs(self, caplog):
+        aer = AERManager(device_ids=[0], load_threshold_qps=50.0)
+        with caplog.at_level(logging.INFO):
+            triggered = aer.evaluate_load(expert_id=3, requests_per_second=75.0)
+        assert triggered is True
+        assert "WOULD_REPLICATE" in caplog.text
+        assert "expert_id=3" in caplog.text
+        # il trigger logic segnala la condizione, ma niente hardware la esegue:
+        # replication_factor resta 1 anche subito dopo un WOULD_REPLICATE
+        assert aer.replication_factor(expert_id=3) == 1
+
+    def test_stats_tracks_would_replicate_experts(self):
+        aer = AERManager(device_ids=[0], load_threshold_qps=50.0)
+        aer.evaluate_load(expert_id=1, requests_per_second=80.0)
+        aer.evaluate_load(expert_id=2, requests_per_second=10.0)   # sotto soglia
+        aer.evaluate_load(expert_id=1, requests_per_second=90.0)   # stesso expert di nuovo
+        stats = aer.stats()
+        assert stats["would_replicate_count"] == 2
+        assert stats["would_replicate_experts"] == [1]
 
 
 # ── Integration: PT-PEP → Tier Manager prefetch ───────────────────────────────

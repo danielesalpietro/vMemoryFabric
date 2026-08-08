@@ -68,7 +68,11 @@ scheduler:
     # consumato più di ~18 GB all'avvio, o fallisce fast se non basta neanche 1.
     shadow_pool_size:    2
   aer:
-    enabled: false            # deferred — dual-GPU
+    enabled: false            # deferred — dual-GPU, no replica fisica possibile
+    # Trigger logic attivo comunque in dev: sopra questa soglia, AER logga
+    # WOULD_REPLICATE (vedi src/scheduler/aer.py) senza replicare per davvero
+    # — usato per soak test/ablation prima che arrivi la RTX 5080.
+    load_threshold_qps: 50.0
 
 # ── Observability ─────────────────────────────────────────────────────────────
 metrics:
