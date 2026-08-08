@@ -1,61 +1,213 @@
-"""Benchmark M1 — EAT latenza e throughput.
+"""Benchmark M1 — EAT: latenza/throughput, baseline, contention, scalabilita slab.
 
 Usage:
     python benchmarks/bench_eat.py
     make bench-eat          (via Makefile)
 
-Output: JSON con P50/P95/P99 latenza lookup e throughput insert.
+Sezioni:
+    eat_with_bloom       — EAT (Bloom filter + dict), lookup hit/miss separati
+    baseline_plain_dict  — stesso workload, dict+RLock senza Bloom filter,
+                            per isolare il contributo reale del fast-negative
+                            path (senza baseline, §5 dimostra feasibility ma
+                            non benefit)
+    bloom_vs_baseline_delta_us — differenza p50 (EAT − baseline), hit e miss
+    contention           — 4 reader concorrenti + 1 writer, per misurare il
+                            costo dell'RLock sotto traffico misto stile M2/M3
+    slab_scale           — alloc/free timing a 4 vs 32 slot (1 GB vs 8 GB),
+                            per verificare empiricamente l'O(1) del free-list
+
+Output: JSON con tutte le sezioni.
 """
 import json
 import random
+import threading
 import time
 
 from eat import ExpertAccessTable, Tier
+from eat.slab import SlabAllocator
+from eat.types import SHARD_SIZE_BYTES
 
 N_ENTRIES = 10_000
 N_LOOKUPS = 50_000
 HIT_RATIO = 0.8  # frazione di lookup su chiavi presenti
 
 
-def bench_insert(eat: ExpertAccessTable) -> float:
-    """Ritorna throughput insert (ops/sec)."""
-    start = time.perf_counter()
-    for shard_idx in range(N_ENTRIES):
-        eat.insert(expert_id=0, shard_idx=shard_idx, tier=Tier.NVME)
-    elapsed = time.perf_counter() - start
-    return N_ENTRIES / elapsed
-
-
-def bench_lookup(eat: ExpertAccessTable) -> dict:
-    """Ritorna P50/P95/P99 latenza lookup (µs), mix hit/miss."""
-    rng = random.Random(0)
-    n_hits = int(N_LOOKUPS * HIT_RATIO)
-    keys = (
-        [(0, rng.randrange(N_ENTRIES)) for _ in range(n_hits)]
-        + [(0, rng.randrange(N_ENTRIES, N_ENTRIES * 2)) for _ in range(N_LOOKUPS - n_hits)]
-    )
-    rng.shuffle(keys)
-
-    latencies_us = []
-    for expert_id, shard_idx in keys:
-        start = time.perf_counter()
-        eat.lookup(expert_id=expert_id, shard_idx=shard_idx)
-        latencies_us.append((time.perf_counter() - start) * 1e6)
-
-    latencies_us.sort()
+def _percentiles(latencies_us: list) -> dict:
+    latencies_us = sorted(latencies_us)
     n = len(latencies_us)
+    if n == 0:
+        return {"p50_us": None, "p95_us": None, "p99_us": None}
     return {
         "p50_us": latencies_us[int(n * 0.50)],
-        "p95_us": latencies_us[int(n * 0.95)],
-        "p99_us": latencies_us[int(n * 0.99)],
+        "p95_us": latencies_us[min(int(n * 0.95), n - 1)],
+        "p99_us": latencies_us[min(int(n * 0.99), n - 1)],
     }
 
 
-def main() -> None:
+def _gen_workload(seed: int = 0) -> list:
+    """(expert_id, shard_idx, is_hit) — stesso seed per EAT e baseline, confronto equo."""
+    rng = random.Random(seed)
+    n_hits = int(N_LOOKUPS * HIT_RATIO)
+    keys = (
+        [(0, rng.randrange(N_ENTRIES), True) for _ in range(n_hits)]
+        + [(0, rng.randrange(N_ENTRIES, N_ENTRIES * 2), False) for _ in range(N_LOOKUPS - n_hits)]
+    )
+    rng.shuffle(keys)
+    return keys
+
+
+# ── EAT (con Bloom filter) ──────────────────────────────────────────────────
+
+def bench_eat() -> dict:
     eat = ExpertAccessTable(capacity=N_ENTRIES * 2, n_slots=4)
 
-    insert_throughput = bench_insert(eat)
-    lookup_latencies = bench_lookup(eat)
+    start = time.perf_counter()
+    for shard_idx in range(N_ENTRIES):
+        eat.insert(expert_id=0, shard_idx=shard_idx, tier=Tier.NVME)
+    insert_throughput = N_ENTRIES / (time.perf_counter() - start)
+
+    hit_latencies, miss_latencies = [], []
+    for expert_id, shard_idx, is_hit in _gen_workload(seed=0):
+        t0 = time.perf_counter()
+        eat.lookup(expert_id=expert_id, shard_idx=shard_idx)
+        dt_us = (time.perf_counter() - t0) * 1e6
+        (hit_latencies if is_hit else miss_latencies).append(dt_us)
+
+    return {
+        "insert_throughput_ops_sec": insert_throughput,
+        "lookup_latency_hit": _percentiles(hit_latencies),
+        "lookup_latency_miss": _percentiles(miss_latencies),
+        "lookup_latency_overall": _percentiles(hit_latencies + miss_latencies),
+    }
+
+
+# ── Baseline: dict + RLock, senza Bloom filter ──────────────────────────────
+
+class _PlainDictBaseline:
+    """Baseline di misura per il benchmark — stessa semantica insert/lookup
+    dell'EAT (dict + RLock) ma senza Bloom filter. Non fa parte dell'API
+    pubblica dell'EAT: serve solo a isolare, per differenza, il contributo
+    reale del fast-negative path Bloom rispetto a un dict.get() sotto lock.
+    """
+
+    def __init__(self) -> None:
+        self._table: dict = {}
+        self._lock = threading.RLock()
+
+    def insert(self, expert_id: int, shard_idx: int) -> None:
+        with self._lock:
+            self._table[(expert_id, shard_idx)] = True
+
+    def lookup(self, expert_id: int, shard_idx: int):
+        with self._lock:
+            return self._table.get((expert_id, shard_idx))
+
+
+def bench_baseline() -> dict:
+    baseline = _PlainDictBaseline()
+
+    start = time.perf_counter()
+    for shard_idx in range(N_ENTRIES):
+        baseline.insert(expert_id=0, shard_idx=shard_idx)
+    insert_throughput = N_ENTRIES / (time.perf_counter() - start)
+
+    hit_latencies, miss_latencies = [], []
+    for expert_id, shard_idx, is_hit in _gen_workload(seed=0):
+        t0 = time.perf_counter()
+        baseline.lookup(expert_id=expert_id, shard_idx=shard_idx)
+        dt_us = (time.perf_counter() - t0) * 1e6
+        (hit_latencies if is_hit else miss_latencies).append(dt_us)
+
+    return {
+        "insert_throughput_ops_sec": insert_throughput,
+        "lookup_latency_hit": _percentiles(hit_latencies),
+        "lookup_latency_miss": _percentiles(miss_latencies),
+        "lookup_latency_overall": _percentiles(hit_latencies + miss_latencies),
+    }
+
+
+# ── Contention: 4 reader concorrenti + 1 writer ─────────────────────────────
+
+def bench_contention(n_readers: int = 4, n_prefill: int = 5_000, n_writes: int = 20_000) -> dict:
+    eat = ExpertAccessTable(capacity=(n_prefill + n_writes) * 2, n_slots=4)
+    for shard_idx in range(n_prefill):
+        eat.insert(expert_id=0, shard_idx=shard_idx, tier=Tier.NVME)
+
+    stop = threading.Event()
+    reader_latencies = [[] for _ in range(n_readers)]
+
+    def writer() -> None:
+        for shard_idx in range(n_prefill, n_prefill + n_writes):
+            eat.insert(expert_id=0, shard_idx=shard_idx, tier=Tier.NVME)
+        stop.set()
+
+    def reader(idx: int) -> None:
+        rng = random.Random(1000 + idx)
+        latencies = reader_latencies[idx]
+        while not stop.is_set():
+            shard_idx = rng.randrange(n_prefill)
+            t0 = time.perf_counter()
+            eat.lookup(expert_id=0, shard_idx=shard_idx)
+            latencies.append((time.perf_counter() - t0) * 1e6)
+
+    threads = [threading.Thread(target=writer)] + [
+        threading.Thread(target=reader, args=(i,)) for i in range(n_readers)
+    ]
+    writer_start = time.perf_counter()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    writer_elapsed = time.perf_counter() - writer_start
+
+    all_reader_latencies = [lat for bucket in reader_latencies for lat in bucket]
+    return {
+        "n_readers": n_readers,
+        "n_writes": n_writes,
+        "writer_throughput_ops_sec_under_contention": n_writes / writer_elapsed,
+        "reader_lookups_completed": len(all_reader_latencies),
+        "reader_lookup_latency_under_contention": _percentiles(all_reader_latencies),
+    }
+
+
+# ── Slab allocator — scalabilita del free-list ──────────────────────────────
+
+def bench_slab_scale(slot_counts: tuple = (4, 32)) -> dict:
+    results = {}
+    for n_slots in slot_counts:
+        slab = SlabAllocator(n_slots=n_slots)  # shard_size di default = SHARD_SIZE_BYTES (256 MB)
+        slab.initialize()
+
+        alloc_latencies = []
+        slot_indices = []
+        for i in range(n_slots):
+            t0 = time.perf_counter()
+            slot_idx = slab.alloc(expert_id=0, shard_idx=i, size_bytes=SHARD_SIZE_BYTES)
+            alloc_latencies.append((time.perf_counter() - t0) * 1e6)
+            slot_indices.append(slot_idx)
+
+        free_latencies = []
+        for slot_idx in slot_indices:
+            t0 = time.perf_counter()
+            slab.free(slot_idx)
+            free_latencies.append((time.perf_counter() - t0) * 1e6)
+
+        results[f"n_slots_{n_slots}"] = {
+            "pool_size_gb": round(n_slots * SHARD_SIZE_BYTES / (1024 ** 3), 3),
+            "alloc_latency_us": _percentiles(alloc_latencies),
+            "free_latency_us": _percentiles(free_latencies),
+        }
+    return results
+
+
+def main() -> None:
+    eat_result = bench_eat()
+    baseline_result = bench_baseline()
+
+    delta_us = {
+        "hit_p50": eat_result["lookup_latency_hit"]["p50_us"] - baseline_result["lookup_latency_hit"]["p50_us"],
+        "miss_p50": eat_result["lookup_latency_miss"]["p50_us"] - baseline_result["lookup_latency_miss"]["p50_us"],
+    }
 
     result = {
         "status": "done",
@@ -64,8 +216,11 @@ def main() -> None:
         "n_entries": N_ENTRIES,
         "n_lookups": N_LOOKUPS,
         "hit_ratio": HIT_RATIO,
-        "insert_throughput_ops_sec": insert_throughput,
-        "lookup_latency": lookup_latencies,
+        "eat_with_bloom": eat_result,
+        "baseline_plain_dict": baseline_result,
+        "bloom_vs_baseline_delta_us": delta_us,
+        "contention": bench_contention(),
+        "slab_scale": bench_slab_scale(),
     }
     print(json.dumps(result, indent=2))
 
