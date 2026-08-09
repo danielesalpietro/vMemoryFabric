@@ -447,6 +447,30 @@ class _ShadowExpertINT4:
         return activated @ w2.T
 
 
+class _AWQShadowExpert:
+    """Callable (hidden_states, layer_id) -> output — delega al modulo
+    MixtralMLP quantizzato reale, un layer alla volta.
+
+    Usato quando block_sparse_moe.experts è una ModuleList di MixtralMLP
+    (checkpoint AWQ pre-quantizzato, vllm.model_executor.models.
+    mixtral_quant — verificato 2026-08-09 su Mixtral-8x7B-Instruct-v0.1-AWQ
+    reale: w1/w2/w3 con qweight/qzeros/scales AWQ packed, non FusedMoE/
+    w13_weight come sul modello tiny non quantizzato). Zero weight
+    extraction, zero dequant manuale: il forward di MixtralMLP gestisce già
+    la dequantizzazione coi kernel AWQ interni di vLLM, che funzionano. Lo
+    "shadow" qui è un secondo forward attraverso lo stesso expert già
+    caricato (nessuna copia separata in INT4 simulato come _ShadowExpertINT4)
+    — accettabile per la validazione: misura il costo/comportamento
+    dell'attivazione shadow, non richiede una replica fisica del peso.
+    """
+
+    def __init__(self, modules_per_layer: List[Any]) -> None:
+        self._modules = modules_per_layer
+
+    def __call__(self, hidden_states: Any, layer_id: int) -> Any:
+        return self._modules[layer_id](hidden_states)
+
+
 class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-testabile
     """Worker vLLM con GCSG cablato.
 
@@ -480,9 +504,41 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
     vedi _quantize_int4), forward SwiGLU reale in _ShadowExpertINT4, e
     should_activate_shadow()/run_shadow() chiamati per ogni riga/token con
     gating_scores e hidden_states REALI dagli hook .gate, non più
-    placeholder sintetici in execute_model(). NON ancora riverificato con
-    un secondo smoke test end-to-end dopo queste modifiche — farlo è il
-    prossimo passo prima di fidarsene in produzione.
+    placeholder sintetici in execute_model(). Riverificato con un secondo
+    smoke test end-to-end (stesso hf-internal-testing/Mixtral-tiny): GREEN,
+    stessa aritmetica di prima (56 token valutati), shadow pool caricato e
+    forward SwiGLU diretto verificato numericamente (output finito, shape
+    corretta).
+
+    _load_shadow_pool() gestisce DUE strutture, non solo FusedMoE — scoperto
+    caricando per la prima volta il vero checkpoint Mixtral-8x7B-Instruct-
+    v0.1-AWQ (2026-08-09, stessa sessione): block_sparse_moe.experts è
+    FusedMoE (w13_weight/w2_weight fp16) solo su modelli non pre-quantizzati
+    come il tiny model; su un checkpoint AWQ reale è invece una ModuleList di
+    MixtralMLP con pesi GIÀ quantizzati (qweight/qzeros/scales packed) — una
+    classe modello vLLM diversa (mixtral_quant, non mixtral) a seconda di
+    come la quantizzazione viene specificata. _AWQShadowExpert gestisce
+    questo secondo caso delegando al modulo reale invece di estrarre/
+    quantizzare pesi a mano — nessun bisogno di dequantizzare Marlin/AWQ
+    manualmente, i kernel di vLLM se ne occupano già.
+
+    ATTENZIONE — bug NON risolto (2026-08-09): il caricamento del vero
+    Mixtral-8x7B-Instruct-v0.1-AWQ completa senza errori (pesi caricati,
+    KV-cache blocchi > 0, GCSGWorker si aggancia), ma generate() produce
+    output degenere — token_id sempre 0 (`<unk>`) per l'intera lunghezza
+    richiesta, finish_reason="length" (non EOS precoce),
+    cumulative_logprob=None (vLLM ha abortito il calcolo perché i valori non
+    erano finiti — logit NaN). Escluse due ipotesi con prove dirette: non è
+    l'override head_dim=128 (verificato corretto nello script che ha
+    fallito), non è FlashAttention (XFormers produce lo STESSO output,
+    byte-identico). Rimangono sospetti: interazione cpu_offload_gb con la
+    dequantizzazione AWQ/Marlin, o un problema nel checkpoint/kernel stesso.
+    Senza cpu_offload_gb il caricamento si blocca per 25+ minuti
+    (probabilmente il repacking AWQ->Marlin senza lo scratch space che
+    l'offload lascia libero) — non ancora isolato se produce output sano una
+    volta completato, il tentativo è stato interrotto per tempo. Questo bug
+    blocca qualunque validazione MMLU reale — vedi LOGBOOK 2026-08-09 per la
+    cronologia completa del debug.
 
     L'import di vllm è locale ai metodi (non al modulo) apposta: gcsg.py deve
     restare importabile — e GCSGGuard testabile — anche in ambienti senza
@@ -541,44 +597,59 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
             )
 
     def _load_shadow_pool(self) -> None:
-        """Estrae e quantizza (INT4 simulato) i pesi di shadow_pool_size
-        expert, da TUTTI i layer del modello caricato.
+        """Costruisce shadow_pool_size shadow expert, da TUTTI i layer del
+        modello caricato — due percorsi, scelti in base a come vLLM ha
+        istanziato gli expert per QUESTO checkpoint:
+
+        1. block_sparse_moe.experts è un FusedMoE con pesi fp16 grezzi
+           (w13_weight/w2_weight) — modello non pre-quantizzato (es. il tiny
+           model di test). Estrae e quantizza (INT4 simulato, int8 non
+           packed — vedi _quantize_int4/_ShadowExpertINT4) i pesi, poi
+           esegue SwiGLU manualmente sui pesi shadow dequantizzati.
+
+        2. block_sparse_moe.experts è una ModuleList di MixtralMLP con pesi
+           GIÀ quantizzati (AWQ qweight/qzeros/scales packed — verificato
+           2026-08-09 su Mixtral-8x7B-Instruct-v0.1-AWQ reale). Qui non c'è
+           nulla da estrarre o quantizzare: _AWQShadowExpert delega
+           direttamente al modulo reale, che dequantizza già coi kernel AWQ
+           interni di vLLM. Il "shadow" è un secondo forward sullo stesso
+           expert, non una copia INT4 separata.
 
         Selezione expert: placeholder round-robin (range(shadow_pool_size)),
         non guidato da carico reale — quali expert cachare in base
         all'hotness è integrazione EAT/Tier Manager (M1/M2), non disponibile
-        qui. Questo metodo implementa l'estrazione/quantizzazione/esecuzione
-        reale, non la policy di scelta di QUALI expert.
-
-        Layout pesi verificato su FusedMoE reale (2026-08-09, vedi
-        _ShadowExpertINT4). Quantizzazione: simmetrica per-tensore, valori
-        arrotondati al range INT4 [-8,7] e salvati in int8 — NON bit-packed
-        a 4 bit reali. Dimostra la correttezza numerica del round-trip
-        quantizza/dequantizza e della matematica SwiGLU sui pesi shadow, non
-        il risparmio di memoria reale di un kernel INT4 packed (che
-        dimezzerebbe ulteriormente lo storage rispetto a int8) — quello
-        resta integrazione kernel separata, fuori scope qui.
+        qui. Questo metodo implementa l'estrazione/wiring, non la policy di
+        scelta di QUALI expert.
         """
         model = self._base.model_runner.model
         layers = model.model.layers
-        n_experts = layers[0].block_sparse_moe.experts.num_experts
+        first_experts = layers[0].block_sparse_moe.experts
+        is_fused = hasattr(first_experts, "num_experts")   # percorso 1 vs 2
+
+        n_experts = first_experts.num_experts if is_fused else len(first_experts)
         expert_ids = list(range(min(self.guard.shadow_pool_size, n_experts)))
 
         for expert_id in expert_ids:
-            per_layer_w13 = []
-            per_layer_w2 = []
-            for layer in layers:
-                experts_module = layer.block_sparse_moe.experts
-                w13 = experts_module.w13_weight.data[expert_id]   # (2*intermediate, hidden)
-                w2 = experts_module.w2_weight.data[expert_id]     # (hidden, intermediate)
-                per_layer_w13.append(_quantize_int4(w13))
-                per_layer_w2.append(_quantize_int4(w2))
-            self._shadow_pool[expert_id] = _ShadowExpertINT4(per_layer_w13, per_layer_w2)
+            if is_fused:
+                per_layer_w13 = []
+                per_layer_w2 = []
+                for layer in layers:
+                    experts_module = layer.block_sparse_moe.experts
+                    w13 = experts_module.w13_weight.data[expert_id]   # (2*intermediate, hidden)
+                    w2 = experts_module.w2_weight.data[expert_id]     # (hidden, intermediate)
+                    per_layer_w13.append(_quantize_int4(w13))
+                    per_layer_w2.append(_quantize_int4(w2))
+                self._shadow_pool[expert_id] = _ShadowExpertINT4(per_layer_w13, per_layer_w2)
+            else:
+                modules_per_layer = [
+                    layer.block_sparse_moe.experts[expert_id] for layer in layers
+                ]
+                self._shadow_pool[expert_id] = _AWQShadowExpert(modules_per_layer)
 
         log.info(
-            "GCSG: shadow pool caricato — %d expert (%s) su %d layer, "
-            "quantizzati INT4 (simulato, non packed).",
+            "GCSG: shadow pool caricato — %d expert (%s) su %d layer, path=%s.",
             len(expert_ids), expert_ids, len(layers),
+            "FusedMoE+INT4-simulato" if is_fused else "AWQ-pre-quantizzato",
         )
 
     def _register_gate_hooks(self) -> None:
