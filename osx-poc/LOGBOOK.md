@@ -104,15 +104,25 @@ weights is numerically correct.
 - Full suite: 79 passed, 3 skipped — same 3 as before (live-Mixtral-8x7B-
   dependent quality/PagedAttention tests, M2+M3 integration), nothing new
   broken by any of this session's changes
+- Checked one more thing before closing out, since `cpu_offload_gb` is the
+  likely next-session requirement: `torch.zeros(1024).pin_memory()` inside
+  the dev container — `is_pinned() == True`, no error. `osx_default.yaml`'s
+  `pinned_memory: false` note ("non disponibile Docker/Windows") is about
+  M2's CUDA async pool specifically, not a general WSL2/Docker limitation —
+  worth not conflating the two. `cpu_offload_gb` pins CPU-side tensors for
+  the CPU→GPU transfer; this result suggests it should work in-container,
+  no need to fall back to running vLLM directly on WSL2 for the Mixtral-8x7B
+  validation.
 
 Next session: the real Mixtral-8x7B-AWQ checkpoint (~23 GiB) — the one
 validation this code hasn't seen. Load with `hf_overrides={"head_dim": 128}`
 (4096 // 32, confirmed correct in the previous session) and expect to need
 `cpu_offload_gb` given the VRAM math (weights alone are ~22.96 GiB against
-24 GiB total). That's also the first point GCSG's real numbers — activation
-rate on real routing behavior (not an undertrained tiny model's near-random
-gating), contamination, MMLU quality degradation — become measurable
-instead of just mechanically verified.
+24 GiB total) — pinned memory, which `cpu_offload_gb` depends on, already
+confirmed working in-container above. That's also the first point GCSG's
+real numbers — activation rate on real routing behavior (not an
+undertrained tiny model's near-random gating), contamination, MMLU quality
+degradation — become measurable instead of just mechanically verified.
 
 ---
 
