@@ -476,6 +476,12 @@ class _MarlinFusedShadowExpert:
     expert dentro un FusedMoE con pesi Marlin-packed, senza dequantizzare
     nulla a mano.
 
+    DISATTIVATA in produzione (stopgap 2026-08-09, issue #10):
+    _load_shadow_pool() non la istanzia più — invocarla crasha il kernel
+    CUDA Marlin (vedi ATTENZIONE sotto). La classe resta nel modulo per
+    scripts/verify_marlin_shadow_expert.py (repro isolato, non nel path di
+    produzione) e come punto di partenza per un fix reale.
+
     Terzo caso, distinto sia da _ShadowExpertINT4 (FusedMoE con pesi fp16
     grezzi w13_weight) sia da _AWQShadowExpert (ModuleList di MixtralMLP):
     qui block_sparse_moe.experts È un FusedMoE (ha num_experts), ma i pesi
@@ -605,11 +611,13 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
     MixtralMLP con pesi GIÀ quantizzati (qweight/qzeros/scales packed, un
     modulo per expert — _AWQShadowExpert); con quantization="awq_marlin" è
     di nuovo un FusedMoE, ma con pesi Marlin-packed
-    (w13_qweight/w13_scales/w13_qzeros, non w13_weight —
-    _MarlinFusedShadowExpert, GitHub issue #10, chiude chiamando
-    AWQMoEMethod.apply() reale con top_k=1 e routing forzato invece di
-    dequantizzare a mano). Tutti e tre delegano al codice reale di vLLM
-    dove possibile — nessun bisogno di reimplementare Marlin/AWQ.
+    (w13_qweight/w13_scales/w13_qzeros, non w13_weight — GitHub issue #10).
+    _MarlinFusedShadowExpert esiste e delega a AWQMoEMethod.apply() reale,
+    ma è disattivato con uno stopgap (2026-08-09): chiamarlo crasha il
+    kernel CUDA Marlin, quindi _load_shadow_pool() non lo registra più nello
+    shadow_pool per questo path — degrada a hook-only finché issue #10 non
+    ha un fix verificato. Gli altri due path delegano al codice reale di
+    vLLM dove possibile — nessun bisogno di reimplementare Marlin/AWQ.
 
     NaN bug (2026-08-09, RISOLTO): il caricamento del checkpoint
     TheBloke/Mixtral-8x7B-Instruct-v0.1-AWQ completava senza errori ma
@@ -693,11 +701,16 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         2. block_sparse_moe.experts è un FusedMoE con pesi Marlin-packed
            (w13_qweight/w13_scales/w13_qzeros — checkpoint AWQ caricato con
            quantization="awq_marlin", verificato 2026-08-09 su
-           casperhansen/mixtral-instruct-awq reale, GitHub issue #10). Non
-           c'è nulla da estrarre a mano: _MarlinFusedShadowExpert chiama
-           quant_method.apply() reale (AWQMoEMethod) con top_k=1 e un
-           router_logits one-hot forzato sull'expert target, isolando il
-           kernel Marlin su un solo expert senza dequantizzare nulla noi.
+           casperhansen/mixtral-instruct-awq reale, GitHub issue #10).
+           STOPGAP (2026-08-09): _MarlinFusedShadowExpert esiste (delega a
+           quant_method.apply() reale con top_k=1 e router_logits one-hot,
+           vedi la sua docstring per la cronologia), ma NON viene istanziato
+           qui — chiamarlo crasha il kernel CUDA Marlin (illegal memory
+           access, riprodotto con due strategie di isolamento diverse).
+           Questi expert_id restano fuori da shadow_pool: run_shadow() li
+           salta come "non presenti", degradando a hook-only per questo path
+           finché issue #10 non ha un fix verificato (dequant manuale o
+           repro single-layer con compute-sanitizer).
 
         3. block_sparse_moe.experts è una ModuleList di MixtralMLP con pesi
            GIÀ quantizzati (AWQ qweight/qzeros/scales packed, un modulo per
@@ -725,12 +738,17 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
 
         for expert_id in expert_ids:
             if is_marlin_packed:
-                fused_per_layer = [
-                    layer.block_sparse_moe.experts for layer in layers
-                ]
-                self._shadow_pool[expert_id] = _MarlinFusedShadowExpert(
-                    fused_per_layer, expert_id, n_experts
-                )
+                # Stopgap (2026-08-09, issue #10): _MarlinFusedShadowExpert crasha
+                # il kernel Marlin (CUDA illegal memory access) su entrambe le
+                # strategie di isolamento tentate finora — vedi la docstring della
+                # classe. Finché non esiste un fix reale (dequant manuale o repro
+                # single-layer con compute-sanitizer), NON registrare questi expert
+                # nello shadow_pool: run_shadow() salta chiunque non sia presente nel
+                # dict (vedi "shadow_expert_id = next(... if e in shadow_pool ...)"),
+                # quindi questo degrada a hook-only per il path Marlin esattamente
+                # come un fallimento di caricamento, senza mai invocare la classe che
+                # crasha.
+                continue
             elif is_fused:
                 per_layer_w13 = []
                 per_layer_w2 = []
@@ -748,15 +766,22 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                 self._shadow_pool[expert_id] = _AWQShadowExpert(modules_per_layer)
 
         if is_marlin_packed:
-            path = "FusedMoE+Marlin-packed"
-        elif is_fused:
-            path = "FusedMoE+INT4-simulato"
+            log.warning(
+                "GCSG: shadow pool NON caricato per %d expert Marlin-packed (%s) "
+                "su %d layer — path non supportato (issue #10: "
+                "_MarlinFusedShadowExpert crasha il kernel CUDA Marlin su entrambe "
+                "le strategie di isolamento tentate). GCSGWorker gira in modalità "
+                "hook-only per questi expert: hook/request_id/contamination "
+                "bookkeeping restano verificabili, nessuna shadow execution "
+                "possibile finché issue #10 non si chiude.",
+                len(expert_ids), expert_ids, len(layers),
+            )
         else:
-            path = "AWQ-pre-quantizzato"
-        log.info(
-            "GCSG: shadow pool caricato — %d expert (%s) su %d layer, path=%s.",
-            len(expert_ids), expert_ids, len(layers), path,
-        )
+            path = "FusedMoE+INT4-simulato" if is_fused else "AWQ-pre-quantizzato"
+            log.info(
+                "GCSG: shadow pool caricato — %d expert (%s) su %d layer, path=%s.",
+                len(expert_ids), expert_ids, len(layers), path,
+            )
 
     def _register_gate_hooks(self) -> None:
         """Forward hook su ogni layer_i.block_sparse_moe.gate — cattura

@@ -5,6 +5,80 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-09 — Oskarshamn, continued: issue #10 stopgap — Marlin-packed shadow path disabled, not fixed
+
+**Release:** [Oskarshamn] v0.4.0-dev — in progress. Closes the immediate
+safety gap left open by this morning's issue #10 investigation:
+`_load_shadow_pool()` no longer registers Marlin-packed `FusedMoE` experts
+into `shadow_pool` at all, so `run_shadow()` can never reach
+`_MarlinFusedShadowExpert.__call__()` in production — the CUDA kernel crash
+is now structurally unreachable, not just avoided by luck of the gating
+thresholds. Neither of the two real fixes (hand-rolled dequant, single-layer
+`compute-sanitizer` repro) attempted yet — this is a stopgap, issue #10
+stays open.
+
+### The fix: subtraction, not addition
+
+`run_shadow()` already skips any `expert_id` absent from `shadow_pool`
+(`shadow_expert_id = next((e for e in ranked_experts if e in shadow_pool),
+None)`, falls through to `reason_skip="no gated expert present in
+shadow_pool"` when `None`). That meant the actual fix was a `continue` in
+`_load_shadow_pool()`'s Marlin branch, not a new code path — no need to
+touch `run_shadow()`, `should_activate_shadow()`, or the hook wiring at all.
+`_MarlinFusedShadowExpert` itself is untouched and still imported by
+`scripts/verify_marlin_shadow_expert.py` for the isolated repro; it's just
+never constructed from the production `_load_shadow_pool()` path anymore.
+
+### Logging: don't claim success for something that didn't happen
+
+The old code's closing `log.info` said "shadow pool caricato" unconditionally
+for all three paths, including Marlin-packed — technically true (the dict
+got populated) but misleading about what those entries actually did (crash
+on first activation). Split it: `log.warning` naming issue #10 explicitly
+for the Marlin path (0 experts registered), `log.info` unchanged for the two
+paths that actually work. Docstrings on `_MarlinFusedShadowExpert`,
+`_load_shadow_pool()`, and `GCSGWorker` updated in place — the previous
+wording ("_MarlinFusedShadowExpert ... chiude chiamando
+AWQMoEMethod.apply()") read as if the path were wired into production, which
+after this session it explicitly isn't.
+
+### Verified: full suite green, no regression
+
+`pytest tests/ -m "not gpu"` in the dev container: 69 passed, 3 skipped —
+same three as before (`GCSGWorker` live-engine mechanics, MMLU quality
+degradation blocked on issue #10, PagedAttention contamination). No test
+exercises `_load_shadow_pool()`'s Marlin branch directly (`GCSGWorker` is
+`pragma: no cover`, needs a live vLLM engine), so nothing to update there —
+`test_quality_degradation_under_2pct`'s skip reason still holds, shadow
+execution still doesn't run on Marlin-packed checkpoints, now by design
+instead of by crash.
+
+One incidental finding, unrelated to this change: an isolated run of
+`tests/test_scheduler.py` alone had `test_latency_under_3ms` fail once
+(3.71ms vs. the 3ms p99 target for PT-PEP), then pass cleanly in the
+full-suite run right after — first concrete data point against that specific
+acceptance criterion, reads like container CPU jitter rather than a real
+miss, not investigated further this session.
+
+### End of day state
+
+- `src/scheduler/gcsg.py`: Marlin-packed `FusedMoE` experts no longer enter
+  `shadow_pool` — `run_shadow()`'s existing "expert not in pool" fallback
+  handles the rest. Structurally can't reach the crashing kernel call
+  anymore, independent of gating thresholds or routing behavior.
+- Issue #10 still open — this is the stopgap explicitly called out as step
+  zero, not one of the two real-fix directions (hand-rolled AWQ/Marlin
+  dequant, minimal single-layer `compute-sanitizer` repro).
+- Full suite: 69 passed, 3 skipped, no regressions.
+
+Next: same two directions as before remain open for a real fix — hand-rolled
+dequantization sidesteps the kernel entirely, or a minimal single-layer
+`compute-sanitizer` repro isolates the exact faulting instruction. This
+session only removed the crash risk, it didn't move issue #10 closer to
+closed.
+
+---
+
 ## 2026-08-09 — Oskarshamn, continued: issue #10 attempted, blocked on a real CUDA kernel crash
 
 **Release:** [Oskarshamn] v0.4.0-dev — in progress. Attempted the
