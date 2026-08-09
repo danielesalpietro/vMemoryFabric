@@ -170,6 +170,62 @@ def bench_contention(n_readers: int = 4, n_prefill: int = 5_000, n_writes: int =
     }
 
 
+# ── Contention (churn) — writer evict+reinsert sulle STESSE chiavi lette ────
+#
+# bench_contention() sopra fa scrivere il writer su un range di chiavi
+# disgiunto da quello letto dai reader — zero contesa sui dati, solo
+# contesa sul lock. GitHub issue #2 chiede di ri-misurare con traffico
+# più vicino a quello reale di M3 prima di scegliere un fix (RWLock,
+# sharded locking, ...): TierManager promuove/evicta ripetutamente gli
+# stessi shard che PT-PEP continua a interrogare per hotness — un working
+# set condiviso e churnato, non un flusso di chiavi sempre nuove.
+
+def bench_contention_churn(n_readers: int = 4, n_prefill: int = 5_000,
+                           n_writes: int = 20_000) -> dict:
+    eat = ExpertAccessTable(capacity=n_prefill * 2, n_slots=4)
+    for shard_idx in range(n_prefill):
+        eat.insert(expert_id=0, shard_idx=shard_idx, tier=Tier.NVME)
+
+    stop = threading.Event()
+    reader_latencies = [[] for _ in range(n_readers)]
+
+    def writer() -> None:
+        rng = random.Random(42)
+        for _ in range(n_writes):
+            shard_idx = rng.randrange(n_prefill)
+            eat.evict(expert_id=0, shard_idx=shard_idx)
+            eat.insert(expert_id=0, shard_idx=shard_idx, tier=Tier.NVME)
+        stop.set()
+
+    def reader(idx: int) -> None:
+        rng = random.Random(1000 + idx)
+        latencies = reader_latencies[idx]
+        while not stop.is_set():
+            shard_idx = rng.randrange(n_prefill)
+            t0 = time.perf_counter()
+            eat.lookup(expert_id=0, shard_idx=shard_idx)
+            latencies.append((time.perf_counter() - t0) * 1e6)
+
+    threads = [threading.Thread(target=writer)] + [
+        threading.Thread(target=reader, args=(i,)) for i in range(n_readers)
+    ]
+    writer_start = time.perf_counter()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    writer_elapsed = time.perf_counter() - writer_start
+
+    all_reader_latencies = [lat for bucket in reader_latencies for lat in bucket]
+    return {
+        "n_readers": n_readers,
+        "n_writes": n_writes,
+        "writer_throughput_ops_sec_under_contention": n_writes / writer_elapsed,
+        "reader_lookups_completed": len(all_reader_latencies),
+        "reader_lookup_latency_under_contention": _percentiles(all_reader_latencies),
+    }
+
+
 # ── Slab allocator — scalabilita del free-list ──────────────────────────────
 
 def bench_slab_scale(slot_counts: tuple = (4, 32)) -> dict:
@@ -220,6 +276,7 @@ def main() -> None:
         "baseline_plain_dict": baseline_result,
         "bloom_vs_baseline_delta_us": delta_us,
         "contention": bench_contention(),
+        "contention_churn": bench_contention_churn(),
         "slab_scale": bench_slab_scale(),
     }
     print(json.dumps(result, indent=2))
