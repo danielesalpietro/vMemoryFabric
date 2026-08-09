@@ -5,6 +5,117 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-09 — Oskarshamn, continued: real shadow execution — `_load_shadow_pool()` and router wiring implemented
+
+**Release:** [Oskarshamn] v0.4.0-dev — in progress. Every method in
+`src/scheduler/{ptpep,gcsg,aer}.py` is now real code, not a stub — the last
+two `NotImplementedError`s (`_load_shadow_pool()`, router-logits→
+`GatingContext` wiring) are gone. What's left for M3 is measuring real
+behavior on Mixtral-8x7B, not writing more mechanics.
+
+### The decision point: opened a PR, then kept scoping GCSG
+
+Opened PR #9 (`Sprint-3-Oskarshamn` → `develop`) with everything through the
+first GCSGWorker smoke test. Before deciding whether to download the real
+24 GB Mixtral-8x7B checkpoint next, weighed it against finishing the
+remaining `NotImplementedError`s on the tiny model first — chose the tiny
+model: the same architecture validates the same code, iteration is
+seconds instead of a 25 GB download's worth of minutes per attempt, and the
+real checkpoint is better spent on one final validation pass than repeated
+debug cycles.
+
+### A design question worth pausing on: does `GatingContext` grow a `layer_id`?
+
+Real shadow execution needs `hidden_states` and `layer_id` — `run_shadow()`
+can't compute anything real without them. The naive move is bolting both
+onto `GatingContext`. Pushed back on that: `GatingContext` is the *decision*
+context (gating score, entropy, contamination) — `hidden_states`/`layer_id`
+belong to *execution*, a different concern. Landed on adding both as
+parameters to `run_shadow()` itself, leaving `GatingContext` and
+`ShadowExecutionResult` untouched. Checked the blast radius before touching
+anything: five real (non-stub) tests call `run_shadow()` with the old
+2-argument signature — all five needed updating, none could be skipped.
+Worth having checked rather than assumed, since the alternative (all stubs)
+would have meant a free signature change.
+
+### `_load_shadow_pool()`: real weight extraction, not a placeholder
+
+Verified `FusedMoE`'s actual weight layout on the loaded tiny model before
+writing anything: `w13_weight` is `(num_experts, 2×intermediate_size,
+hidden_size)` — gate_proj and up_proj concatenated along dim 0 — and
+`w2_weight` is `(num_experts, hidden_size, intermediate_size)` (down_proj).
+Confirmed the concatenation order (gate before up, not the reverse — would
+have silently produced wrong-but-plausible outputs) via `FusedMoE.
+weight_loader`'s `shard_id` handling ("w1" then "w3", both writing into the
+same parameter). `_load_shadow_pool()` now extracts `shadow_pool_size`
+experts' weights from *every* layer (matching the module's established
+memory-math convention: "expert i" spans all layers), quantizes each
+symmetric-per-tensor to the INT4 numeric range (stored as int8, not
+bit-packed — noted honestly in the docstring: this proves the quantize/
+dequantize round-trip and the SwiGLU math are correct, not that it achieves
+a packed-4-bit kernel's real memory savings), and wraps them in a
+`_ShadowExpertINT4` callable that does the actual `x @ w13.T` → split →
+`silu(gate) * up` → `x @ w2.T` forward per layer.
+
+### Router wiring: request_id and hidden_states finally meet
+
+The `.gate` hooks already captured `router_logits`; `execute_model()`
+already extracted real `request_id`s from `seq_group_metadata_list` (from
+the previous session's bug fix) — but the two lived in separate methods
+with no way to correlate a specific token-row to its request. Built
+`_current_row_request_ids` in `execute_model()` (each `SequenceGroupMetadata`
+contributes `token_chunk_size` rows, in the same order `ModelRunner`
+concatenates sequences into one batched tensor) and read it back inside the
+`.gate` hook, which now also captures `inputs[0]` — the same hidden_states
+tensor the real experts compute on — not just the output. Per row: softmax
+the router logits, compute normalized entropy, build a real `GatingContext`,
+call `should_activate_shadow()`, and `run_shadow()` with that row's real
+hidden_states and the hook's layer index if it passes.
+
+### Verified twice — mechanics, then real numbers
+
+Full unit suite after the signature change: 79 passed, 3 skipped, no
+regressions from any of the five updated `run_shadow()` call sites. Then the
+real test — reran `scripts/smoke_test_gcsg_worker.py` end-to-end and added a
+fifth check: load the shadow pool for real, then directly invoke a shadow
+expert's forward on random input and assert the output shape matches and
+every value is finite (proves the numerics independent of whether real
+generate() traffic happened to trigger an activation). Result:
+`total_tokens_evaluated=56` — matches the expected math exactly (28 real
+token-rows × 2 layers, both hooks firing on real data now, not once per
+request per `execute_model()` call like before). `shadow_activations=0`:
+legitimate on this undertrained tiny model, whose gating scores rarely
+clear `theta_gate=0.85` — reported as exactly that, not treated as a
+failure. The direct shadow-expert forward: output shape `(1024,)`, finite,
+plausible-magnitude values — the SwiGLU math on extracted, quantized
+weights is numerically correct.
+
+### End of day state
+
+- `src/scheduler/gcsg.py`: `run_shadow()` takes `hidden_states`/`layer_id`;
+  `_load_shadow_pool()` extracts and INT4-quantizes real per-layer expert
+  weights; `.gate` hooks now drive real per-row `GatingContext`s through
+  `should_activate_shadow()`/`run_shadow()`; `execute_model()` builds the
+  row→request_id mapping the hooks consume. Every scheduler-package method
+  is real code now — zero `NotImplementedError` left in `ptpep.py`,
+  `gcsg.py`, or `aer.py`.
+- `scripts/smoke_test_gcsg_worker.py`: 5 checks now, all green, including a
+  direct numerical verification of the shadow-expert forward pass
+- Full suite: 79 passed, 3 skipped — same 3 as before (live-Mixtral-8x7B-
+  dependent quality/PagedAttention tests, M2+M3 integration), nothing new
+  broken by any of this session's changes
+
+Next session: the real Mixtral-8x7B-AWQ checkpoint (~23 GiB) — the one
+validation this code hasn't seen. Load with `hf_overrides={"head_dim": 128}`
+(4096 // 32, confirmed correct in the previous session) and expect to need
+`cpu_offload_gb` given the VRAM math (weights alone are ~22.96 GiB against
+24 GiB total). That's also the first point GCSG's real numbers — activation
+rate on real routing behavior (not an undertrained tiny model's near-random
+gating), contamination, MMLU quality degradation — become measurable
+instead of just mechanically verified.
+
+---
+
 ## 2026-08-09 — Oskarshamn, continued: GCSGWorker end-to-end smoke test, GREEN
 
 **Release:** [Oskarshamn] v0.4.0-dev — in progress. GCSGWorker's wiring
