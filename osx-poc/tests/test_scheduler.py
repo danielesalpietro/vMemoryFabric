@@ -180,7 +180,7 @@ class TestGCSG:
         )
         should1, _ = gcsg.should_activate_shadow(ctx1)
         assert should1 is True
-        gcsg.run_shadow(ctx1, shadow_pool={0: lambda ctx: None})
+        gcsg.run_shadow(ctx1, shadow_pool={0: lambda hs, lid: None}, hidden_states=None, layer_id=0)
 
         # Secondo token, stessa richiesta: ora contamination_rate("req-1") = 1/2 = 0.5,
         # ben sopra theta_contamination=0.05 — deve bloccare.
@@ -199,7 +199,7 @@ class TestGCSG:
             gating_scores=[0.9], token_entropy=0.1,
         )
         gcsg.should_activate_shadow(ctx1)
-        gcsg.run_shadow(ctx1, shadow_pool={0: lambda ctx: None})
+        gcsg.run_shadow(ctx1, shadow_pool={0: lambda hs, lid: None}, hidden_states=None, layer_id=0)
 
         ctx2 = GatingContext(
             token_id=1, request_id="req-2",
@@ -214,19 +214,22 @@ class TestGCSG:
             gating_scores=[0.1, 0.9, 0.3], token_entropy=0.2,   # ranking: 1 > 2 > 0
         )
         calls = []
-        shadow_pool = {0: lambda c: calls.append(c), 2: lambda c: calls.append(c)}  # expert 1 non cachato
-        result = gcsg.run_shadow(ctx, shadow_pool)
+        shadow_pool = {
+            0: lambda hs, lid: calls.append((hs, lid)),
+            2: lambda hs, lid: calls.append((hs, lid)),
+        }  # expert 1 non cachato
+        result = gcsg.run_shadow(ctx, shadow_pool, hidden_states="dummy-hidden-states", layer_id=3)
         assert result.activated is True
         assert result.shadow_expert_id == 2   # il più alto in classifica REALMENTE nel pool
         assert result.contamination_flag is True
-        assert len(calls) == 1
+        assert calls == [("dummy-hidden-states", 3)]   # hidden_states/layer_id passati intatti
 
     def test_run_shadow_no_expert_in_pool(self, gcsg):
         ctx = GatingContext(
             token_id=1, request_id="req-1",
             gating_scores=[0.9, 0.1], token_entropy=0.2,
         )
-        result = gcsg.run_shadow(ctx, shadow_pool={})
+        result = gcsg.run_shadow(ctx, shadow_pool={}, hidden_states=None, layer_id=0)
         assert result.activated is False
         assert result.shadow_expert_id is None
         assert result.reason_skip is not None
@@ -240,7 +243,7 @@ class TestGCSG:
             token_id=1, request_id="req-1", gating_scores=[0.9], token_entropy=0.1,
         )
         gcsg.should_activate_shadow(ctx)
-        gcsg.run_shadow(ctx, shadow_pool={0: lambda c: None})
+        gcsg.run_shadow(ctx, shadow_pool={0: lambda hs, lid: None}, hidden_states=None, layer_id=0)
         assert gcsg.contamination_rate("req-1") == 1.0
 
         gcsg.reset_contamination_counter("req-1")

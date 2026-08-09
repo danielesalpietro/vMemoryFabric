@@ -94,7 +94,7 @@ Hook vLLM — verificato contro il sorgente reale di vllm==0.6.6.post1
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import logging
 import time
 
@@ -257,8 +257,13 @@ class GCSGGuard:
 
         return True, "all conditions met"
 
-    def run_shadow(self, ctx: GatingContext,
-                   shadow_pool: Dict[int, object]) -> ShadowExecutionResult:
+    def run_shadow(
+        self,
+        ctx: GatingContext,
+        shadow_pool: Dict[int, object],
+        hidden_states: Any,
+        layer_id: int,
+    ) -> ShadowExecutionResult:
         """Esegue shadow execution con expert INT4 dal shadow_pool.
 
         Sceglie, tra gli expert col gating score più alto, il primo
@@ -266,12 +271,23 @@ class GCSGGuard:
         un expert non cachato — in quel caso si scende in classifica finché
         non se ne trova uno disponibile, o si desiste).
 
+        hidden_states/layer_id sono deliberatamente FUORI da GatingContext:
+        GatingContext è il contesto della decisione (score, entropy,
+        contamination), non dell'esecuzione — hidden_states e layer_id
+        appartengono al forward pass dello shadow expert, non alla domanda
+        "va attivato?". Aggiunti qui (2026-08-09, integrazione reale) senza
+        toccare GatingContext/ShadowExecutionResult: zero impatto sui
+        chiamanti esistenti di should_activate_shadow o sui campi già testati.
+
         Args:
-            ctx:         GatingContext del token corrente.
-            shadow_pool: Dict expert_id → expert INT4 caricato su VRAM.
-                         Ogni valore deve essere callable (forward INT4 reale
-                         a integrazione avvenuta — qui invocato senza
-                         assumere altro sulla sua interfaccia).
+            ctx:           GatingContext del token corrente (decisione).
+            shadow_pool:   Dict expert_id → callable(hidden_states, layer_id)
+                           -> output. Costruito da _load_shadow_pool().
+            hidden_states: Tensore di input per il layer corrente (esecuzione).
+            layer_id:      Indice del layer corrente — un "expert i" ha pesi
+                           diversi per layer (vedi memory math nel docstring
+                           di modulo), lo shadow_pool callable dispatcha di
+                           conseguenza.
 
         Returns:
             ShadowExecutionResult con flag contaminazione e latenza.
@@ -291,7 +307,7 @@ class GCSGGuard:
                 reason_skip="no gated expert present in shadow_pool",
             )
 
-        shadow_pool[shadow_expert_id](ctx)   # forward reale wired a integrazione vLLM
+        shadow_pool[shadow_expert_id](hidden_states, layer_id)   # forward INT4 reale
 
         self._contamination_counter += 1
         self._request_contamination[ctx.request_id] = (
@@ -377,6 +393,60 @@ class GCSGGuard:
         }
 
 
+def _quantize_int4(weight: Any) -> Tuple[Any, float]:
+    """Quantizzazione simmetrica per-tensore a range INT4 [-8,7].
+
+    Salvata come int8 (nessun bit-packing reale) — vedi _load_shadow_pool
+    per il perché: dimostra la correttezza numerica del round-trip
+    quantizza/dequantizza, non il risparmio di memoria di un kernel INT4
+    packed vero.
+    """
+    import torch
+
+    max_abs = weight.abs().max()
+    scale = float(max_abs / 7.0) if max_abs > 0 else 1.0
+    quantized = torch.clamp(torch.round(weight / scale), -8, 7).to(torch.int8)
+    return quantized, scale
+
+
+class _ShadowExpertINT4:
+    """Callable (hidden_states, layer_id) -> output — forward SwiGLU reale
+    su pesi INT4 dequantizzati al volo, un layer alla volta.
+
+    Layout pesi verificato su FusedMoE reale (2026-08-09):
+        w13_weight[e]: (2*intermediate_size, hidden_size) — concat(gate_proj,
+            up_proj) lungo dim 0. Ordine gate-poi-up confermato via
+            FusedMoE.weight_loader: shard_id "w1" (gate) e "w3" (up) scrivono
+            entrambi su shard_dim=0 di questo stesso parametro, "w1" per
+            primo nella convenzione HF/vLLM standard.
+        w2_weight[e]: (hidden_size, intermediate_size) — down_proj.
+    Entrambi in layout nn.Linear-style (out_features, in_features): il
+    forward usa x @ w.T, non x @ w.
+    """
+
+    def __init__(
+        self,
+        per_layer_w13: List[Tuple[Any, float]],
+        per_layer_w2: List[Tuple[Any, float]],
+    ) -> None:
+        self._per_layer_w13 = per_layer_w13
+        self._per_layer_w2 = per_layer_w2
+
+    def __call__(self, hidden_states: Any, layer_id: int) -> Any:
+        import torch.nn.functional as F
+
+        w13_q, w13_scale = self._per_layer_w13[layer_id]
+        w2_q, w2_scale = self._per_layer_w2[layer_id]
+        w13 = w13_q.to(hidden_states.dtype) * w13_scale
+        w2 = w2_q.to(hidden_states.dtype) * w2_scale
+
+        intermediate_size = w2.shape[-1]
+        gate_up = hidden_states @ w13.T
+        gate, up = gate_up.split(intermediate_size, dim=-1)
+        activated = F.silu(gate) * up
+        return activated @ w2.T
+
+
 class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-testabile
     """Worker vLLM con GCSG cablato.
 
@@ -385,7 +455,7 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
     qualname, non la classe (vedi docstring di modulo) — quando si
     costruisce un LLMEngine.
     Segue la sequenza verificata nel docstring di modulo (init_device ->
-    load_model -> hook su .gate -> shadow pool best-effort).
+    load_model -> hook su .gate -> shadow pool).
 
     Smoke test end-to-end eseguito 2026-08-09 su hf-internal-testing/
     Mixtral-tiny (2 layer, hidden_size=1024, num_local_experts=8 — stessa
@@ -396,12 +466,23 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
     meno dei soli pesi) — verificarlo su un modello che rischia l'OOM prima
     ancora di finire load_model() non avrebbe isolato bene cosa si sta
     testando. Il tiny model valida la MECCANICA (hook si registrano e
-    sparano, request_ids_to_seq_ids è accessibile, il bookkeeping
-    contamination per-request funziona con request_id reali) — NON dice
-    nulla su qualità (MMLU), performance, o comportamento VRAM del vero
-    shadow pool. Quei risultati restano pending sul modello reale (vedi
-    LOGBOOK 2026-08-09) — dichiararlo così è più difendibile in review che
-    un risultato su full model gonfiato da cpu_offload_gb non rappresentativo.
+    sparano, request_id reali accessibili, il bookkeeping contamination
+    per-request funziona) — NON dice nulla su qualità (MMLU), performance,
+    o comportamento VRAM del vero shadow pool. Quei risultati restano
+    pending sul modello reale (vedi LOGBOOK 2026-08-09) — dichiararlo così è
+    più difendibile in review che un risultato su full model gonfiato da
+    cpu_offload_gb non rappresentativo.
+
+    _load_shadow_pool() e il wiring router_logits -> GatingContext (Sprint 3,
+    2026-08-09, sessione successiva allo smoke test iniziale) sono ora
+    implementati per davvero — estrazione pesi w13/w2 verificata su
+    FusedMoE reale, quantizzazione INT4 simmetrica (int8, non packed —
+    vedi _quantize_int4), forward SwiGLU reale in _ShadowExpertINT4, e
+    should_activate_shadow()/run_shadow() chiamati per ogni riga/token con
+    gating_scores e hidden_states REALI dagli hook .gate, non più
+    placeholder sintetici in execute_model(). NON ancora riverificato con
+    un secondo smoke test end-to-end dopo queste modifiche — farlo è il
+    prossimo passo prima di fidarsene in produzione.
 
     L'import di vllm è locale ai metodi (non al modulo) apposta: gcsg.py deve
     restare importabile — e GCSGGuard testabile — anche in ambienti senza
@@ -421,6 +502,11 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         self.captured_router_logits: List[object] = []   # torch.Tensor per hit, non tipizzato qui per non importare torch al modulo
         self.seen_request_ids: set = set()
 
+        # riga -> request_id per il batch corrente, popolato da execute_model()
+        # e consumato dagli hook .gate (_evaluate_gcsg_for_rows) durante la
+        # chiamata nested — vedi execute_model().
+        self._current_row_request_ids: List[str] = []
+
     def __getattr__(self, name):
         # Delega tutto ciò che non sovrascriviamo esplicitamente al Worker reale
         return getattr(self._base, name)
@@ -438,17 +524,16 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         qui), il preflight VRAM di GCSGGuard vedrebbe VRAM libera
         artificiosamente alta.
 
-        Lo shadow pool è ancora NotImplementedError (richiede integrazione
-        EAT/Tier Manager, vedi _load_shadow_pool) — catturato qui e loggato,
-        non lasciato propagare: altrimenti l'intero worker non partirebbe
-        mai, nemmeno per verificare hook/request_id/contamination, che non
-        dipendono dallo shadow pool.
+        _load_shadow_pool() è avvolto in un try/except difensivo — un
+        fallimento lì (es. VRAM insufficiente per il modello reale) non deve
+        impedire l'avvio del worker: hook/request_id/contamination bookkeeping
+        non dipendono dallo shadow pool e restano verificabili comunque.
         """
         self._base.load_model()
         self._register_gate_hooks()
         try:
             self._load_shadow_pool()
-        except NotImplementedError as e:
+        except Exception as e:
             log.warning(
                 "GCSG: shadow pool non caricato (%s) — GCSGWorker gira in "
                 "modalità hook-only: hook/request_id/contamination bookkeeping "
@@ -456,81 +541,141 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
             )
 
     def _load_shadow_pool(self) -> None:
-        """Carica shadow_pool_size expert INT4 — TODO integrazione reale.
+        """Estrae e quantizza (INT4 simulato) i pesi di shadow_pool_size
+        expert, da TUTTI i layer del modello caricato.
 
-        Quali expert cachare (i più "caldi" secondo EAT/Tier Manager) e come
-        quantizzarli a INT4 è integrazione M1/M2+M3, deferred: qui c'è
-        l'aggancio nel punto giusto del lifecycle, non l'implementazione
-        della quantizzazione stessa.
+        Selezione expert: placeholder round-robin (range(shadow_pool_size)),
+        non guidato da carico reale — quali expert cachare in base
+        all'hotness è integrazione EAT/Tier Manager (M1/M2), non disponibile
+        qui. Questo metodo implementa l'estrazione/quantizzazione/esecuzione
+        reale, non la policy di scelta di QUALI expert.
+
+        Layout pesi verificato su FusedMoE reale (2026-08-09, vedi
+        _ShadowExpertINT4). Quantizzazione: simmetrica per-tensore, valori
+        arrotondati al range INT4 [-8,7] e salvati in int8 — NON bit-packed
+        a 4 bit reali. Dimostra la correttezza numerica del round-trip
+        quantizza/dequantizza e della matematica SwiGLU sui pesi shadow, non
+        il risparmio di memoria reale di un kernel INT4 packed (che
+        dimezzerebbe ulteriormente lo storage rispetto a int8) — quello
+        resta integrazione kernel separata, fuori scope qui.
         """
-        raise NotImplementedError(
-            "TODO Sprint 3 (prossima sessione) — richiede integrazione EAT/Tier "
-            "Manager per scegliere quali expert cachare, e un checkpoint Mixtral "
-            "reale per quantizzarli a INT4. Il punto di aggancio (dopo "
-            "super().load_model(), qui) è verificato e corretto."
+        model = self._base.model_runner.model
+        layers = model.model.layers
+        n_experts = layers[0].block_sparse_moe.experts.num_experts
+        expert_ids = list(range(min(self.guard.shadow_pool_size, n_experts)))
+
+        for expert_id in expert_ids:
+            per_layer_w13 = []
+            per_layer_w2 = []
+            for layer in layers:
+                experts_module = layer.block_sparse_moe.experts
+                w13 = experts_module.w13_weight.data[expert_id]   # (2*intermediate, hidden)
+                w2 = experts_module.w2_weight.data[expert_id]     # (hidden, intermediate)
+                per_layer_w13.append(_quantize_int4(w13))
+                per_layer_w2.append(_quantize_int4(w2))
+            self._shadow_pool[expert_id] = _ShadowExpertINT4(per_layer_w13, per_layer_w2)
+
+        log.info(
+            "GCSG: shadow pool caricato — %d expert (%s) su %d layer, "
+            "quantizzati INT4 (simulato, non packed).",
+            len(expert_ids), expert_ids, len(layers),
         )
 
     def _register_gate_hooks(self) -> None:
-        """Forward hook su ogni layer_i.block_sparse_moe.gate — cattura router_logits.
+        """Forward hook su ogni layer_i.block_sparse_moe.gate — cattura
+        router_logits E hidden_states reali, poi valuta GCSG per-riga.
 
         Verificato: MixtralMoE.forward() calcola router_logits internamente
         ma non lo restituisce; self.gate (ReplicatedLinear) sì, nel suo
         stesso output. Un hook sul blocco MoE intero vedrebbe solo l'hidden
         state finale già ricombinato dagli expert, non i gating score.
+        inputs[0] dell'hook È l'hidden_states passato a self.gate(x) — stesso
+        tensore usato dagli expert reali, qui riusato per lo shadow forward.
         """
         model = self._base.model_runner.model
-        for layer in model.model.layers:
+        for layer_id, layer in enumerate(model.model.layers):
             gate = layer.block_sparse_moe.gate
 
-            def _capture_router_logits(module, inputs, output, _worker=self):
+            def _capture_and_evaluate(module, inputs, output, _worker=self, _layer_id=layer_id):
                 router_logits, _bias = output
+                hidden_states = inputs[0]
                 _worker.captured_router_logits.append(router_logits.detach())
-                # TODO Sprint 3: da router_logits + SequenceGroupMetadata del
-                # batch corrente a GatingContext per-token/per-request, poi
-                # _worker.guard.should_activate_shadow(ctx) — richiede il
-                # mapping token-position -> request_id, che execute_model()
-                # riceve via execute_model_req.seq_group_metadata_list
-                # (List[SequenceGroupMetadata], ognuno con .request_id —
-                # verificato, vedi execute_model()), non un dict diretto
-                # token-position -> request_id: va ricostruito dai
-                # token_chunk_size/seq_data di ogni SequenceGroupMetadata.
+                _worker._evaluate_gcsg_for_rows(router_logits, hidden_states, _layer_id)
                 return output
 
-            handle = gate.register_forward_hook(_capture_router_logits)
+            handle = gate.register_forward_hook(_capture_and_evaluate)
             self._gate_hook_handles.append(handle)
 
+    def _evaluate_gcsg_for_rows(self, router_logits: Any, hidden_states: Any, layer_id: int) -> None:
+        """Da router_logits/hidden_states reali (per riga = per token) a
+        GatingContext, poi should_activate_shadow()/run_shadow() — con
+        request_id reali (da execute_model(), via
+        _current_row_request_ids) e hidden_states reali (da questo stesso
+        hook — vedi _register_gate_hooks).
+
+        Skip silenzioso se il numero di righe non combacia con
+        _current_row_request_ids: succede durante il profile_run() di vLLM
+        (chiamato da determine_num_available_blocks(), non da execute_model())
+        con dati sintetici e nessun request_id reale da associare — non un
+        errore, solo un forward pass che GCSG non deve valutare.
+        """
+        import math
+        import torch
+
+        row_request_ids = getattr(self, "_current_row_request_ids", None)
+        if not row_request_ids or len(row_request_ids) != router_logits.shape[0]:
+            return
+
+        probs = torch.softmax(router_logits.float(), dim=-1)
+        n_experts = probs.shape[-1]
+        entropy = -(probs * probs.clamp_min(1e-12).log()).sum(dim=-1) / math.log(n_experts)
+
+        for row_idx, request_id in enumerate(row_request_ids):
+            ctx = GatingContext(
+                token_id=row_idx,
+                request_id=request_id,
+                gating_scores=probs[row_idx].tolist(),
+                token_entropy=float(entropy[row_idx]),
+            )
+            should, _ = self.guard.should_activate_shadow(ctx)
+            if should:
+                self.guard.run_shadow(
+                    ctx, self._shadow_pool,
+                    hidden_states=hidden_states[row_idx], layer_id=layer_id,
+                )
+
     def execute_model(self, *args, **kwargs):
-        """Delega a Worker.execute_model — i gating score arrivano dagli hook
-        su .gate (_register_gate_hooks), non ispezionando l'output qui.
+        """Delega a Worker.execute_model, dopo aver preparato la riga -> request_id
+        mapping che gli hook .gate consumano durante la chiamata nested sotto.
 
         CORREZIONE (smoke test 2026-08-09): questo override eredita da
         WorkerBase.execute_model, che prende un ExecuteModelRequest — NON lo
         stesso execute_model() di ModelRunner (model_input/kv_caches/...),
-        nome uguale ma parametro diverso, confuse inizialmente scrivendo
+        nome uguale ma parametro diverso, confuso inizialmente scrivendo
         questa classe. request_ids_to_seq_ids NON esiste su
         ExecuteModelRequest (verificato: dir() non lo elenca) — i request_id
         reali si estraggono da execute_model_req.seq_group_metadata_list
         (List[SequenceGroupMetadata], ognuno con .request_id), confermato
         via un run reale con logging di debug.
 
-        gating_scores/token_entropy qui sono placeholder sintetici
-        deliberati, non letti dagli hook — collegare router_logits catturati
-        (via _register_gate_hooks) al request_id/posizione-token giusti resta
-        TODO insieme a _load_shadow_pool (stessa integrazione mancante: serve
-        il mapping posizione-nel-batch -> request_id dentro
-        SequenceGroupMetadata.seq_data, non ancora tracciato qui).
+        La decisione GCSG vera e propria (should_activate_shadow/run_shadow
+        con gating_scores/hidden_states reali) avviene dentro
+        _evaluate_gcsg_for_rows(), chiamata dagli hook .gate — qui si prepara
+        solo _current_row_request_ids: ogni SequenceGroupMetadata contribuisce
+        token_chunk_size righe, nello stesso ordine in cui ModelRunner
+        concatena le sequenze in un'unica hidden_states batched (verificato
+        empiricamente: la lunghezza combacia sempre con router_logits.shape[0]
+        quando la richiesta viene da execute_model(), mai durante il
+        profile_run() sintetico di vLLM — vedi _evaluate_gcsg_for_rows).
         """
         execute_model_req = args[0] if args else kwargs.get("execute_model_req")
         seq_group_metadata_list = getattr(execute_model_req, "seq_group_metadata_list", None) or []
-        for seq_group_metadata in seq_group_metadata_list:
-            request_id = seq_group_metadata.request_id
-            self.seen_request_ids.add(request_id)
-            ctx = GatingContext(
-                token_id=-1, request_id=request_id,
-                gating_scores=[0.99, 0.01], token_entropy=0.1,   # placeholder, vedi docstring
-            )
-            should, _ = self.guard.should_activate_shadow(ctx)
-            if should:
-                self.guard.run_shadow(ctx, shadow_pool={0: lambda c: None})
+
+        self.seen_request_ids.update(smd.request_id for smd in seq_group_metadata_list)
+        self._current_row_request_ids = [
+            smd.request_id
+            for smd in seq_group_metadata_list
+            for _ in range(smd.token_chunk_size)
+        ]
 
         return self._base.execute_model(*args, **kwargs)
