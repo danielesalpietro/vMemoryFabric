@@ -471,6 +471,93 @@ class _AWQShadowExpert:
         return self._modules[layer_id](hidden_states)
 
 
+class _MarlinFusedShadowExpert:
+    """Callable (hidden_states, layer_id) -> output — isola un singolo
+    expert dentro un FusedMoE con pesi Marlin-packed, senza dequantizzare
+    nulla a mano.
+
+    Terzo caso, distinto sia da _ShadowExpertINT4 (FusedMoE con pesi fp16
+    grezzi w13_weight) sia da _AWQShadowExpert (ModuleList di MixtralMLP):
+    qui block_sparse_moe.experts È un FusedMoE (ha num_experts), ma i pesi
+    sono Marlin-packed (w13_qweight/w13_scales/w13_qzeros — verificato
+    2026-08-09 su casperhansen/mixtral-instruct-awq reale con
+    quantization="awq_marlin", vedi GitHub issue #10). A differenza del
+    caso ModuleList, qui non esiste un nn.Module separato per ogni
+    expert — FusedMoE tiene tutti gli expert in un unico tensore batched e
+    il suo forward() fa sempre routing reale su TUTTI gli expert col
+    top_k del modello (2 per Mixtral): non c'è "un expert" da chiamare
+    direttamente.
+
+    ATTENZIONE (2026-08-09, issue #10): il primo approccio tentato — forzare
+    top_k=1 nella chiamata a quant_method.apply() per isolare "davvero" un
+    solo expert — provoca un `CUDA error: illegal memory access` dentro il
+    kernel Marlin (torch.ops._moe_C.marlin_gemm_moe), riprodotto sia dalla
+    chiamata diretta sia da una chiamata di riferimento indipendente
+    (vero FusedMoE.forward() con self.top_k monkey-patchato a 1 — stesso
+    crash, quindi non un bug di questa classe specifica). Letto il vero
+    fused_marlin_moe.py installato (vllm==0.6.6.post1) prima di concludere
+    qualunque cosa: i buffer (intermediate_cache2, workspace) sono
+    dimensionati dinamicamente per chiamata dai valori reali passati, non
+    pre-allocati altrove per il top_k "reale" del modello — quindi la causa
+    esatta resta nel kernel CUDA compilato, non ispezionabile da Python, non
+    in un mismatch a livello Python verificabile qui. Pattern comunque
+    reale e noto: vllm-project/vllm#35922, #32834, #26558 sono tutte
+    "illegal memory access" dentro fused_marlin_moe su modelli/config
+    diversi (verificate esistenti, non prese per buone a scatola chiusa).
+
+    Fix adottato: NON tocca top_k (resta quello reale del modello, 2 per
+    Mixtral — la superficie che ha fatto crashare non viene più toccata).
+    Isolamento per via del router_logits: logit fortemente dominante
+    sull'expert_id target, logit fortemente negativo su tutti gli altri.
+    Con top_k reale invariato, la selezione top-k prende comunque il
+    target più un secondo expert arbitrario (qualunque, dato che sono tutti
+    ugualmente sfavoriti) — dopo softmax+renormalize il peso del secondo è
+    numericamente nullo (~exp(-60), sotto la precisione fp16) e il kernel
+    Marlin reale fa dequant+matmul con un contributo del target
+    indistinguibile da 1.0. Stesso principio di _AWQShadowExpert (delega al
+    codice reale, zero dequantizzazione manuale), ma senza toccare
+    l'invariante (top_k) che si è rivelata rischiosa.
+    """
+
+    _LOGIT_HIGH = 30.0
+    _LOGIT_LOW = -30.0
+
+    def __init__(
+        self,
+        fused_module_per_layer: List[Any],
+        expert_id: int,
+        num_experts: int,
+    ) -> None:
+        self._fused = fused_module_per_layer
+        self._expert_id = expert_id
+        self._num_experts = num_experts
+
+    def __call__(self, hidden_states: Any, layer_id: int) -> Any:
+        import torch
+
+        fused = self._fused[layer_id]
+        router_logits = torch.full(
+            (hidden_states.shape[0], self._num_experts),
+            self._LOGIT_LOW,
+            dtype=hidden_states.dtype,
+            device=hidden_states.device,
+        )
+        router_logits[:, self._expert_id] = self._LOGIT_HIGH
+        return fused.quant_method.apply(
+            layer=fused,
+            x=hidden_states,
+            router_logits=router_logits,
+            top_k=fused.top_k,
+            renormalize=fused.renormalize,
+            use_grouped_topk=fused.use_grouped_topk,
+            topk_group=fused.topk_group,
+            num_expert_group=fused.num_expert_group,
+            custom_routing_function=fused.custom_routing_function,
+            scoring_func=fused.scoring_func,
+            e_score_correction_bias=fused.e_score_correction_bias,
+        )
+
+
 class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-testabile
     """Worker vLLM con GCSG cablato.
 
@@ -510,35 +597,31 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
     forward SwiGLU diretto verificato numericamente (output finito, shape
     corretta).
 
-    _load_shadow_pool() gestisce DUE strutture, non solo FusedMoE — scoperto
-    caricando per la prima volta il vero checkpoint Mixtral-8x7B-Instruct-
-    v0.1-AWQ (2026-08-09, stessa sessione): block_sparse_moe.experts è
-    FusedMoE (w13_weight/w2_weight fp16) solo su modelli non pre-quantizzati
-    come il tiny model; su un checkpoint AWQ reale è invece una ModuleList di
-    MixtralMLP con pesi GIÀ quantizzati (qweight/qzeros/scales packed) — una
-    classe modello vLLM diversa (mixtral_quant, non mixtral) a seconda di
-    come la quantizzazione viene specificata. _AWQShadowExpert gestisce
-    questo secondo caso delegando al modulo reale invece di estrarre/
-    quantizzare pesi a mano — nessun bisogno di dequantizzare Marlin/AWQ
-    manualmente, i kernel di vLLM se ne occupano già.
+    _load_shadow_pool() gestisce TRE strutture, non solo FusedMoE —
+    scoperto caricando per la prima volta il vero checkpoint Mixtral-8x7B-
+    Instruct-AWQ (2026-08-09): block_sparse_moe.experts è FusedMoE con pesi
+    fp16 grezzi (w13_weight) solo su modelli non pre-quantizzati come il
+    tiny model; con quantization="awq" semplice è una ModuleList di
+    MixtralMLP con pesi GIÀ quantizzati (qweight/qzeros/scales packed, un
+    modulo per expert — _AWQShadowExpert); con quantization="awq_marlin" è
+    di nuovo un FusedMoE, ma con pesi Marlin-packed
+    (w13_qweight/w13_scales/w13_qzeros, non w13_weight —
+    _MarlinFusedShadowExpert, GitHub issue #10, chiude chiamando
+    AWQMoEMethod.apply() reale con top_k=1 e routing forzato invece di
+    dequantizzare a mano). Tutti e tre delegano al codice reale di vLLM
+    dove possibile — nessun bisogno di reimplementare Marlin/AWQ.
 
-    ATTENZIONE — bug NON risolto (2026-08-09): il caricamento del vero
-    Mixtral-8x7B-Instruct-v0.1-AWQ completa senza errori (pesi caricati,
-    KV-cache blocchi > 0, GCSGWorker si aggancia), ma generate() produce
-    output degenere — token_id sempre 0 (`<unk>`) per l'intera lunghezza
-    richiesta, finish_reason="length" (non EOS precoce),
-    cumulative_logprob=None (vLLM ha abortito il calcolo perché i valori non
-    erano finiti — logit NaN). Escluse due ipotesi con prove dirette: non è
-    l'override head_dim=128 (verificato corretto nello script che ha
-    fallito), non è FlashAttention (XFormers produce lo STESSO output,
-    byte-identico). Rimangono sospetti: interazione cpu_offload_gb con la
-    dequantizzazione AWQ/Marlin, o un problema nel checkpoint/kernel stesso.
-    Senza cpu_offload_gb il caricamento si blocca per 25+ minuti
-    (probabilmente il repacking AWQ->Marlin senza lo scratch space che
-    l'offload lascia libero) — non ancora isolato se produce output sano una
-    volta completato, il tentativo è stato interrotto per tempo. Questo bug
-    blocca qualunque validazione MMLU reale — vedi LOGBOOK 2026-08-09 per la
-    cronologia completa del debug.
+    NaN bug (2026-08-09, RISOLTO): il caricamento del checkpoint
+    TheBloke/Mixtral-8x7B-Instruct-v0.1-AWQ completava senza errori ma
+    generate() produceva output degenere (token_id sempre 0, logit NaN) su
+    ogni combinazione di quantizzazione/cpu_offload_gb/backend attention
+    testata. Causa: checkpoint difettoso, non lo stack OSX-PoC — confermato
+    (non solo corroborato) verificando che lo stesso identico stack genera
+    testo pulito su casperhansen/mixtral-instruct-awq, e indipendentemente
+    contro vllm-project/vllm#2359 (stesso sintomo, stesso file, dal
+    2024-01-05, mai risolto per questa quantizzazione specifica). Storia
+    completa della diagnosi (isolamento a fette: GCSGWorker, pin_memory/
+    WSL, kernel Marlin, cpu_offload_gb) in LOGBOOK 2026-08-09.
 
     L'import di vllm è locale ai metodi (non al modulo) apposta: gcsg.py deve
     restare importabile — e GCSGGuard testabile — anche in ambienti senza
@@ -598,7 +681,7 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
 
     def _load_shadow_pool(self) -> None:
         """Costruisce shadow_pool_size shadow expert, da TUTTI i layer del
-        modello caricato — due percorsi, scelti in base a come vLLM ha
+        modello caricato — TRE percorsi, scelti in base a come vLLM ha
         istanziato gli expert per QUESTO checkpoint:
 
         1. block_sparse_moe.experts è un FusedMoE con pesi fp16 grezzi
@@ -607,13 +690,23 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
            packed — vedi _quantize_int4/_ShadowExpertINT4) i pesi, poi
            esegue SwiGLU manualmente sui pesi shadow dequantizzati.
 
-        2. block_sparse_moe.experts è una ModuleList di MixtralMLP con pesi
-           GIÀ quantizzati (AWQ qweight/qzeros/scales packed — verificato
-           2026-08-09 su Mixtral-8x7B-Instruct-v0.1-AWQ reale). Qui non c'è
-           nulla da estrarre o quantizzare: _AWQShadowExpert delega
-           direttamente al modulo reale, che dequantizza già coi kernel AWQ
-           interni di vLLM. Il "shadow" è un secondo forward sullo stesso
-           expert, non una copia INT4 separata.
+        2. block_sparse_moe.experts è un FusedMoE con pesi Marlin-packed
+           (w13_qweight/w13_scales/w13_qzeros — checkpoint AWQ caricato con
+           quantization="awq_marlin", verificato 2026-08-09 su
+           casperhansen/mixtral-instruct-awq reale, GitHub issue #10). Non
+           c'è nulla da estrarre a mano: _MarlinFusedShadowExpert chiama
+           quant_method.apply() reale (AWQMoEMethod) con top_k=1 e un
+           router_logits one-hot forzato sull'expert target, isolando il
+           kernel Marlin su un solo expert senza dequantizzare nulla noi.
+
+        3. block_sparse_moe.experts è una ModuleList di MixtralMLP con pesi
+           GIÀ quantizzati (AWQ qweight/qzeros/scales packed, un modulo per
+           expert — verificato 2026-08-09 su Mixtral-8x7B-Instruct-v0.1-AWQ
+           con quantization="awq" semplice). Qui non c'è nulla da estrarre o
+           quantizzare: _AWQShadowExpert delega direttamente al modulo
+           reale, che dequantizza già coi kernel AWQ interni di vLLM. Il
+           "shadow" è un secondo forward sullo stesso expert, non una copia
+           INT4 separata.
 
         Selezione expert: placeholder round-robin (range(shadow_pool_size)),
         non guidato da carico reale — quali expert cachare in base
@@ -624,13 +717,21 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         model = self._base.model_runner.model
         layers = model.model.layers
         first_experts = layers[0].block_sparse_moe.experts
-        is_fused = hasattr(first_experts, "num_experts")   # percorso 1 vs 2
+        is_fused = hasattr(first_experts, "num_experts")
+        is_marlin_packed = is_fused and hasattr(first_experts, "w13_qweight")
 
         n_experts = first_experts.num_experts if is_fused else len(first_experts)
         expert_ids = list(range(min(self.guard.shadow_pool_size, n_experts)))
 
         for expert_id in expert_ids:
-            if is_fused:
+            if is_marlin_packed:
+                fused_per_layer = [
+                    layer.block_sparse_moe.experts for layer in layers
+                ]
+                self._shadow_pool[expert_id] = _MarlinFusedShadowExpert(
+                    fused_per_layer, expert_id, n_experts
+                )
+            elif is_fused:
                 per_layer_w13 = []
                 per_layer_w2 = []
                 for layer in layers:
@@ -646,10 +747,15 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                 ]
                 self._shadow_pool[expert_id] = _AWQShadowExpert(modules_per_layer)
 
+        if is_marlin_packed:
+            path = "FusedMoE+Marlin-packed"
+        elif is_fused:
+            path = "FusedMoE+INT4-simulato"
+        else:
+            path = "AWQ-pre-quantizzato"
         log.info(
             "GCSG: shadow pool caricato — %d expert (%s) su %d layer, path=%s.",
-            len(expert_ids), expert_ids, len(layers),
-            "FusedMoE+INT4-simulato" if is_fused else "AWQ-pre-quantizzato",
+            len(expert_ids), expert_ids, len(layers), path,
         )
 
     def _register_gate_hooks(self) -> None:

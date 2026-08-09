@@ -5,6 +5,122 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-09 — Oskarshamn, continued: issue #10 attempted, blocked on a real CUDA kernel crash
+
+**Release:** [Oskarshamn] v0.4.0-dev — in progress. Attempted the
+Marlin-packed `FusedMoE` shadow-pool path from issue #10. Implementation
+is real and verified against vLLM internals before being written, but two
+independent isolation strategies both crash the Marlin CUDA kernel
+directly — paused deliberately rather than shipping a fix that trades a
+safe degradation (hook-only mode) for a worker-crashing one.
+
+### `_MarlinFusedShadowExpert`: built on verified internals, not guesses
+
+Before writing anything: confirmed `FusedMoE.forward()` calls
+`self.quant_method.apply(layer=self, x=hidden_states, router_logits=...,
+top_k=self.top_k, renormalize=...)`, and for `quantization="awq_marlin"`
+that `quant_method` is `AWQMoEMethod` with the identical explicit
+signature — `top_k` isn't read from `self` internally, it's a real
+parameter we can call directly. Confirmed the real Marlin-packed
+parameter name is `w13_qweight` (via `AWQMoEMethod.create_weights()`),
+not `w13_weight`. Added the class plus a three-way dispatch in
+`_load_shadow_pool()`. Unit suite unaffected: 79 passed, 3 skipped,
+unchanged — this path is `pragma: no cover`, only exercisable against a
+live checkpoint.
+
+### Two crashes, same kernel, different triggers ruled out each time
+
+**Attempt 1** — force `top_k=1` + one-hot `router_logits` to isolate a
+single expert "for real": crashed with `CUDA error: illegal memory
+access` inside the Marlin kernel. Reproduced identically by an
+independent reference call (real `FusedMoE.forward()` with `top_k`
+monkey-patched) — not a bug in the new class's plumbing specifically.
+Read the actually-installed `fused_marlin_moe.py` before theorizing:
+buffers there are sized dynamically per-call from the real arguments,
+not pre-allocated for the model's "true" `top_k` at load time — the
+naive explanation doesn't hold for this vLLM version. The bug is inside
+the compiled kernel (`torch.ops._moe_C.marlin_gemm_moe`), not
+Python-inspectable.
+
+**Attempt 2** — redesigned to never touch `top_k` (kept real value 2),
+isolate purely via a dominant/negligible `router_logits` split instead.
+**Crashed identically anyway.** This ruled out `top_k=1` specifically as
+the trigger — whatever the real cause is, it's not that.
+
+**Cheap check before spending more GPU time**: tested
+`FusedMoE.select_experts()` directly on a tiny synthetic tensor (seconds,
+no model load) across several logit magnitudes including the exact ones
+used in both attempts — all finite, no NaN/Inf, softmax does proper
+max-subtraction. Rules out numerical instability in the pre-kernel
+routing step as the cause. The fault is downstream, inside
+`moe_align_block_size` or the compiled Marlin GEMM kernel itself.
+
+### A pasted external analysis, partially verified, partially not
+
+Mid-investigation, a consolidated analysis arrived citing three vLLM
+issues (`#35922`, `#32834`, `#26558`) and a specific line/mechanism
+(`intermediate_cache3.view(-1, topk, K)` reading from a workspace
+pre-sized for the model's real `top_k`). Checked before trusting it, same
+standard as the TheBloke-checkpoint claim earlier this session: the three
+issues are real, exist, and their titles match the symptom class exactly
+(Marlin MoE + illegal memory access, closed, across different
+models/hardware) — good corroboration that this crash class is real and
+recurring. The specific mechanism did not check out: the installed
+`fused_marlin_moe.py` doesn't have that line, and its buffers are sized
+dynamically per-call, not pre-allocated. Adopted the analysis's proposed
+mitigation anyway (it doesn't depend on the specific mechanism being
+right — avoiding `top_k` entirely is safe regardless of why the kernel
+crashes) but did not repeat the unverified explanation as fact.
+
+### `compute-sanitizer`: correct instinct, impractical on the full model
+
+`compute-sanitizer --tool memcheck` was available in the container —
+tried it to pinpoint the exact faulting instruction rather than keep
+guessing. After 40+ minutes: GPU utilization 35% (actively computing, not
+deadlocked) but VRAM usage only ~0.8GB — hadn't even finished
+loading/repacking the 18.8GB of model weights, let alone reached the
+actual crash point (which needs a full load plus a real `generate()`
+call). Full-instrumentation memcheck over an 18.8GB Marlin-repack
+pipeline isn't practical at that rate. Stopped the container rather than
+wait indefinitely for a diagnostic that may take hours.
+
+### Decision: pause, don't ship a worse failure mode
+
+The current safe degradation (hook-only mode, `load_model()`'s existing
+catch-and-log) stays as-is. Explicitly chose not to land either crashing
+variant of `_MarlinFusedShadowExpert` — a `CUDA illegal memory access`
+can poison the whole CUDA context for the rest of the process, which is
+strictly worse than "shadow pool didn't load, hooks still work." Logged
+the full attempt (both crash modes, the ruled-out hypotheses, the
+verified-vs-unverified parts of the external analysis, the
+compute-sanitizer result) as a comment on issue #10 rather than losing it
+to a closed terminal — whoever picks this up next has two credible
+untried directions instead of starting from zero.
+
+### End of day state
+
+- `src/scheduler/gcsg.py`: `_MarlinFusedShadowExpert` and the three-way
+  `_load_shadow_pool()` dispatch exist in the tree, fully documented
+  (mechanism + both crash histories in the class docstring), but the
+  Marlin-packed path still degrades to hook-only at runtime — the new
+  class is unreachable in practice until issue #10 actually closes, since
+  `_load_shadow_pool()` calling it would hit the same crash it's
+  documented as having.
+- `scripts/verify_marlin_shadow_expert.py`: the repro, both failure modes
+  documented in-file.
+- Issue #10 updated with the full investigation — not left to go stale.
+- Two untried directions recorded for next time: hand-rolled AWQ/Marlin
+  dequantization (sidesteps the kernel entirely), or a minimal
+  single-layer `compute-sanitizer` repro (avoids instrumenting the full
+  model load).
+
+Next session (whenever picked up): either reimplement AWQ/Marlin
+dequantization by hand for this one path, or build the minimal
+single-layer sanitizer repro — not a third variant of "call the fused
+kernel with synthetic routing," which is now confirmed unsafe two ways.
+
+---
+
 ## 2026-08-09 — Oskarshamn, continued: MMLU 5-shot baseline — 72.3%, harness built and run
 
 **Release:** [Oskarshamn] v0.4.0-dev — in progress. First real number against
