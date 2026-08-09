@@ -5,6 +5,474 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-09 — Oskarshamn, continued: MMLU 5-shot baseline — 72.3%, harness built and run
+
+**Release:** [Oskarshamn] v0.4.0-dev — in progress. First real number against
+the README's "GCSG quality degradation < 2% (MMLU-5shot)" target — a
+baseline, not the degradation itself, since shadow execution is still
+blocked on [issue #10](https://github.com/danielesalpietro/vMemoryFabric/issues/10).
+Also opened that issue and logged the shadow-pool gap that motivated it,
+same session.
+
+### Scope, decided before running anything
+
+Filed issue #10 for the Marlin-packed `FusedMoE` shadow-pool gap found
+this session, logged it in LOGBOOK, then moved straight to MMLU rather
+than blocking on the fix — hook-only mode still produces a real,
+meaningful baseline number even without shadow execution. Scoped the
+eval down from the full 14,042-question MMLU test set to 57 subjects x
+10 questions each (570 total, first-N per subject) before writing any
+code — a full-benchmark run wasn't the goal of a same-session validation
+pass, and 570 questions across every subject is enough to sanity-check
+both the harness and the model's real behavior. Declared explicitly in
+`scripts/eval_mmlu_gcsg.py`'s docstring, same honesty standard as PT-PEP's
+own held-out validation two sessions ago.
+
+### Harness: standard 5-shot protocol, logprob scoring not text parsing
+
+`scripts/eval_mmlu_gcsg.py` — `cais/mmlu` (`"all"` config; `dev` split is
+exactly 5 examples x 57 subjects, the standard few-shot set), each test
+question scored by comparing next-token logprobs among the four
+answer-letter tokens (`A`/`B`/`C`/`D`, resolved dynamically via the real
+tokenizer rather than assumed token ids) instead of generating free text
+and parsing it — avoids an entire class of scoring bugs (partial
+sentences, alternate phrasings) for the cost of one extra `logprobs=20`
+argument.
+
+### Slow, not stuck — a real concurrency mistake caught mid-run
+
+`max_model_len=4096` (needed — 5-shot prompts with 4 choices per example
+run long) starved KV-cache blocks: 376 blocks instead of the ~600 seen at
+`max_model_len=2048`, `gpu_executor.py` reporting "Maximum concurrency for
+4096 tokens per request: 1.47x" — effectively serial processing instead
+of batched. Caught via the heartbeat log while the run was in progress
+(steady, non-repeating percentages — the same heartbeat pattern built for
+hang detection doubled as a live progress signal here), diagnosed rather
+than assumed hung, and left running rather than killed and restarned
+since it was making real progress. Finished in 28m52s, 4 seconds before
+the 1800s watchdog's `SIGTERM` would have fired — cutting it closer than
+intended, worth widening the margin next time this exact config is reused
+rather than treating it as a one-off near-miss.
+
+### Result
+
+**72.3% (412/570)**, 0 questions unresolved (every one of the 570 had at
+least one of A/B/C/D in its top-20 logprobs — the scoring method held up
+cleanly). Worst-performing subjects: `abstract_algebra`,
+`college_physics`, `electrical_engineering`, `formal_logic`,
+`high_school_mathematics` (all 40%) — a plausible pattern (MoE models
+including Mixtral are documented as comparatively weaker on formal
+math/logic reasoning), which reads as the harness measuring something
+real rather than noise, though this session didn't independently verify
+that specific claim against a citation the way the checkpoint bug got
+verified earlier today.
+
+`GCSGGuard.stats()`: `total_tokens_evaluated=12,482,368`,
+`shadow_activations=0` — structurally zero, not a finding, since the
+shadow pool never loaded (issue #10). This number is **GCSGWorker's
+hook-only-mode baseline**, not the quality-degradation-from-shadow-
+contamination metric the README's `<2%` target is actually about — that
+comparison needs issue #10 closed and a second run with shadow execution
+actually firing, then a delta against this baseline.
+
+### End of day state
+
+- `scripts/eval_mmlu_gcsg.py`: new, real, 570-question 5-shot run
+  completed against `casperhansen/mixtral-instruct-awq` via `GCSGWorker`.
+- Baseline recorded: 72.3% (412/570) — hook-only mode, shadow pool not
+  loaded.
+- `tests/test_scheduler.py::test_quality_degradation_under_2pct`'s skip
+  reason updated to point at issue #10 specifically, not a generic
+  Sprint-3 TODO — the harness and baseline now exist, what's missing is
+  narrower than the test's docstring previously implied.
+
+Next: close issue #10 (third `_load_shadow_pool()` path for Marlin-packed
+`FusedMoE`), rerun `eval_mmlu_gcsg.py` with shadow execution actually
+firing, compare against this session's 72.3% baseline for the real
+`<2%` degradation check. Also worth revisiting `max_model_len`/
+`gpu_memory_utilization` balance before the next large batched eval run,
+given how close this one cut it against its own watchdog.
+
+---
+
+## 2026-08-09 — Oskarshamn, continued: GCSGWorker GREEN on real Mixtral — new shadow-pool gap found
+
+**Release:** [Oskarshamn] v0.4.0-dev — in progress. First real end-to-end
+run of `GCSGWorker` against a checkpoint that actually generates. Hook
+mechanics, request_id tracking, and contamination bookkeeping all verified
+on real routing behavior. Shadow execution itself is blocked by a new,
+distinct, pre-existing gap — not the NaN bug, already scoped as an issue.
+
+### Real run, real numbers
+
+`scripts/smoke_test_gcsg_mixtral8x7b.py`, updated to point at
+`casperhansen/mixtral-instruct-awq` (the working checkpoint from earlier
+today) with `worker_cls="scheduler.gcsg.GCSGWorker"` restored. Watchdog +
+heartbeat added since this was the first time `GCSGWorker`'s hook
+registration and shadow-pool loading ran end-to-end against a real,
+healthy checkpoint — no prior data on whether that combination hangs.
+Clean run, 87s total: 3/3 prompts generate correct, coherent text; `.gate`
+hooks fired 1056 times; real request_ids `{'0', '1', '2'}` tracked
+correctly; `GCSGGuard.stats()` shows `total_tokens_evaluated=4704`,
+`shadow_activations=0` (legitimate — real routing on this model rarely
+clears `theta_gate=0.85`, same honest-zero pattern seen on the tiny model
+two sessions ago, not a failure). Checklist 1-3: GREEN.
+
+### Shadow pool doesn't load — a gap flagged two sessions ago, never closed
+
+```
+GCSG: shadow pool non caricato ('FusedMoE' object has no attribute 'w13_weight')
+```
+
+Not new information, exactly the second gap flagged in this morning's
+first NaN-debugging entry: `quantization="awq_marlin"` restores the
+`FusedMoE` class (`hasattr(experts, "num_experts")` is `True`, so
+`_load_shadow_pool()` picks the fused/fp16 path), but the weight tensors
+on this checkpoint are Marlin-packed (`w13_qweight`/`w13_scales`/
+`w13_qzeros`), not the plain `w13_weight` fp16 the fused path reads. The
+NaN bug masked this for two sessions — no run ever got far enough to
+actually exercise it. `load_model()`'s existing catch-and-log (from the
+very first `GCSGWorker` smoke-test session) degrades cleanly to hook-only
+mode instead of crashing: hooks, request_id tracking, and contamination
+bookkeeping all still work, but `run_shadow()` never has a real expert
+callable to invoke, so `shadow_activations` and any MMLU-quality-
+degradation measurement that depends on shadow execution firing are
+blocked until a third `_load_shadow_pool()` path exists — analogous to
+`_AWQShadowExpert` (delegate to the real module instead of extracting
+weights by hand) but for `FusedMoE` with Marlin-packed tensors instead of
+a `ModuleList` of `MixtralMLP`. Logged as GitHub issue rather than fixed
+inline this session — MMLU validation proceeds in hook-only mode in the
+meantime, with the shadow-quality delta explicitly out of scope until the
+issue closes.
+
+### End of day state
+
+- `scripts/smoke_test_gcsg_mixtral8x7b.py`: points at
+  `casperhansen/mixtral-instruct-awq`, watchdog+heartbeat added, docstring
+  updated with the checkpoint-swap history.
+- `GCSGWorker` end-to-end verified on a real, healthy checkpoint: hooks,
+  request_id extraction, per-request contamination — all real, all
+  correct.
+- New, scoped gap: `_load_shadow_pool()` has no path for `FusedMoE` with
+  Marlin-packed weights — hook-only mode is a correct degradation, not a
+  crash, but shadow execution/MMLU-quality-degradation measurement is
+  blocked until it's closed.
+- Also still open, separate, checkpoint-independent: the Marlin-repacking
+  hang without `cpu_offload_gb` (found earlier today on this same
+  checkpoint) — needs its own issue too.
+
+Next: MMLU 5-shot validation harness, run in hook-only mode against the
+real checkpoint (baseline number only — shadow-contamination quality
+delta stays blocked on the Marlin-FusedMoE shadow-pool issue).
+
+---
+
+## 2026-08-09 — Oskarshamn, continued: NaN root cause found — bad checkpoint, not our stack
+
+**Release:** [Oskarshamn] v0.4.0-dev — in progress. Closes the NaN
+investigation opened earlier today. Root cause is external to this
+project: `TheBloke/Mixtral-8x7B-Instruct-v0.1-AWQ` is a known-bad
+quantization, documented since January 2024, unrelated to `GCSGWorker`,
+`cpu_offload_gb`, Marlin, or pin_memory/WSL — every OSX-PoC-side variable
+tested came back clean.
+
+### Sliced the elephant: one variable at a time, cheapest first
+
+The previous session's NaN bug had too many overlapping suspects
+(`GCSGWorker`'s hooks, `cpu_offload_gb`, the Marlin dequant kernel,
+pin_memory under WSL) to attack in one experiment. Isolated each with a
+vanilla-vLLM smoke test, no new downloads needed (checkpoint already on
+`/data/nvme`):
+
+1. **`GCSGWorker` cleared.** Same config as the original failing run
+   (`quantization="awq_marlin"`, `cpu_offload_gb=4`) but `LLM()` with no
+   `worker_cls` at all — vanilla vLLM, zero GCSG hooks. Identical NaN
+   signature: `token_ids` all `0`, `finish_reason="length"`,
+   `cumulative_logprob=nan`. GCSGWorker's `.gate` hooks and
+   `execute_model()` override play no role in the bug.
+2. **pin_memory/WSL cleared.** That run's log surfaced something new:
+   `WARNING interface.py:236 Using 'pin_memory=False' as WSL is detected.`
+   — vLLM disables pinned host memory for `cpu_offload_gb`'s CPU-side
+   buffer specifically because it detects WSL
+   (`vllm.platforms.interface.in_wsl()`), independent of the earlier,
+   unrelated confirmation that manual `torch.Tensor.pin_memory()` works
+   in-container. Hypothesis: unpinned memory corrupting the UVA transfer
+   Marlin's repacking depends on. Monkey-patched the real function
+   (`vllm.platforms.interface.in_wsl`, not `vllm.utils.is_in_wsl` — that
+   name doesn't exist in this vLLM version, checked via `hasattr()`
+   before writing the patch, since a wrong target would have been a
+   silent no-op producing a false "still NaN" result) to force
+   `pin_memory=True` and reran. Identical NaN. Cleared.
+3. **Marlin kernel cleared — but only after a wasted, informative
+   detour.** First attempt at isolating `quantization="awq"` (plain,
+   pre-Marlin `mixtral_quant.py` path) used `cpu_offload_gb=0`, carrying
+   over the assumption that weights fit in ~18.8GB like the Marlin path.
+   Wrong: plain (non-repacked) AWQ weights are **22.97GB**, over the
+   21.6GB budget (`gpu_memory_utilization=0.90 × 24GiB`) with zero margin
+   for KV-cache or activations. The run hung ~30 minutes then crashed
+   with `CUDA error: unknown error` inside the MoE forward
+   (`mixtral_quant.py:156`) — a genuine VRAM overcommit, not a data point
+   on the NaN bug. Corrected: same `quantization="awq"`, same
+   `cpu_offload_gb=4` as the Marlin runs (the only config where plain AWQ
+   loads in full — offload genuinely engaged this time, 18.95GB in VRAM,
+   ~4GB moved to host, unlike the Marlin runs where the 4GB budget was
+   configured but never actually needed). Identical NaN again. Two
+   completely different dequantization code paths, byte-identical
+   failure — Marlin cleared.
+
+### `cpu_offload_gb` — not cleared by a direct test, superseded by better evidence
+
+Every NaN reproduction so far still had `cpu_offload_gb=4` in common. The
+next planned step, Fetta 3 (`awq_marlin` + `cpu_offload_gb=0`, watchdog +
+heartbeat threads to log the exact stall phase in case it hit the same
+28-minute hang seen once before under `GCSGWorker`), was written but
+**not executed** — external research arrived first with a more direct
+answer, so this remains an open, unrun experiment rather than a cleared
+variable. Recorded honestly as "not tested" rather than folded into the
+list of cleared suspects it was never actually run against.
+
+### The real answer: this exact checkpoint is known-bad, since 2024
+
+Independently verified (not taken on trust) against
+[vllm-project/vllm#2359](https://github.com/vllm-project/vllm/issues/2359)
+(2024-01-05, filed against vLLM 0.2.7 on an A100 40G): identical symptom,
+same checkpoint —`MixtralForCausalLM`'s `hidden_states` print as NaN
+before sampling even happens. The comment thread runs through 2025 with
+multiple independent users (A100, 4×A10) hitting the same empty/NaN
+output; one links `casperhansen/mixtral-instruct-awq` as a checkpoint
+that reportedly works. HuggingFace discussion
+[#10](https://huggingface.co/TheBloke/Mixtral-8x7B-Instruct-v0.1-AWQ/discussions/10)
+on the model repo itself states plainly "this repo doesn't produce output
+with vLLM" and recommends `ybelkada/Mixtral-8x7B-Instruct-v0.1-AWQ` or
+`casperhansen/mixtral-instruct-awq` instead.
+
+Precision worth keeping: issue #2359 is **closed without a merged fix or
+maintainer-identified cause** visible in the thread — users confirm the
+bug and move to a different checkpoint, nobody points at a specific
+corrupted tensor. This is strong corroboration (exact symptom, exact
+checkpoint, reproduced independently across two years and several GPUs,
+the community has explicitly abandoned this specific quantization) — not
+a forensic proof of which value inside the safetensors file is bad. Two
+different vLLM versions (0.2.7 in the issue, 0.6.6.post1 here) and several
+different GPUs (A100, 4×A10, this session's RTX 3090) hitting the
+byte-identical failure signature is what makes "bad checkpoint" the
+better explanation than anything left in the OSX-PoC stack, not a
+citation alone.
+
+### Confirmed same day: `casperhansen/mixtral-instruct-awq` generates clean text
+
+Downloaded `casperhansen/mixtral-instruct-awq` (~23GB, ~58 minutes, same
+`/data/nvme` volume) and reran the isolation trail against it instead of
+waiting for a separate session.
+
+First attempt (`quantization="awq_marlin"`, zero `cpu_offload_gb` — the
+simplest possible vanilla config) hit a **new, distinct hang**: GPU at
+100% utilization, VRAM nearly saturated (24303/24576 MiB), 21+ minutes
+with the log never even reaching `"Loading model weights took X GB"` —
+stuck inside the AWQ→Marlin repacking step itself, before weight loading
+even reports done. Same signature as the 28-minute hang from the very
+first bug-discovery session (back when `GCSGWorker` was still in the
+loop) — but this time on a *different, community-verified-good*
+checkpoint and with zero `GCSGWorker` involvement. That rules out both
+"bad checkpoint" and "GCSGWorker" as explanations for *this* hang: it's a
+structural issue in vLLM 0.6.6.post1's Marlin repacking path on Ampere
+when it doesn't have the scratch VRAM headroom `cpu_offload_gb`
+incidentally provides, independent of which checkpoint is being loaded.
+Killed the container (`docker stop`, 21 minutes was already past the
+threshold that confirmed the pattern once before — no value in waiting
+out a second 28-minute confirmation of the same signature) rather than
+waiting through it a second time.
+
+Reran with `cpu_offload_gb=4` (the config that has loaded successfully in
+every test all session) plus the watchdog+heartbeat harness from the
+unused Fetta 3 script, repurposed here since the hang risk was real
+rather than hypothetical this time. Clean result in 87 seconds total:
+all 3 prompts produced coherent, correct text (`2+2=4`, a working
+`reverse_string` one-liner, a sensible entanglement explanation), real
+`cumulative_logprob` values (`-1.56`, `-1.11`, `-3.06` — finite, not
+`nan`), `finish_reason="length"` because `max_tokens=32` capped it, not
+because of early degenerate termination.
+
+Root cause fully confirmed, not just well-corroborated: the exact same
+stack (vLLM 0.6.6.post1, RTX 3090, `awq_marlin`, `cpu_offload_gb=4`,
+`hf_overrides={"head_dim": 128}`) that produced NaN on every single
+`TheBloke/Mixtral-8x7B-Instruct-v0.1-AWQ` test this session generates
+clean text on `casperhansen/mixtral-instruct-awq` with nothing else
+changed. `cpu_offload_gb` in isolation is still formally untested (Fetta
+3 was never run to completion on its original question), but it no
+longer matters for closing this bug — it matters for the *separate*,
+newly-found Marlin-repacking hang, which needs its own issue since it's
+real, reproducible, and checkpoint-independent.
+
+### End of day state
+
+- No code changes to `src/` this session — pure diagnosis. `scripts/
+  smoke_test_fetta1_vanilla.py`, `smoke_test_fetta2_pinmemory.py`,
+  `smoke_test_fetta2_awq_no_offload.py`, `smoke_test_fetta2_awq_with_offload.py`,
+  `smoke_test_fetta3_marlin_no_offload.py` (written, never run), and
+  `smoke_test_casperhansen_awq.py` (the final confirmation, watchdog-
+  protected after hitting the new hang) all added as the isolation trail.
+- Cleared, each with direct evidence: `GCSGWorker` (hooks/`execute_model`
+  override), pin_memory/WSL detection, Marlin dequant kernel.
+- Root cause **confirmed**: `TheBloke/Mixtral-8x7B-Instruct-v0.1-AWQ`
+  itself — same stack, different checkpoint, NaN disappears entirely.
+  `vllm-project/vllm#2359` and matching HuggingFace discussions were
+  corroborating evidence gathered before this direct confirmation, not
+  the final proof on their own.
+- New, separate, real finding: `awq_marlin` + zero `cpu_offload_gb` hangs
+  during Marlin repacking on this vLLM 0.6.6.post1 + Ampere stack,
+  independent of checkpoint identity or `GCSGWorker`. Not blocking —
+  `cpu_offload_gb=4` works fine as a load-time setting even when the
+  model doesn't strictly need the VRAM headroom — but real and worth its
+  own issue rather than quietly working around it forever.
+- Real Mixtral-8x7B-AWQ checkpoint that generates correctly, on this
+  exact hardware/software stack, persisted at
+  `/data/nvme/models/mixtral-instruct-awq`.
+
+Next session: resume the interrupted main thread on the working
+checkpoint — `GCSGWorker` + `_load_shadow_pool()`'s `_AWQShadowExpert`
+path (written two sessions ago against the bad checkpoint, structurally
+verified but never exercised end-to-end since `generate()` was garbage)
+now gets its real end-to-end run, then real MMLU validation. File an
+issue for the Marlin-repack-without-offload hang so it doesn't get
+rediscovered from scratch.
+
+---
+
+## 2026-08-09 — Oskarshamn, continued: real Mixtral-8x7B — loads, but a real NaN bug blocks generation
+
+**Release:** [Oskarshamn] v0.4.0-dev — in progress. First attempt at the
+real checkpoint this whole sprint has been building toward. Good news:
+it loads, `GCSGWorker` attaches, KV-cache blocks are real. Bad news: a
+genuine, reproducible generation-correctness bug — not a config mistake —
+blocks any actual output, and therefore blocks MMLU validation. Documented
+in detail rather than worked around, since two plausible fixes were tried
+and both failed with hard evidence.
+
+### The download and the first real surprise
+
+Downloaded `TheBloke/Mixtral-8x7B-Instruct-v0.1-AWQ` (~25 GB, ~58 minutes)
+to the persistent `/data/nvme` volume. First load attempt
+(`quantization="awq"`, `cpu_offload_gb=4`) succeeded on the checklist items
+that mattered most: weights loaded (18.95 GiB — smaller than the 22.96 GiB
+raw file size, AWQ's on-disk format isn't 1:1 with VRAM footprint), 670 real
+KV-cache blocks, `GCSGWorker` attached cleanly. But `_load_shadow_pool()`
+failed: `'ModuleList' object has no attribute 'num_experts'`. The tiny
+model's `block_sparse_moe.experts` is a `FusedMoE` (verified last session);
+the real AWQ checkpoint's is a plain `ModuleList` of `MixtralMLP` modules —
+a completely different vLLM model class (`mixtral_quant.py`, not
+`mixtral.py`) for this quantization path. `_load_shadow_pool()`, written and
+verified only against the tiny model, didn't generalize.
+
+Checked whether `quantization="awq_marlin"` (mentioned in vLLM's own log
+output as the faster alternative) restores the familiar `FusedMoE`
+structure before writing new code for the `ModuleList` case — it does
+(`num_experts` attribute present again) — but the weight *tensors*
+themselves are Marlin-packed (`w13_qweight`/`w13_scales`/`w13_qzeros`), not
+the plain `w13_weight` fp16 the existing extraction code reads. Structure
+fixed, format not — a second, distinct gap.
+
+### The real bug: not a config mistake, a NaN
+
+`generate()` returned empty strings on all prompts, on both quantization
+paths. First hypothesis — Instruct model needs `[INST] ... [/INST]`
+wrapping — didn't hold: same empty output with the correct chat format.
+Added token-level debug output rather than guessing further:
+
+```
+token_ids: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+finish_reason: length          # ran the full requested length, not an early stop
+cumulative_logprob: None       # vLLM aborts logprob computation on non-finite values
+```
+
+Token 0 decodes to `<unk>`, repeated for the entire generation, with
+`finish_reason="length"` (not `"stop"`) — this is the signature of NaN
+logits: `argmax` over non-finite values commonly degenerates to index 0,
+and once corrupted the KV-cache propagates it through the whole sequence.
+
+Two specific hypotheses, each checked with hard evidence before being
+ruled out — not shrugged off:
+- **Leftover `head_dim=32` override from the tiny-model script?** No —
+  `grep -rn hf_overrides scripts/` confirmed the real-model script already
+  had `head_dim: 128` (the mathematically correct value, `4096 // 32`).
+- **FlashAttention producing NaN on Ampere, same as the tiny model's
+  earlier `cu_seqlens_q` crash?** No — forcing `VLLM_ATTENTION_BACKEND=
+  XFORMERS` (confirmed active via the log line) produced the *exact same*
+  `(0, 0, 0, ...)` output. Byte-identical failure across two different
+  attention backends rules out attention as the cause.
+
+### `cpu_offload_gb` removal: reproducibly hangs, not isolated
+
+The one variable both NaN tests held constant was `cpu_offload_gb=4`.
+Removing it to test in isolation hit a different, also-real problem:
+without offload, the run hangs after weight loading — GPU at 100%
+utilization, VRAM pinned near the ceiling (24240/24576 MiB observed),
+no progress for 28 minutes before being killed. Retried at
+`gpu_memory_utilization=0.95` (deliberately *higher* than the 0.90 that
+hung, not lower as first suggested — the math doesn't work in the "lower
+utilization" direction: weights alone are 18.83 GiB, so 0.80×24GiB=19.2GiB
+would leave only 0.37 GiB for everything else, tighter than the setting
+that already hung). Same hang pattern reproduced within the first minute;
+killed deliberately rather than waiting through another 25+ minutes,
+since the pattern was already confirmed once. Whether `cpu_offload_gb`
+itself is the source of the NaN, or just happens to be the only
+configuration under which loading completes at all, is still open —
+genuinely not isolated, not glossed over as isolated.
+
+### Applied the shadow-pool structural fix anyway — it's correct independent of the NaN bug
+
+The `ModuleList`-of-`MixtralMLP` gap from the very first load attempt has
+nothing to do with the NaN bug (shadow pool loading happens after the main
+model loads, and `run_shadow()` only executes when `should_activate_shadow()`
+passes — neither touches whatever's producing garbage in the main forward
+pass). Fixed it properly rather than leaving it broken alongside the
+separate NaN issue: `_load_shadow_pool()` now dispatches on
+`hasattr(experts, "num_experts")` — `FusedMoE` path unchanged
+(`_ShadowExpertINT4`, weight extraction + simulated INT4 quantization,
+verified again on the tiny model, byte-identical results to the previous
+session), `ModuleList` path new (`_AWQShadowExpert`, delegates straight to
+the real quantized `MixtralMLP` module instead of extracting/dequantizing
+weights by hand — the real AWQ kernels already work, no reason to
+reimplement dequantization for weights that are already correctly
+quantized). Verified structurally via introspection on the real model
+(module types, parameter names/shapes) and confirmed no regression on the
+tiny model (identical smoke-test output to the pre-fix version: 56 tokens
+evaluated, same shadow-expert forward values) — NOT yet exercised
+end-to-end on the real model, since `generate()` there is still producing
+NaN garbage regardless of which shadow-pool path loads.
+
+### End of day state
+
+- `src/scheduler/gcsg.py`: `_load_shadow_pool()` handles both `FusedMoE`
+  (unquantized/tiny model) and `ModuleList`-of-`MixtralMLP` (AWQ
+  pre-quantized real model) expert structures; new `_AWQShadowExpert` class
+- `scripts/smoke_test_gcsg_mixtral8x7b.py`: new — loads the real checkpoint,
+  checks the KV-cache-blocks-first checklist, currently blocked from
+  completing the "does it generate sane text" check by the NaN bug
+- Real checkpoint downloaded and persisted at
+  `/data/nvme/models/Mixtral-8x7B-Instruct-v0.1-AWQ` (survives container
+  restarts, the named volume)
+- Full unit suite: 79 passed, 3 skipped, no regressions from the
+  shadow-pool dispatch change
+- The NaN bug is real, reproducible, and NOT worked around — two specific
+  hypotheses (head_dim leftover, FlashAttention) ruled out with direct
+  evidence rather than assumed fixed
+
+Next session: isolate the NaN's real cause before attempting MMLU. Two
+threads worth pulling, in rough order of cost: (1) check whether the
+checkpoint itself is sound — try a different community AWQ quantization of
+the same base model, or verify this exact checkpoint loads and generates
+correctly on a reference setup outside this project's stack, to rule out a
+bad quantization; (2) if the checkpoint is fine, the remaining suspects are
+`cpu_offload_gb`'s interaction with AWQ/Marlin dequantization specifically,
+or something in this exact vLLM 0.6.6.post1 + RTX 3090 (Ampere) + Marlin
+kernel combination — narrower and more vLLM-internals-specific than
+anything ruled out so far. The `cpu_offload_gb`-removal hang also still
+needs a real resolution (not just "avoid it") if it turns out offload isn't
+actually the NaN's cause and is needed for VRAM reasons regardless.
+
+---
+
 ## 2026-08-09 — Oskarshamn, continued: real shadow execution — `_load_shadow_pool()` and router wiring implemented
 
 **Release:** [Oskarshamn] v0.4.0-dev — in progress. Every method in

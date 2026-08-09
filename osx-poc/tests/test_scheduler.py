@@ -261,7 +261,13 @@ class TestGCSG:
 
     def test_quality_degradation_under_2pct(self):
         """Perplexity degradazione < 2% con θ_contamination=5% — MMLU-5shot."""
-        pytest.skip("TODO Sprint 3 — richiede vLLM integration + MMLU dataset")
+        pytest.skip(
+            "Harness e baseline esistono (scripts/eval_mmlu_gcsg.py, 72.3% "
+            "su 570 domande, 2026-08-09) — bloccato su GitHub issue #10 "
+            "(_load_shadow_pool() non gestisce FusedMoE Marlin-packed, "
+            "shadow execution non parte). Riabilitare dopo il fix, "
+            "confrontando contro la baseline registrata in LOGBOOK."
+        )
 
     def test_contamination_flag_propagated_to_kvcache(self):
         pytest.skip("TODO Sprint 3 — richiede PagedAttention patch")
