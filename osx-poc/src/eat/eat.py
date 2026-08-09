@@ -10,7 +10,6 @@ Latenza target:
 """
 from __future__ import annotations
 import threading
-import time
 from typing import Dict, Iterator, Optional, Tuple
 
 from .bloom import BloomFilter
@@ -25,15 +24,23 @@ class ExpertAccessTable:
     """Thread-safe Expert Access Table con Bloom filter 2-livelli.
 
     Args:
-        capacity:   Capacità Bloom (default: 256 expert × 64 shard = 16 384).
-        n_slots:    Numero di slot Slab Allocator.
+        capacity:           Capacità Bloom (default: 256 expert × 64 shard = 16 384).
+        n_slots:            Numero di slot Slab Allocator.
+        bloom_rebuild_every: Numero di eviction tra un rebuild del Bloom filter
+                             e il successivo (vedi evict() / GitHub issue #4).
+                             Più basso = falsi positivi da entry evicted limitati
+                             più strettamente, a costo di rebuild più frequenti
+                             (O(len(_table)) ciascuno); più alto = il contrario.
     """
 
-    def __init__(self, capacity: int = 16_384, n_slots: int = 4) -> None:
+    def __init__(self, capacity: int = 16_384, n_slots: int = 4,
+                 bloom_rebuild_every: int = 1000) -> None:
         self._bloom  = BloomFilter(capacity=capacity)
         self._slab   = SlabAllocator(n_slots=n_slots)
         self._table: Dict[_Key, EATEntry] = {}
         self._lock   = threading.RLock()
+        self._bloom_rebuild_every = bloom_rebuild_every
+        self._evictions_since_rebuild = 0
 
     # ── CRUD ───────────────────────────────────────────────────────────────────
 
@@ -90,11 +97,19 @@ class ExpertAccessTable:
     def evict(self, expert_id: ExpertID, shard_idx: ShardID) -> Optional[EATEntry]:
         """Rimuove uno shard dalla EAT (eviction dal Tier Manager).
 
-        NOTE: il Bloom filter non supporta cancellazione — la entry rimane
-        nel BF come falso positivo fino al prossimo rebuild.
+        Il Bloom filter non supporta la cancellazione di una singola entry —
+        resta un falso positivo nel BF finché non scatta il rebuild periodico
+        (ogni bloom_rebuild_every eviction, GitHub issue #4), che lo ricostruisce
+        da zero a partire dalle chiavi ancora presenti in _table.
         """
         with self._lock:
-            return self._table.pop((expert_id, shard_idx), None)
+            entry = self._table.pop((expert_id, shard_idx), None)
+            if entry is not None:
+                self._evictions_since_rebuild += 1
+                if self._evictions_since_rebuild >= self._bloom_rebuild_every:
+                    self._bloom.rebuild(self._table.keys())
+                    self._evictions_since_rebuild = 0
+            return entry
 
     def access(self, expert_id: ExpertID, shard_idx: ShardID) -> Optional[EATEntry]:
         """Registra un accesso (touch) e restituisce la entry aggiornata."""
@@ -154,4 +169,5 @@ class ExpertAccessTable:
                 "total_entries": len(self._table),
                 "by_tier": by_tier,
                 "bloom_shard_count": len(self._bloom),
+                "bloom_evictions_since_rebuild": self._evictions_since_rebuild,
             }

@@ -40,6 +40,28 @@ class TestBloomFilter:
         fp_rate = false_positives / 10_000
         assert fp_rate < 0.02  # 1% target + margine per varianza statistica
 
+    def test_rebuild_drops_entries_not_in_pairs(self):
+        """rebuild() ricostruisce da zero — entry non ripassate spariscono dal BF."""
+        bf = BloomFilter(capacity=1000)
+        bf.add(expert_id=0, shard_idx=0)
+        bf.add(expert_id=1, shard_idx=0)
+        assert bf.may_contain_shard(0, 0) is True
+        assert bf.may_contain_shard(1, 0) is True
+
+        bf.rebuild(pairs=[(1, 0)])  # solo l'expert 1 sopravvive
+
+        assert bf.may_contain_shard(0, 0) is False
+        assert bf.may_contain_shard(1, 0) is True
+
+    def test_rebuild_empty_pairs_clears_filter(self):
+        bf = BloomFilter(capacity=1000)
+        bf.add(expert_id=0, shard_idx=0)
+
+        bf.rebuild(pairs=[])
+
+        assert bf.may_contain_shard(0, 0) is False
+        assert len(bf) == 0
+
 
 # ── SlabAllocator ──────────────────────────────────────────────────────────────
 
@@ -138,6 +160,42 @@ class TestEAT:
 
     def test_evict_missing_returns_none(self, eat):
         assert eat.evict(expert_id=0, shard_idx=0) is None
+
+    def test_evict_leaves_bloom_false_positive_until_rebuild(self):
+        """Prima del rebuild periodico l'entry evicted resta un falso positivo nel
+        Bloom filter (comportamento noto e accettato, GitHub issue #4) — dopo il
+        rebuild sparisce."""
+        eat = ExpertAccessTable(capacity=1000, n_slots=4, bloom_rebuild_every=3)
+        eat.insert(expert_id=0, shard_idx=0)
+        eat.evict(expert_id=0, shard_idx=0)
+
+        # sotto la soglia di rebuild: il BF non è ancora stato ricostruito
+        assert eat._bloom.may_contain_shard(0, 0) is True
+        assert eat.stats()["bloom_evictions_since_rebuild"] == 1
+
+    def test_evict_triggers_periodic_bloom_rebuild(self):
+        eat = ExpertAccessTable(capacity=1000, n_slots=4, bloom_rebuild_every=3)
+        for shard_idx in range(3):
+            eat.insert(expert_id=0, shard_idx=shard_idx)
+        for shard_idx in range(3):
+            eat.evict(expert_id=0, shard_idx=shard_idx)  # 3a eviction fa scattare il rebuild
+
+        assert eat.stats()["bloom_evictions_since_rebuild"] == 0
+        for shard_idx in range(3):
+            assert eat._bloom.may_contain_shard(0, shard_idx) is False
+
+    def test_evict_rebuild_keeps_still_present_shards(self):
+        """Il rebuild ricostruisce dalle chiavi correnti — gli shard non evicted
+        restano trovabili via Bloom filter dopo il rebuild."""
+        eat = ExpertAccessTable(capacity=1000, n_slots=4, bloom_rebuild_every=1)
+        eat.insert(expert_id=0, shard_idx=0)
+        eat.insert(expert_id=1, shard_idx=0)
+
+        eat.evict(expert_id=0, shard_idx=0)  # rebuild_every=1: rebuild immediato
+
+        assert eat._bloom.may_contain_shard(0, 0) is False
+        assert eat._bloom.may_contain_shard(1, 0) is True
+        assert eat.lookup(expert_id=1, shard_idx=0) is not None
 
     def test_access_increments_count(self, eat):
         eat.insert(expert_id=0, shard_idx=0)

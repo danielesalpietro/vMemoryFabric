@@ -11,6 +11,7 @@ TODO (Sprint 1): sostituire con implementazione custom numpy
       se pybloom non raggiunge il target di latenza.
 """
 from __future__ import annotations
+from collections.abc import Iterable
 from pybloom_live import BloomFilter as _BF
 
 
@@ -23,6 +24,8 @@ class BloomFilter:
             capacity:   Numero massimo di elementi attesi (default: 256 expert × 64 shard).
             error_rate: False positive rate target per livello.
         """
+        self._capacity = capacity
+        self._error_rate = error_rate
         self._expert_bf: _BF = _BF(capacity=capacity, error_rate=error_rate)
         self._shard_bf:  _BF = _BF(capacity=capacity, error_rate=error_rate)
 
@@ -33,14 +36,20 @@ class BloomFilter:
         self._expert_bf.add(f"e:{expert_id}")
         self._shard_bf.add(f"s:{expert_id}:{shard_idx}")
 
-    def remove_expert(self, expert_id: int) -> None:
-        """Marca expert come non presente (bloom non supporta delete — richiede rebuild).
+    def rebuild(self, pairs: Iterable[tuple[int, int]]) -> None:
+        """Ricostruisce entrambi i livelli da zero a partire dalle entry passate.
 
-        NOTE: BloomFilter standard non supporta cancellazione. Questa firma è
-        definita per chiarezza dell'interfaccia; l'implementazione reale richiederà
-        un Counting Bloom Filter o un rebuild periodico.
+        Il Bloom filter standard non supporta la cancellazione di una singola
+        entry (GitHub issue #4) — questo è il meccanismo scelto per evitare che
+        i falsi positivi da entry evicted si accumulino indefinitamente:
+        ExpertAccessTable la chiama periodicamente passando le chiavi correnti
+        della sua tabella (le sole ancora davvero presenti), non ad ogni
+        singola eviction.
         """
-        raise NotImplementedError("TODO Sprint 1 — valutare Counting BF")
+        self._expert_bf = _BF(capacity=self._capacity, error_rate=self._error_rate)
+        self._shard_bf = _BF(capacity=self._capacity, error_rate=self._error_rate)
+        for expert_id, shard_idx in pairs:
+            self.add(expert_id, shard_idx)
 
     # ── read ───────────────────────────────────────────────────────────────────
 
