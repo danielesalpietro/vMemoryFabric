@@ -14,8 +14,8 @@ Exit code: 0 se tutti i check passano, 1 se almeno uno fallisce.
 import sys
 import time
 import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, List, Tuple
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -77,7 +77,7 @@ def check_cuda() -> bool:
             if "3090" not in name and i == 0:
                 _warn(f"GPU 0 attesa: RTX 3090 — trovata: {name}")
         return True
-    except Exception as e:
+    except Exception:
         _fail("Errore check CUDA", traceback.format_exc())
         return False
 
@@ -96,7 +96,7 @@ def check_vram_24gb() -> bool:
         else:
             _fail(f"VRAM device 0: {vram_gb:.1f} GB — atteso ≥ 22 GB")
             return False
-    except Exception as e:
+    except Exception:
         _fail("Errore check VRAM", traceback.format_exc())
         return False
 
@@ -117,7 +117,7 @@ def check_cuda_tensor_roundtrip() -> bool:
         if latency_ms > 100:
             _warn("Latenza > 100 ms — possibile overhead senza pinned memory (atteso su Docker/Windows)")
         return True
-    except Exception as e:
+    except Exception:
         _fail("Errore tensor roundtrip", traceback.format_exc())
         return False
 
@@ -175,8 +175,9 @@ def check_onnxruntime() -> bool:
 
 def check_prometheus_client() -> bool:
     try:
-        import prometheus_client
         from importlib.metadata import version
+
+        import prometheus_client  # noqa: F401 — import verifica disponibilità pacchetto
         _pass(f"prometheus_client {version('prometheus_client')}")
         return True
     except ImportError as e:
@@ -186,8 +187,9 @@ def check_prometheus_client() -> bool:
 
 def check_aiofiles() -> bool:
     try:
-        import aiofiles
         from importlib.metadata import version
+
+        import aiofiles  # noqa: F401 — import verifica disponibilità pacchetto
         _pass(f"aiofiles {version('aiofiles')} (proxy io_uring)")
         return True
     except ImportError as e:
@@ -198,10 +200,12 @@ def check_aiofiles() -> bool:
 def check_osx_src_importable() -> bool:
     """Verifica che il package src/ sia importabile (PYTHONPATH=/workspace/src)."""
     try:
-        from eat.types import Tier, EATEntry
-        from eat.eat import ExpertAccessTable
-        from tier.manager import TierManager
-        from scheduler.ptpep import PTPEPClassifier
+        from eat.eat import (
+            ExpertAccessTable,  # noqa: F401 — import verifica disponibilità pacchetto
+        )
+        from eat.types import EATEntry, Tier  # noqa: F401
+        from scheduler.ptpep import PTPEPClassifier  # noqa: F401
+        from tier.manager import TierManager  # noqa: F401
         _pass("src/ packages importabili (eat, tier, scheduler)")
         return True
     except ImportError as e:
@@ -241,7 +245,7 @@ def main() -> int:
     print("  Setup: Docker/Windows · RTX 3090 · Single GPU")
     print("=" * 60)
 
-    checks: List[Tuple[str, Callable[[], bool]]] = [
+    checks: list[tuple[str, Callable[[], bool]]] = [
         ("Python version",          check_python_version),
         ("PyTorch",                 check_torch),
         ("CUDA availability",       check_cuda),
@@ -257,7 +261,7 @@ def main() -> int:
         ("Pinned memory (info)",    check_pinned_memory_absent),
     ]
 
-    results: List[Tuple[str, bool]] = []
+    results: list[tuple[str, bool]] = []
     for name, fn in checks:
         _section(name)
         try:
@@ -274,7 +278,7 @@ def main() -> int:
     print("\n" + "=" * 60)
     print(f"  Riepilogo: {GREEN}{passed} PASS{RESET}  {RED}{failed} FAIL{RESET}")
     if failed > 0:
-        print(f"\n  Check falliti:")
+        print("\n  Check falliti:")
         for name, ok in results:
             if not ok:
                 print(f"    {RED}✗{RESET} {name}")

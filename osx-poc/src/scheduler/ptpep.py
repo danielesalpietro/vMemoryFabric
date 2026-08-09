@@ -19,9 +19,9 @@ Training (Sprint 3):
     Fine-tuning: BERT-small (HuggingFace) → ONNX export.
 """
 from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
 
 
 class DomainLabel(str, Enum):
@@ -41,9 +41,9 @@ class PTPEPPrediction:
     """Output di una singola inferenza PT-PEP."""
     domain:      DomainLabel
     confidence:  float                     # P(domain | prompt) per il top-1
-    all_scores:  Dict[DomainLabel, float]  # distribuzione completa
+    all_scores:  dict[DomainLabel, float]  # distribuzione completa
     latency_ms:  float                     # latenza inferenza effettiva
-    expert_ids:  List[int]                 # expert IDs predetti per il dominio
+    expert_ids:  list[int]                 # expert IDs predetti per il dominio
 
 
 class PTPEPClassifier:
@@ -57,8 +57,8 @@ class PTPEPClassifier:
 
     def __init__(
         self,
-        model_path: Optional[str] = None,
-        expert_map: Optional[Dict[DomainLabel, List[int]]] = None,
+        model_path: str | None = None,
+        expert_map: dict[DomainLabel, list[int]] | None = None,
         confidence_th: float = 0.6,
     ) -> None:
         self._model_path    = model_path
@@ -96,7 +96,7 @@ class PTPEPClassifier:
         """
         raise NotImplementedError("TODO Sprint 3")
 
-    def predict_batch(self, prompts: List[str]) -> List[PTPEPPrediction]:
+    def predict_batch(self, prompts: list[str]) -> list[PTPEPPrediction]:
         """Batch inference per throughput elevato (batch_size configurabile)."""
         raise NotImplementedError("TODO Sprint 3")
 

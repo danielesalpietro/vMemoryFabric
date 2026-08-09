@@ -10,14 +10,11 @@ Target latenza NVMe → DDR4 (256 MB shard):
     Prod target: < 50 ms (con io_uring su Linux)
 """
 from __future__ import annotations
-import asyncio
-import os
-from pathlib import Path
-from typing import Optional
-import aiofiles
-import numpy as np
 
-from eat.types import ExpertID, ShardID, SHARD_SIZE_MB
+from pathlib import Path
+
+import numpy as np
+from eat.types import SHARD_SIZE_MB, ExpertID, ShardID
 
 SHARD_SIZE_BYTES = SHARD_SIZE_MB * 1024 * 1024
 
@@ -41,7 +38,7 @@ class AsyncNVMeIO:
     # ── read (NVMe → buffer DDR4) ──────────────────────────────────────────────
 
     async def read_shard(self, expert_id: ExpertID, shard_idx: ShardID,
-                         out: Optional[np.ndarray] = None) -> np.ndarray:
+                         out: np.ndarray | None = None) -> np.ndarray:
         """Legge uno shard da NVMe in un buffer numpy DDR4.
 
         Args:

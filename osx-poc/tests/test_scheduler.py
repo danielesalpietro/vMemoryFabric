@@ -2,13 +2,10 @@
 
 Coverage target: > 90%.
 """
+
 import pytest
-from unittest.mock import MagicMock
-
-from scheduler import PTPEPClassifier, DomainLabel, GCSGGuard, AERManager
-from scheduler.ptpep import PTPEPPrediction
-from scheduler.gcsg import GatingContext, ShadowExecutionResult
-
+from scheduler import AERManager, GCSGGuard, PTPEPClassifier
+from scheduler.gcsg import GatingContext
 
 # ── PTPEPClassifier ────────────────────────────────────────────────────────────
 

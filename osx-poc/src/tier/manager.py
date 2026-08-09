@@ -9,15 +9,15 @@ Interfacce verso altri moduli:
     → Metrics: esposizione latenza promozione, hit rate, tier distribution
 """
 from __future__ import annotations
-import asyncio
-import logging
-from typing import List, Optional
 
-from eat.types import ExpertID, ShardID, Tier
+import logging
+
 from eat.eat import ExpertAccessTable
-from .io import AsyncNVMeIO
+from eat.types import ExpertID, ShardID, Tier
+
 from .gpu import GPUTransfer
-from .policies import SEEPolicy, LRUPolicy, EvictionCandidate
+from .io import AsyncNVMeIO
+from .policies import EvictionCandidate, LRUPolicy, SEEPolicy
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ class TierManager:
         raise NotImplementedError("TODO Sprint 2")
 
     async def evict_to_free_vram(self, target_free_bytes: int,
-                                 context_vec: Optional[list[float]] = None) -> List[EvictionCandidate]:
+                                 context_vec: list[float] | None = None) -> list[EvictionCandidate]:
         """Evict automatico da VRAM fino a liberare target_free_bytes.
 
         Usa SEE policy (o LRU fallback) per selezionare i candidati.
@@ -108,7 +108,7 @@ class TierManager:
 
     # ── prefetch ───────────────────────────────────────────────────────────────
 
-    async def prefetch(self, prefetch_queue: List[tuple[ExpertID, ShardID]]) -> None:
+    async def prefetch(self, prefetch_queue: list[tuple[ExpertID, ShardID]]) -> None:
         """Prefetch asincrono di una lista di shard verso VRAM.
 
         Chiamato da Expert Scheduler (M3) con la prefetch_queue PT-PEP.

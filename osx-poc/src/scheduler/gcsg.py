@@ -22,16 +22,16 @@ Vincolo dev (single GPU 3090 24 GB):
 Hook vLLM: monkey-patch su _run_workers() post-gating, pre-expert-execution.
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+
 import time
+from dataclasses import dataclass, field
 
 
 @dataclass
 class GatingContext:
     """Contesto gating per un singolo token/step."""
     token_id:      int
-    gating_scores: List[float]     # score per ogni expert (len = n_experts)
+    gating_scores: list[float]     # score per ogni expert (len = n_experts)
     token_entropy: float
     timestamp:     float = field(default_factory=time.monotonic)
 
@@ -40,10 +40,10 @@ class GatingContext:
 class ShadowExecutionResult:
     """Risultato di una shadow execution."""
     activated:          bool           # shadow execution eseguita?
-    shadow_expert_id:   Optional[int]  # expert INT4 usato
+    shadow_expert_id:   int | None  # expert INT4 usato
     contamination_flag: bool           # questo token è "shadow-contaminated"?
     latency_ms:         float          # overhead shadow execution
-    reason_skip:        Optional[str]  # perché shadow non attivata (debug)
+    reason_skip:        str | None  # perché shadow non attivata (debug)
 
 
 class GCSGGuard:
@@ -79,7 +79,7 @@ class GCSGGuard:
         raise NotImplementedError("TODO Sprint 3")
 
     def run_shadow(self, ctx: GatingContext,
-                   shadow_pool: Dict[int, object]) -> ShadowExecutionResult:
+                   shadow_pool: dict[int, object]) -> ShadowExecutionResult:
         """Esegue shadow execution con expert INT4 dal shadow_pool.
 
         Args:
@@ -103,9 +103,9 @@ class GCSGGuard:
 
     # ── calibration ────────────────────────────────────────────────────────────
 
-    def update_thresholds(self, theta_gate: Optional[float] = None,
-                          theta_entropy: Optional[float] = None,
-                          theta_contamination: Optional[float] = None) -> None:
+    def update_thresholds(self, theta_gate: float | None = None,
+                          theta_entropy: float | None = None,
+                          theta_contamination: float | None = None) -> None:
         """Aggiorna le soglie a runtime (grid search Sprint 3)."""
         raise NotImplementedError("TODO Sprint 3")
 
