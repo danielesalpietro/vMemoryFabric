@@ -260,48 +260,135 @@ class TestGCSG:
         assert stats["thresholds"]["theta_gate"] == 0.85
         assert stats["shadow_pool_size"] == gcsg.shadow_pool_size
 
-    def test_load_shadow_pool_never_populates_awq_moduleslist_path(self):
-        """Stopgap 2026-08-10 (gcsg.py::_load_shadow_pool): chiamare un
-        MixtralMLP direttamente — cioè esattamente cosa fa
-        _AWQShadowExpert.__call__(), fuori dal forward sequenziale del
-        modello — produce CUDA illegal memory access sul checkpoint reale
-        quando l'expert chiamato è offloaded su CPU (cpu_offload_gb=4,
-        l'unica config in cui il checkpoint reale sta in VRAM). Indagine in
-        corso (pin_memory/WSL implicato, non ancora un fix verificato) —
-        finché non lo è, _load_shadow_pool() non deve MAI registrare un
-        _AWQShadowExpert nello shadow_pool, incondizionatamente (non solo
-        quando cpu_offload_gb>0).
+    @staticmethod
+    def _fake_awq_moduleslist_layers(num_layers, num_experts, to_succeeds):
+        """Fabbrica layer fake per il path 3 (ModuleList AWQ) — expert.to('cuda')
+        e expert.parameters() sono gli unici due metodi che
+        _pin_awq_expert_to_gpu() chiama, quindi un fake minimale basta senza
+        bisogno di torch/CUDA reali."""
+        class _FakeParam:
+            def __init__(self, device_type):
+                self.device = SimpleNamespace(type=device_type)
 
-        Bypassa GCSGWorker.__init__() (importa vllm.worker.worker.Worker
-        reale) con __new__ + attributi assegnati a mano — stesso principio
-        per cui gcsg.py resta importabile senza vLLM installato (vedi
-        docstring di modulo): _load_shadow_pool() stesso non fa alcun
-        import vllm, tocca solo self._base.model_runner.model per duck
-        typing, quindi un fake minimale basta, senza bisogno di un engine
-        vLLM live.
-        """
+        class _FakeExpertModule:
+            def __init__(self):
+                self._device_type = "cpu"   # parte offloaded, come nel checkpoint reale
+
+            def parameters(self):
+                yield _FakeParam(self._device_type)
+
+            def to(self, device):
+                if not to_succeeds:
+                    raise RuntimeError("simulated pinning failure")
+                self._device_type = "cuda"
+                return self
+
         class _FakeExperts(list):
             pass   # is_fused = hasattr(experts, "num_experts") -> False per una lista piatta
 
-        num_layers, num_experts = 2, 8
-        layers = [
+        return [
             SimpleNamespace(
                 block_sparse_moe=SimpleNamespace(
-                    experts=_FakeExperts(object() for _ in range(num_experts)),
+                    experts=_FakeExperts(_FakeExpertModule() for _ in range(num_experts)),
                 ),
             )
             for _ in range(num_layers)
         ]
+
+    def _make_worker(self, layers, shadow_pool_size):
         worker = GCSGWorker.__new__(GCSGWorker)
         worker._base = SimpleNamespace(
             model_runner=SimpleNamespace(model=SimpleNamespace(model=SimpleNamespace(layers=layers))),
         )
-        worker.guard = GCSGGuard(shadow_pool_size=4)
+        worker.guard = GCSGGuard(shadow_pool_size=shadow_pool_size)
         worker._shadow_pool = {}
+        return worker
+
+    def test_load_shadow_pool_pins_awq_experts_to_gpu_when_possible(self):
+        """Fix 2026-08-10 (issue #16): _load_shadow_pool() ora prova a
+        pinnare esplicitamente in GPU (copia sincrona reale, non il
+        .to(..., non_blocking=True) di vLLM — vedi
+        GCSGWorker._pin_awq_expert_to_gpu) gli expert AWQ ModuleList offloaded,
+        invece di escluderli incondizionatamente come nello stopgap
+        precedente. Se il pinning riesce su tutte le layer, l'expert_id entra
+        nel pool.
+
+        Bypassa GCSGWorker.__init__() (importa vllm.worker.worker.Worker
+        reale) con __new__ + attributi assegnati a mano — stesso principio
+        per cui gcsg.py resta importabile senza vLLM installato: _load_shadow
+        _pool()/_pin_awq_expert_to_gpu() non fanno alcun import vllm, toccano
+        solo duck-typing su self._base.model_runner.model ed expert.to()/
+        .parameters(), quindi un fake minimale basta.
+        """
+        layers = self._fake_awq_moduleslist_layers(num_layers=2, num_experts=8, to_succeeds=True)
+        worker = self._make_worker(layers, shadow_pool_size=2)
 
         worker._load_shadow_pool()
 
+        assert set(worker._shadow_pool.keys()) == {0, 1}
+        for layer in layers:
+            for expert_id in (0, 1):
+                assert layer.block_sparse_moe.experts[expert_id]._device_type == "cuda"
+
+    def test_load_shadow_pool_excludes_awq_expert_when_pinning_fails(self):
+        """Se il pinning GPU fallisce (es. .to('cuda') solleva — VRAM
+        insufficiente, o qualunque altro errore reale), l'expert_id resta
+        fuori dal pool invece di propagare l'eccezione — stesso principio di
+        degradazione sicura già usato per il resto di _load_shadow_pool()
+        (try/except in load_model(), vedi la sua docstring): hook-only per
+        quell'expert_id, non un worker che non si avvia."""
+        layers = self._fake_awq_moduleslist_layers(num_layers=2, num_experts=8, to_succeeds=False)
+        worker = self._make_worker(layers, shadow_pool_size=2)
+
+        worker._load_shadow_pool()   # non deve sollevare
+
         assert worker._shadow_pool == {}
+
+    def test_evaluate_gcsg_for_rows_passes_2d_hidden_states_slice(self):
+        """Bug reale 2026-08-10, trovato dal primo run MMLU con shadow
+        execution davvero attiva (mai esercitato prima — la shadow execution
+        non aveva mai raggiunto questo punto finché entrambi i path erano in
+        hook-only, vedi LOGBOOK): _evaluate_gcsg_for_rows() indicizzava
+        hidden_states[row_idx] (collassa a 1D, shape (hidden_dim,)) invece di
+        hidden_states[row_idx:row_idx+1] (batch a una riga, shape
+        (1, hidden_dim)). _MarlinFusedShadowExpert costruisce router_logits
+        da hidden_states.shape[0] assumendo 2D — con input 1D usa hidden_dim
+        al posto del numero di righe, e crasha piu' a valle dentro
+        FusedMoE.select_experts() ("not enough values to unpack (expected 2,
+        got 1)"). _AWQShadowExpert/_ShadowExpertINT4 non l'avrebbero mai
+        segnalato: i loro matmul tollerano un input 1D via broadcasting,
+        sbagliato silenziosamente invece di sollevare un errore.
+
+        Verifica diretta, non solo "non crasha": lo shadow callable riceve
+        davvero un tensore 2D con dim0==1, non un tensore 1D.
+        """
+        import torch
+
+        worker = GCSGWorker.__new__(GCSGWorker)
+        worker.guard = GCSGGuard(
+            theta_gate=0.5, theta_entropy=0.9, theta_contamination=1.0,
+            shadow_pool_size=1, check_vram=False,
+        )
+        captured_shapes = []
+        worker._shadow_pool = {0: lambda hs, layer_id: captured_shapes.append(tuple(hs.shape))}
+        worker._current_row_request_ids = ["req-0", "req-1"]
+
+        # Logit fortemente piccati su expert 0 -> gating_score alto, entropy bassa,
+        # supera should_activate_shadow con le soglie sopra.
+        router_logits = torch.tensor([[10.0, -10.0, -10.0], [10.0, -10.0, -10.0]])
+        hidden_states = torch.randn(2, 4096)
+
+        worker._evaluate_gcsg_for_rows(router_logits, hidden_states, layer_id=0)
+
+        assert captured_shapes, (
+            "run_shadow non e' mai stato chiamato — should_activate_shadow "
+            "non ha superato le soglie nel setup del test"
+        )
+        for shape in captured_shapes:
+            assert len(shape) == 2 and shape[0] == 1, (
+                f"shadow callable ha ricevuto hidden_states con shape {shape}, "
+                f"atteso 2D con dim0==1 (batch a una riga)"
+            )
 
     def test_quality_degradation_under_2pct(self):
         """Perplexity degradazione < 2% con θ_contamination=5% — MMLU-5shot."""

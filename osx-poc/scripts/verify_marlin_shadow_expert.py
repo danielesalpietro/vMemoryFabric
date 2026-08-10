@@ -94,8 +94,10 @@ def main() -> None:
     outputs = {}
 
     # 1. Output finito per due expert_id diversi.
+    # Nota (2026-08-10): entry per-layer (fused, expert_id, num_experts),
+    # non (fused_list, expert_id, num_experts) uniforme — vedi gcsg.py.
     for expert_id in (0, 1):
-        shadow = _MarlinFusedShadowExpert([experts], expert_id, num_experts)
+        shadow = _MarlinFusedShadowExpert([(experts, expert_id, num_experts)])
         output = shadow(hidden_states, layer_id=0)
         torch.cuda.synchronize()
         if not torch.isfinite(output).all():
@@ -117,7 +119,7 @@ def main() -> None:
     #    davvero trascurabile, non solo "piccolo").
     fused = experts
     target_expert_id = 0
-    baseline_shadow = _MarlinFusedShadowExpert([fused], target_expert_id, num_experts)
+    baseline_shadow = _MarlinFusedShadowExpert([(fused, target_expert_id, num_experts)])
     baseline_output = baseline_shadow(hidden_states, layer_id=0)
     torch.cuda.synchronize()
 

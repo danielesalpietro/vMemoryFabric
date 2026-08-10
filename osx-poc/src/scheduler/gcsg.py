@@ -471,16 +471,81 @@ class _AWQShadowExpert:
         return self._modules[layer_id](hidden_states)
 
 
+class _PinnedMarlinExperts:
+    """Vista GPU-resident di un sottoinsieme di expert estratto da un
+    FusedMoE Marlin-packed di UN layer — copia sincrona reale (.to('cuda'),
+    non il .to(..., non_blocking=True) di vllm.model_executor.models.utils.
+    maybe_offload_to_cpu) dei soli tensori che AWQMoEMethod.apply() legge
+    da `layer`. Letto il corpo completo di apply() (vllm==0.6.6.post1)
+    prima di scrivere questa classe: la chiamata reale al kernel è
+
+        torch.ops.vllm.fused_marlin_moe(x, layer.w13_qweight,
+            layer.w2_qweight, layer.w13_scales, layer.w2_scales,
+            router_logits, topk_weights, topk_ids,
+            w1_zeros=layer.w13_qzeros, w2_zeros=layer.w2_qzeros,
+            num_bits=...)
+
+    — esattamente questi sei tensori, nessun'altra dipendenza a runtime
+    (g_idx_sort_indices è usato solo durante il repack a load-time, non qui).
+    L'asse expert (dim 0) sopravvive intatto al repack Marlin — verificato
+    2026-08-10 su casperhansen/mixtral-instruct-awq reale: shape
+    (num_experts, ...) su tutti e sei i tensori, prima e dopo
+    ops.awq_marlin_moe_repack(). Lo slicing è quindi un taglio pulito lungo
+    un asse noto e non tocca la permutazione interna del kernel (che vive
+    dentro ogni fetta per-expert, non attraverso l'asse expert) — a
+    differenza di invertire il repack stesso (direzione (a1), scartata,
+    vedi issue #10), qui non serve interpretare il formato packed.
+
+    Un solo proxy per layer copre TUTTI gli expert_ids del pool insieme
+    (non un proxy per expert_id — raddoppierebbe il costo VRAM per nulla,
+    dato che _MarlinFusedShadowExpert isola comunque un solo target per
+    chiamata via router_logits). Verificato isolatamente prima
+    dell'integrazione: scripts/verify_marlin_pinned_proxy.py confronta
+    l'output di un expert letto dal proxy (slice pinnata da un layer
+    offloaded) contro lo stesso expert letto dal tensore originale intatto
+    di un layer non-offloaded — stesso peso, due sorgenti fisiche diverse.
+
+    ATTENZIONE (2026-08-10, trovato DOPO la prima integrazione, vedi
+    LOGBOOK): _build_marlin_shadow_pool() costruisce QUESTO proxy solo per
+    le layer effettivamente offloaded — MAI per le 26/32 già GPU-resident,
+    che riusano il modulo FusedMoE originale direttamente (zero copie,
+    zero allocazioni). Il primo tentativo costruiva un proxy per TUTTE le
+    32 layer indiscriminatamente: 192 allocazioni GPU piccole invece di 36,
+    frammentazione dell'allocatore CUDA sopra un modello già quasi al
+    limite dei 24GB, e il profiling di vLLM (determine_num_available_blocks,
+    gira DOPO _load_shadow_pool()) si è bloccato cercando memoria
+    contigua — container ucciso manualmente dopo 9 minuti a GPU 100%/VRAM
+    266MB liberi, senza alcun avanzamento nel log. Non un'ipotesi:
+    osservato direttamente (nvidia-smi, log fermo). Questa classe resta
+    corretta di per sé (verificata numericamente) — il bug era nel chiamarla
+    per layer che non ne avevano bisogno.
+    """
+
+    def __init__(self, source_fused: Any, expert_ids: List[int]) -> None:
+        import torch
+
+        device = torch.device("cuda")
+
+        self.quant_method = source_fused.quant_method
+        self.top_k = source_fused.top_k
+        self.renormalize = source_fused.renormalize
+        self.use_grouped_topk = source_fused.use_grouped_topk
+        self.topk_group = source_fused.topk_group
+        self.num_expert_group = source_fused.num_expert_group
+        self.custom_routing_function = source_fused.custom_routing_function
+        self.scoring_func = source_fused.scoring_func
+        self.e_score_correction_bias = source_fused.e_score_correction_bias
+
+        for name in ("w13_qweight", "w2_qweight", "w13_scales",
+                     "w2_scales", "w13_qzeros", "w2_qzeros"):
+            source_tensor = getattr(source_fused, name).data
+            self.__dict__[name] = source_tensor[expert_ids].to(device)
+
+
 class _MarlinFusedShadowExpert:
     """Callable (hidden_states, layer_id) -> output — isola un singolo
     expert dentro un FusedMoE con pesi Marlin-packed, senza dequantizzare
     nulla a mano.
-
-    DISATTIVATA in produzione (stopgap 2026-08-09, issue #10):
-    _load_shadow_pool() non la istanzia più — invocarla crasha il kernel
-    CUDA Marlin (vedi ATTENZIONE sotto). La classe resta nel modulo per
-    scripts/verify_marlin_shadow_expert.py (repro isolato, non nel path di
-    produzione) e come punto di partenza per un fix reale.
 
     Terzo caso, distinto sia da _ShadowExpertINT4 (FusedMoE con pesi fp16
     grezzi w13_weight) sia da _AWQShadowExpert (ModuleList di MixtralMLP):
@@ -523,32 +588,45 @@ class _MarlinFusedShadowExpert:
     indistinguibile da 1.0. Stesso principio di _AWQShadowExpert (delega al
     codice reale, zero dequantizzazione manuale), ma senza toccare
     l'invariante (top_k) che si è rivelata rischiosa.
+
+    RI-ABILITATA (2026-08-10, issue #10/#16): il crash sopra non era del
+    kernel Marlin — era vllm.model_executor.models.utils.
+    maybe_offload_to_cpu() (async H2D copy non sicura sotto WSL2 senza
+    pin_memory), innescato perché questa classe chiama quant_method.apply()
+    su un `fused` i cui tensori potevano essere CPU-resident (layer
+    offloaded, cpu_offload_gb=4). _load_shadow_pool() ora garantisce che
+    ogni `fused` passato qui sia GPU-resident — un _PinnedMarlinExperts per
+    le layer offloaded, il modulo FusedMoE originale (già su GPU, zero
+    copie) per le altre — vedi GCSGWorker._build_marlin_shadow_pool().
+
+    Entry PER-LAYER, non un (expert_id, num_experts) uniforme su tutte le
+    layer (2026-08-10, secondo giro dopo un hang — vedi ATTENZIONE nella
+    docstring di _PinnedMarlinExperts): le layer offloaded usano il proxy a
+    len(expert_ids) slot con l'indice LOCALE del target; le layer
+    non-offloaded usano il modulo originale a num_experts=8 con l'ID
+    GLOBALE — due "forme" diverse per lo stesso expert_id a seconda della
+    layer, quindi (fused, expert_id, num_experts) devono viaggiare insieme
+    per ogni layer_id, non essere fissati una volta sola per l'istanza.
     """
 
     _LOGIT_HIGH = 30.0
     _LOGIT_LOW = -30.0
 
-    def __init__(
-        self,
-        fused_module_per_layer: List[Any],
-        expert_id: int,
-        num_experts: int,
-    ) -> None:
-        self._fused = fused_module_per_layer
-        self._expert_id = expert_id
-        self._num_experts = num_experts
+    def __init__(self, layer_entries: List[Tuple[Any, int, int]]) -> None:
+        """layer_entries[layer_id] = (fused, expert_id_in_fused, num_experts_in_fused)."""
+        self._layer_entries = layer_entries
 
     def __call__(self, hidden_states: Any, layer_id: int) -> Any:
         import torch
 
-        fused = self._fused[layer_id]
+        fused, expert_id, num_experts = self._layer_entries[layer_id]
         router_logits = torch.full(
-            (hidden_states.shape[0], self._num_experts),
+            (hidden_states.shape[0], num_experts),
             self._LOGIT_LOW,
             dtype=hidden_states.dtype,
             device=hidden_states.device,
         )
-        router_logits[:, self._expert_id] = self._LOGIT_HIGH
+        router_logits[:, expert_id] = self._LOGIT_HIGH
         return fused.quant_method.apply(
             layer=fused,
             x=hidden_states,
@@ -636,6 +714,11 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
     vLLM installato (es. CI cpu-tests, che non installa requirements-vllm.txt).
     """
 
+    # Tetto per captured_router_logits (osservabilità smoke-test) — vedi il
+    # commento su self.captured_router_logits in __init__ per la cronologia
+    # del bug di crescita illimitata trovato 2026-08-10.
+    _MAX_CAPTURED_ROUTER_LOGITS = 1000
+
     def __init__(self, *args, guard: Optional[GCSGGuard] = None, **kwargs) -> None:
         from vllm.worker.worker import Worker   # import locale, vedi docstring classe
         self._base = Worker(*args, **kwargs)
@@ -646,6 +729,29 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         # Osservabilità smoke-test (2026-08-09) — non usata dal path di
         # produzione, permette di verificare dall'esterno che gli hook
         # sparino davvero e che i request_id reali arrivino a execute_model().
+        #
+        # BUG REALE trovato 2026-08-10 (issue #10/#16, durante il primo run
+        # MMLU con shadow execution davvero attiva): questa lista veniva
+        # popolata INCONDIZIONATAMENTE ad ogni hook .gate (ogni layer, ogni
+        # forward pass) — un tensore GPU per hit, mai svuotata, tenuto in
+        # vita per l'intera durata del processo. Innocuo sugli smoke test
+        # (pochi token, tiny model) — mai esercitato su un carico reale
+        # finché la shadow execution non ha effettivamente funzionato su un
+        # run vero. Sul run MMLU (n=32: 506.784 token valutati) causava
+        # crescita illimitata di memoria GPU non più liberabile
+        # dall'allocatore di caching di PyTorch — sintomo osservato: run
+        # piccoli isolati (n=8/16/32) puliti, run cumulativi nello stesso
+        # processo (n=64, o blocchi consecutivi via --chunk-size nello
+        # stesso worker) che si bloccano con GPU al 15-25% (pressione di
+        # memoria/allocatore, non calcolo saturo) — non un crash immediato,
+        # una lenta frammentazione che il chunking da solo non risolve
+        # (la lista sopravvive tra le chiamate a generate() nello stesso
+        # processo). Cap a _MAX_CAPTURED_ROUTER_LOGITS: nessun consumer
+        # (scripts/smoke_test_gcsg_worker.py, scripts/
+        # smoke_test_gcsg_mixtral8x7b.py) legge altro che len() e la shape
+        # del primo elemento — comportamento identico per gli smoke test
+        # (poche decine di hit, mai vicino al tetto), crescita bloccata sui
+        # carichi reali.
         self.captured_router_logits: List[object] = []   # torch.Tensor per hit, non tipizzato qui per non importare torch al modulo
         self.seen_request_ids: set = set()
 
@@ -700,47 +806,42 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
 
         2. block_sparse_moe.experts è un FusedMoE con pesi Marlin-packed
            (w13_qweight/w13_scales/w13_qzeros — checkpoint AWQ caricato con
-           quantization="awq_marlin", verificato 2026-08-09 su
-           casperhansen/mixtral-instruct-awq reale, GitHub issue #10).
-           STOPGAP (2026-08-09): _MarlinFusedShadowExpert esiste (delega a
-           quant_method.apply() reale con top_k=1 e router_logits one-hot,
-           vedi la sua docstring per la cronologia), ma NON viene istanziato
-           qui — chiamarlo crasha il kernel CUDA Marlin (illegal memory
-           access, riprodotto con due strategie di isolamento diverse).
-           Questi expert_id restano fuori da shadow_pool: run_shadow() li
-           salta come "non presenti", degradando a hook-only per questo path
-           finché issue #10 non ha un fix verificato (dequant manuale o
-           repro single-layer con compute-sanitizer).
+           quantization="awq_marlin", GitHub issue #10). _MarlinFusedShadowExpert
+           delega a quant_method.apply() reale con router_logits one-hot —
+           vedi la sua docstring per la cronologia del crash e del fix.
 
         3. block_sparse_moe.experts è una ModuleList di MixtralMLP con pesi
            GIÀ quantizzati (AWQ qweight/qzeros/scales packed, un modulo per
            expert — verificato 2026-08-09 su Mixtral-8x7B-Instruct-v0.1-AWQ
-           con quantization="awq" semplice). Qui non c'è nulla da estrarre o
-           quantizzare: _AWQShadowExpert delega direttamente al modulo
-           reale, che dequantizza già coi kernel AWQ interni di vLLM. Il
-           "shadow" è un secondo forward sullo stesso expert, non una copia
-           INT4 separata.
+           con quantization="awq" semplice). _AWQShadowExpert delega
+           direttamente al modulo reale.
 
-           STOPGAP (2026-08-10, issue nuova — scoperta indagando issue #10
-           su un checkpoint reale, non specifica di Marlin): chiamare un
-           modulo MixtralMLP direttamente — cioè esattamente cosa fa
-           _AWQShadowExpert.__call__(), fuori dal forward sequenziale del
-           modello — produce `CUDA error: illegal memory access` sul
-           checkpoint reale (casperhansen/mixtral-instruct-awq) quando
-           quell'expert è offloaded su CPU (cpu_offload_gb=4, l'UNICA
-           configurazione in cui questo checkpoint sta in VRAM su una
-           3090 — non è opzionale). Isolato con hidden_states sia catturati
-           che sintetici (esclude un problema di lifetime del tensore), e
-           confermato assente su un expert non-offloaded stesso checkpoint/
-           config (layer 5 expert 6, device=cuda: nessun errore) — quindi
-           specifico dell'interazione offload + chiamata diretta fuori
-           sequenza, non una fragilità generale di _AWQShadowExpert in sé.
-           Non ancora root-causato (in corso: pin_memory forzato come
-           variabile). Finché non lo è, disabilitato INCONDIZIONATAMENTE
-           (non solo quando cpu_offload_gb>0): stesso principio già
-           applicato al path Marlin — hook-only resta la degradazione
-           sicura di default finché un fix non è verificato, non solo nel
-           sottocaso già riprodotto.
+        RI-ABILITATI (2026-08-10, issue #10/#16, dopo lo stopgap 2026-08-09/
+        2026-08-10): entrambi i path 2 e 3 crashavano (CUDA illegal memory
+        access) non per un bug nel kernel Marlin o in _AWQShadowExpert, ma
+        perché chiamare uno shadow expert offloaded su CPU direttamente —
+        fuori dal forward sequenziale del modello — bypassa
+        vllm.model_executor.models.utils.maybe_offload_to_cpu() (che wrappa
+        SOLO il forward dell'intera decoder layer, mai i singoli moduli
+        expert/FusedMoE — verificato empiricamente, scripts/
+        map_offload_state.py) e finisce per operare su tensori CPU-resident
+        con un kernel CUDA. Fix: prima di registrare un expert_id nel pool,
+        assicurarsi che sia GPU-resident per costruzione —
+        _pin_awq_expert_to_gpu() (path 3, sposta i moduli con una copia
+        sincrona reale) o _build_marlin_shadow_pool() (path 2, slice
+        GPU-resident via _PinnedMarlinExperts — l'asse expert sopravvive
+        intatto al repack Marlin, verificato). Se il pinning fallisce per
+        anche un solo layer, l'intero expert_id resta fuori dal pool —
+        niente pool "a metà" con alcune layer pinnate e altre no.
+
+        Costo VRAM (shadow_pool_size=2, cpu_offload_gb=4, verificato non
+        stimato): con questo checkpoint le prime 6 layer (0-5) sono
+        offloaded — layer 0-4 per intero, layer 5 parzialmente (6/8 expert,
+        con gli expert 0 e 1 del pool entrambi tra quelli offloaded).
+        Pinnare gli expert 0/1 su tutte e 6 le layer costa ≈1.02 GiB
+        aggiuntivi, sempre residenti — contro un margine KV-cache di
+        ≈1.16-1.24 GiB nella config di validazione. Tema noto, non
+        risolto qui: vedi max_num_seqs nei entrypoint di validazione.
 
         Selezione expert: placeholder round-robin (range(shadow_pool_size)),
         non guidato da carico reale — quali expert cachare in base
@@ -757,20 +858,28 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         n_experts = first_experts.num_experts if is_fused else len(first_experts)
         expert_ids = list(range(min(self.guard.shadow_pool_size, n_experts)))
 
+        if is_marlin_packed:
+            marlin_pool = self._build_marlin_shadow_pool(layers, expert_ids)
+            self._shadow_pool.update(marlin_pool)
+            missing = [e for e in expert_ids if e not in marlin_pool]
+            if missing:
+                log.warning(
+                    "GCSG: shadow pool NON caricato per %d expert Marlin-packed "
+                    "(%s) su %d layer — pinning GPU fallito (vedi warning "
+                    "precedente). Hook-only per questi expert.",
+                    len(missing), missing, len(layers),
+                )
+            if marlin_pool:
+                log.info(
+                    "GCSG: shadow pool caricato — %d expert Marlin-packed (%s) "
+                    "su %d layer, path=FusedMoE-Marlin+pinning GPU esplicito "
+                    "(issue #10/#16).",
+                    len(marlin_pool), sorted(marlin_pool), len(layers),
+                )
+            return
+
         for expert_id in expert_ids:
-            if is_marlin_packed:
-                # Stopgap (2026-08-09, issue #10): _MarlinFusedShadowExpert crasha
-                # il kernel Marlin (CUDA illegal memory access) su entrambe le
-                # strategie di isolamento tentate finora — vedi la docstring della
-                # classe. Finché non esiste un fix reale (dequant manuale o repro
-                # single-layer con compute-sanitizer), NON registrare questi expert
-                # nello shadow_pool: run_shadow() salta chiunque non sia presente nel
-                # dict (vedi "shadow_expert_id = next(... if e in shadow_pool ...)"),
-                # quindi questo degrada a hook-only per il path Marlin esattamente
-                # come un fallimento di caricamento, senza mai invocare la classe che
-                # crasha.
-                continue
-            elif is_fused:
+            if is_fused:
                 per_layer_w13 = []
                 per_layer_w2 = []
                 for layer in layers:
@@ -781,48 +890,127 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                     per_layer_w2.append(_quantize_int4(w2))
                 self._shadow_pool[expert_id] = _ShadowExpertINT4(per_layer_w13, per_layer_w2)
             else:
-                # Stopgap (2026-08-10): _AWQShadowExpert.__call__() chiama
-                # modules_per_layer[layer_id](hidden_states) direttamente, fuori
-                # dal forward sequenziale del modello — su un checkpoint reale con
-                # cpu_offload_gb=4 (l'unica config in cui questo checkpoint sta in
-                # VRAM) questo produce CUDA illegal memory access quando l'expert
-                # chiamato è offloaded su CPU. Confermato assente su un expert
-                # non-offloaded, stesso checkpoint/config — quindi non una
-                # fragilità generale di _AWQShadowExpert, ma non ancora
-                # root-causato abbastanza da restringere il guard al solo caso
-                # cpu_offload_gb>0. Disabilitato incondizionatamente finché non lo
-                # è — vedi docstring del metodo per lo stato dell'indagine.
-                continue
+                modules_per_layer = self._pin_awq_expert_to_gpu(layers, expert_id)
+                if modules_per_layer is not None:
+                    self._shadow_pool[expert_id] = _AWQShadowExpert(modules_per_layer)
+                # else: expert_id resta fuori dal pool, hook-only per lui —
+                # _pin_awq_expert_to_gpu() ha già loggato il motivo.
 
-        if is_marlin_packed:
-            log.warning(
-                "GCSG: shadow pool NON caricato per %d expert Marlin-packed (%s) "
-                "su %d layer — path non supportato (issue #10: "
-                "_MarlinFusedShadowExpert crasha il kernel CUDA Marlin su entrambe "
-                "le strategie di isolamento tentate). GCSGWorker gira in modalità "
-                "hook-only per questi expert: hook/request_id/contamination "
-                "bookkeeping restano verificabili, nessuna shadow execution "
-                "possibile finché issue #10 non si chiude.",
-                len(expert_ids), expert_ids, len(layers),
-            )
-        elif is_fused:
+        if is_fused:
             log.info(
                 "GCSG: shadow pool caricato — %d expert (%s) su %d layer, "
                 "path=FusedMoE+INT4-simulato.",
                 len(expert_ids), expert_ids, len(layers),
             )
         else:
-            log.warning(
-                "GCSG: shadow pool NON caricato per %d expert AWQ-pre-quantizzati "
-                "(%s) su %d layer — path disabilitato (stopgap 2026-08-10: "
-                "_AWQShadowExpert crasha con CUDA illegal memory access quando "
-                "l'expert chiamato è offloaded su CPU, indagine in corso, non "
-                "ancora root-causato). GCSGWorker gira in modalità hook-only per "
-                "questi expert: hook/request_id/contamination bookkeeping restano "
-                "verificabili, nessuna shadow execution possibile finché questo "
-                "path non ha un fix verificato.",
-                len(expert_ids), expert_ids, len(layers),
-            )
+            missing = [e for e in expert_ids if e not in self._shadow_pool]
+            if missing:
+                log.warning(
+                    "GCSG: shadow pool NON caricato per %d expert AWQ-pre-"
+                    "quantizzati (%s) su %d layer — pinning GPU fallito. "
+                    "Hook-only per questi expert.",
+                    len(missing), missing, len(layers),
+                )
+            loaded = [e for e in expert_ids if e in self._shadow_pool]
+            if loaded:
+                log.info(
+                    "GCSG: shadow pool caricato — %d expert AWQ-pre-quantizzati "
+                    "(%s) su %d layer, path=AWQ-ModuleList+pinning GPU esplicito "
+                    "(issue #16).",
+                    len(loaded), loaded, len(layers),
+                )
+
+    @staticmethod
+    def _pin_awq_expert_to_gpu(
+        layers: List[Any], expert_id: int,
+    ) -> Optional[List[Any]]:
+        """Assicura che expert_id sia residente in GPU su TUTTE le layer,
+        spostandolo esplicitamente se offloaded — copia sincrona reale
+        (.to('cuda'), NON il .to(..., non_blocking=True) di
+        maybe_offload_to_cpu, che comunque non tocca mai i singoli moduli
+        MixtralMLP, solo l'intera decoder layer — vedi issue #16).
+        expert.forward non è mai wrappato da vLLM (verificato,
+        scripts/map_offload_state.py): nessun forward da "ripristinare",
+        basta che i suoi Parameter siano su GPU prima della prima chiamata.
+
+        Ritorna la lista dei moduli (uno per layer) se il pinning riesce su
+        TUTTE le layer, None se anche una sola fallisce — l'expert_id intero
+        resta fuori dal pool, non un mix di layer pinnate/non pinnate che
+        degraderebbe in modo silenzioso e imprevedibile a metà forward.
+        """
+        modules = []
+        for layer_id, layer in enumerate(layers):
+            expert = layer.block_sparse_moe.experts[expert_id]
+            try:
+                if next(expert.parameters()).device.type != "cuda":
+                    expert.to("cuda")
+            except Exception as e:
+                log.warning(
+                    "GCSG: impossibile pinnare l'expert AWQ %d (layer %d) in "
+                    "GPU (%s) — escluso dallo shadow pool.",
+                    expert_id, layer_id, e,
+                )
+                return None
+            modules.append(expert)
+        return modules
+
+    def _build_marlin_shadow_pool(
+        self, layers: List[Any], expert_ids: List[int],
+    ) -> Dict[int, "_MarlinFusedShadowExpert"]:
+        """Costruisce le entry per-layer (fused, expert_id_locale_o_globale,
+        num_experts) che _MarlinFusedShadowExpert consuma, condivise da
+        TUTTI gli expert_ids insieme (un proxy per layer OFFLOADED, non uno
+        per expert_id — raddoppierebbe il costo VRAM per nulla dato che
+        _MarlinFusedShadowExpert isola comunque un solo target per chiamata
+        via router_logits).
+
+        IMPORTANTE (2026-08-10, corretto dopo un hang — vedi ATTENZIONE su
+        _PinnedMarlinExperts): _PinnedMarlinExperts viene costruito SOLO per
+        le layer effettivamente offloaded (w13_qweight.device.type=="cpu").
+        Per le altre — la maggioranza, già GPU-resident — si riusa il modulo
+        FusedMoE originale direttamente, num_experts=8 reale, expert_id
+        GLOBALE: zero copie, zero allocazioni extra, nessun rischio di
+        frammentazione. Il primo tentativo proxava indiscriminatamente
+        tutte e 32 le layer e ha bloccato il profiling VRAM di vLLM.
+
+        Tutto o niente: se il pinning fallisce su anche una sola layer
+        offloaded, NESSUN expert Marlin entra nel pool (i proxy sono
+        condivisi tra tutti gli expert_ids del pool — un fallimento
+        parziale lascerebbe alcuni _MarlinFusedShadowExpert con layer
+        mancanti in modo silenzioso).
+        """
+        # entries_per_expert[expert_id][layer_id] = (fused, expert_id_in_fused, num_experts_in_fused)
+        entries_per_expert: Dict[int, List[Optional[Tuple[Any, int, int]]]] = {
+            expert_id: [None] * len(layers) for expert_id in expert_ids
+        }
+
+        for layer_id, layer in enumerate(layers):
+            experts = layer.block_sparse_moe.experts
+            is_offloaded = experts.w13_qweight.data.device.type == "cpu"
+
+            if not is_offloaded:
+                for expert_id in expert_ids:
+                    entries_per_expert[expert_id][layer_id] = (
+                        experts, expert_id, experts.num_experts,
+                    )
+                continue
+
+            try:
+                proxy = _PinnedMarlinExperts(experts, expert_ids)
+            except Exception as e:
+                log.warning(
+                    "GCSG: impossibile pinnare gli expert Marlin %s (layer %d, "
+                    "offloaded) in GPU (%s) — path Marlin escluso dallo shadow "
+                    "pool.", expert_ids, layer_id, e,
+                )
+                return {}
+            for local_index, expert_id in enumerate(expert_ids):
+                entries_per_expert[expert_id][layer_id] = (proxy, local_index, len(expert_ids))
+
+        return {
+            expert_id: _MarlinFusedShadowExpert(entries)
+            for expert_id, entries in entries_per_expert.items()
+        }
 
     def _register_gate_hooks(self) -> None:
         """Forward hook su ogni layer_i.block_sparse_moe.gate — cattura
@@ -842,7 +1030,14 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
             def _capture_and_evaluate(module, inputs, output, _worker=self, _layer_id=layer_id):
                 router_logits, _bias = output
                 hidden_states = inputs[0]
-                _worker.captured_router_logits.append(router_logits.detach())
+                # Tetto a _MAX_CAPTURED_ROUTER_LOGITS (2026-08-10, issue #10/#16):
+                # senza, questa lista cresce senza limite, un tensore GPU per hit,
+                # per l'intera vita del processo — vedi il commento su
+                # self.captured_router_logits in __init__ per la cronologia del
+                # bug (crescita illimitata -> pressione/frammentazione memoria GPU
+                # sui carichi reali, mai vista sugli smoke test che l'hanno scritta).
+                if len(_worker.captured_router_logits) < _worker._MAX_CAPTURED_ROUTER_LOGITS:
+                    _worker.captured_router_logits.append(router_logits.detach())
                 _worker._evaluate_gcsg_for_rows(router_logits, hidden_states, _layer_id)
                 return output
 
@@ -882,9 +1077,26 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
             )
             should, _ = self.guard.should_activate_shadow(ctx)
             if should:
+                # hidden_states[row_idx:row_idx+1], NON hidden_states[row_idx]
+                # (2026-08-10, bug reale trovato dal primo run MMLU con shadow
+                # execution davvero attiva — mai esercitato prima, la shadow
+                # execution non aveva mai raggiunto questo punto): indicizzare
+                # con uno scalare collassa la dimensione riga, producendo un
+                # tensore 1D (hidden_dim,) invece di un batch a una riga
+                # (1, hidden_dim). _MarlinFusedShadowExpert costruisce
+                # router_logits da hidden_states.shape[0] assumendo 2D — con
+                # input 1D usa hidden_dim al posto del numero di righe,
+                # crashando più a valle in FusedMoE.select_experts()
+                # ("not enough values to unpack (expected 2, got 1)"). Lo
+                # slicing con range preserva la forma 2D — stesso principio
+                # per cui _AWQShadowExpert/_ShadowExpertINT4 non erano mai
+                # andati in crash: i loro matmul tollerano un input 1D via
+                # broadcasting, producendo silenziosamente un output 1D
+                # anziché sollevare un errore — sbagliato allo stesso modo,
+                # solo senza un crash che lo segnalasse.
                 self.guard.run_shadow(
                     ctx, self._shadow_pool,
-                    hidden_states=hidden_states[row_idx], layer_id=layer_id,
+                    hidden_states=hidden_states[row_idx : row_idx + 1], layer_id=layer_id,
                 )
 
     def execute_model(self, *args, **kwargs):

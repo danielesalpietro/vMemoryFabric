@@ -249,6 +249,418 @@ this session stopped short of.
 
 ---
 
+## 2026-08-10 — Oskarshamn, continued: implementing the real fix (direction (a)) for both paths
+
+**Environment note.** WSL and Docker were restarted mid-session — both
+were showing signs of not being fully operational (WSL memory usage
+growing for days with no clear cause, per the host). Everything from this
+point in the log onward ran against the post-restart environment, not the
+one the earlier sections of today's entry describe. Flagged explicitly
+because this session already had one real GPU hang (see below) — worth
+being able to rule the environment in or out later if anything looks off
+compared to before the restart.
+
+### Direction (a) implemented on both paths — pin shadow-pool experts to GPU explicitly
+
+`GCSGWorker._load_shadow_pool()`: instead of the unconditional stopgap,
+each expert_id is now pinned GPU-resident before being registered. Path 3
+(AWQ ModuleList): `_pin_awq_expert_to_gpu()` calls `.to('cuda')` directly
+on each `MixtralMLP` — synchronous, real, nothing to "unwrap" since
+`expert.forward` was never wrapped in the first place (#16). Path 2
+(Marlin): `_build_marlin_shadow_pool()` builds a `_PinnedMarlinExperts`
+proxy (GPU-resident slice of the shared `w13_qweight` etc. tensors) only
+for layers that are actually offloaded; already-resident layers (26/32)
+reuse the original `FusedMoE` module directly, zero extra allocation.
+Either path: if pinning fails for even one layer, the whole expert_id
+stays out of the pool — no partially-pinned state.
+
+`_MarlinFusedShadowExpert` changed from a uniform `(expert_id, num_experts)`
+per instance to per-layer `(fused, expert_id, num_experts)` entries, since
+offloaded layers now use the 2-expert proxy (local index) and resident
+layers use the original 8-expert tensor (global id) — two different shapes
+for the same expert_id depending on which layer.
+
+Both proxies verified numerically before integration
+(`scripts/verify_marlin_pinned_proxy.py`: proxy vs. the same layer's
+original tensor, pin_memory forced only as a diagnostic tool to get a
+crash-free reference — rtol=1e-2/atol=1e-3, PASS on both pool experts) and
+end-to-end through the real `GCSGWorker` after integration
+(`scripts/verify_shadow_pool_pinning_e2e.py`: shadow_pool populated,
+pinned params confirmed on `cuda`, direct out-of-sequence call on a
+previously-offloaded layer succeeds, `generate()` unaffected — PASS on
+both quantization paths).
+
+### A real hang, a real cause, a real fix — not "it'll probably be fine"
+
+First integration attempt built a `_PinnedMarlinExperts` proxy for **all**
+32 layers, not just the 6 offloaded ones. Result: 192 small GPU allocations
+instead of 36, on top of an already-near-full 24GiB model — vLLM's own KV-
+cache memory profiling (`determine_num_available_blocks()`, runs right
+after `_load_shadow_pool()`) hung: GPU pegged at 100% utilization, VRAM at
+266MiB free, zero log progress for 9 minutes (every prior successful run in
+this session completed in under 2). Not a hypothesis — confirmed via
+`nvidia-smi` polling and a completely stalled log, then killed
+(`docker kill`) rather than waited out. Root cause: allocator fragmentation
+from many small post-hoc allocations, most of them (26/32 layers) for
+weights that were already GPU-resident and needed no copy at all. Fixed by
+building the proxy only for layers with `w13_qweight.device.type == "cpu"`
+— confirmed via a second run: normal load time, no hang, clean pass or
+clean error (see below), never another stall.
+
+### Concurrency budget for validation entrypoints — real numbers, not round ones
+
+Pinning costs real, permanent VRAM (~1.02-1.05GiB for the AWQ path,
+matching the earlier estimate almost exactly; a similar amount for Marlin,
+folded into `non_torch_memory`). At the old default
+(`gpu_memory_utilization=0.90`, from when the shadow pool was hook-only and
+this cost didn't exist), `eval_mmlu_gcsg.py`'s original config
+(`max_model_len=4096`) doesn't have enough residual budget for the KV cache
+to hold even one full-length sequence.
+
+Measured, not assumed:
+- Real 5-shot MMLU prompt lengths for the 570-question validation set
+  (`scripts/measure_mmlu_prompt_lengths.py`, real tokenizer): min=282,
+  p50=547, p90=1197, p99=2961, **max=3306**. `max_model_len` needs to cover
+  this fully — capping lower would silently exclude the longest questions,
+  the same systematic-bias shape already flagged for partial layer
+  coverage, avoided on purpose.
+- Tried lowering `max_num_seqs` first (hypothesis: less concurrent batch,
+  less activation memory, more room for KV cache) — didn't work.
+  `max_num_seqs=1` at `max_model_len=3328` *increased* activation memory
+  (1.23GiB → 1.55GiB) and pushed the budget negative (-0.22GiB). Activation
+  memory scales with `max_model_len`, not `max_num_seqs`, in this profiling
+  path — the lever was the wrong one, found out by testing it rather than
+  assuming it would work.
+- `gpu_memory_utilization=0.95` (up from 0.90), `max_model_len=3328`
+  (rounded up to the nearest block above the real max=3306, not the old
+  arbitrary 4096), `max_num_seqs=16`: verified via
+  `scripts/probe_kv_blocks.py` — **503 GPU blocks, 8048-token capacity,
+  2.42x concurrency headroom for max_model_len=3328**. Clean init, no
+  error, no hang.
+
+Applied to both `scripts/eval_mmlu_gcsg.py` and
+`scripts/smoke_test_gcsg_mixtral8x7b.py` — inline comments in both mark
+this explicitly as a test/validation-only setting, not a production value;
+production concurrency needs its own review before any deploy, deliberately
+out of scope here (this session's explicit instruction: get shadow
+execution actually running now, defer production-realistic concurrency
+tuning to later).
+
+### First real MMLU run finds a second, unrelated real bug — 1D vs 2D hidden_states
+
+First `eval_mmlu_gcsg.py` run with shadow execution genuinely active
+(everything above this line made that possible for the first time ever —
+neither shadow path had run past `should_activate_shadow()` on a live
+`generate()` call before today) crashed on the very first token:
+`ValueError: not enough values to unpack (expected 2, got 1)` inside
+`FusedMoE.select_experts()` → `fused_topk`.
+
+Root cause, nothing to do with today's pinning fix:
+`_evaluate_gcsg_for_rows()` (`gcsg.py`) called
+`run_shadow(..., hidden_states=hidden_states[row_idx], ...)` —
+`hidden_states[row_idx]` collapses the row dimension, producing a 1D
+`(hidden_dim,)` tensor instead of a one-row 2D batch `(1, hidden_dim)`.
+`_MarlinFusedShadowExpert` builds `router_logits` from
+`hidden_states.shape[0]`, assuming 2D — with 1D input that reads
+`hidden_dim` as if it were the row count, and the wrong-shaped tensor
+crashes several calls later inside vLLM's own `fused_topk`, not at the
+point of the actual mistake. `_AWQShadowExpert` and `_ShadowExpertINT4`
+never would have caught this either way — their raw matmuls tolerate 1D
+input via broadcasting and would have silently produced a 1D output
+instead of raising, which is arguably worse (wrong, not loud). This bug
+predates today's session entirely; it was never reachable because shadow
+execution never got past `should_activate_shadow()` into a real
+`shadow_pool[...]()` call before both paths were pinned and re-enabled
+just now.
+
+Fix: `hidden_states[row_idx : row_idx + 1]` (slice, not scalar index) —
+preserves the 2D shape. Regression test added
+(`test_evaluate_gcsg_for_rows_passes_2d_hidden_states_slice`): asserts the
+shadow callable actually receives a 2D, dim0==1 tensor, not just "doesn't
+crash." Full suite: 82 passed, 3 skipped.
+
+### End of day state (this sub-entry)
+
+- `src/scheduler/gcsg.py`: both shadow paths (#10 Marlin, #16 AWQ
+  ModuleList) re-enabled with real GPU pinning, verified end-to-end, plus
+  the 1D/2D `hidden_states` bug fixed — the first bug in this whole area
+  that only a real `generate()` run could have caught, not a synthetic
+  isolation script.
+  `_ShadowExpertINT4` (path 1, raw fp16) untouched — still not checked for
+  the same offload exposure, still an open question.
+- `scripts/probe_kv_blocks.py`, `scripts/measure_mmlu_prompt_lengths.py`,
+  `scripts/verify_marlin_pinned_proxy.py`,
+  `scripts/verify_shadow_pool_pinning_e2e.py`: new diagnostic/verification
+  scripts from this phase.
+- Full unit suite green throughout (81 passed, 3 skipped) — reconfirmed
+  after every source change in this phase, not just once at the end.
+- Not yet done: the actual MMLU quality-degradation run with shadow
+  execution really active (the point of all of this) — next.
+
+### First full 570-prompt run: reproducible stall around request ~27-31, cause not yet found
+
+Two separate full-570 attempts (first at `max_model_len=3328`/default
+`max_num_seqs`, second after bumping the watchdog to 5400s) both started
+fast (~150 tok/s input, matching the hook-only baseline's pace) and both
+stalled at almost exactly the same point — 27-31/570 processed — with GPU
+pinned at 100% utilization but the `tqdm` counter frozen for 120s+ and no
+further log output. Not the same failure as the earlier fragmentation
+hang (VRAM was stable, not climbing toward the ceiling) — a different,
+still-unexplained slowdown, reproducible at nearly the same request count
+across two independent runs, which argues against "just a long prompt in
+the mix" and toward something structural (a specific subject's prompt
+shape, or scheduler/KV-cache state that degrades after processing that
+many real requests with shadow execution actually contaminating the KV
+cache for the first time). Both attempts killed manually rather than
+waited out to the watchdog. Not root-caused this session — flagged
+explicitly as open, not silently worked around.
+
+### Pivot: staged runs (8/16/32/64/128/252) instead of betting on the full 570 blind
+
+Given the stall is real but its trigger isn't understood yet, continuing
+to relaunch the full run on a longer watchdog would just repeat the same
+9-16 minute round-trip per attempt for no new information. Added
+`--max-prompts N` to `eval_mmlu_gcsg.py` (truncates the built prompt list
+post-sampling, doesn't touch the per-subject construction) and switched to
+an increasing sequence — cheap enough to isolate where throughput actually
+breaks down, instead of discovering it again 9 minutes into a 570-prompt
+run each time.
+
+Results so far, each its own container run (clean GPU state between
+stages):
+
+| n | wall time (generate()) | shadow_activations | activation_rate | accuracy | stall? |
+|---|---|---|---|---|---|
+| 8  | 17s   | 5,075  | 5.0% | 25.0% (2/8)   | no |
+| 16 | 33s   | 10,084 | 5.0% | 50.0% (8/16)  | no |
+| 32 | 154s  | 23,659 | 4.7% | 65.6% (21/32) | no — passes through request 27-31 clean |
+
+All three clean, all fast, all show shadow execution genuinely firing
+(`shadow_activations` was structurally 0 in every prior run this project
+has ever done — this is the first real, non-zero measurement of it,
+independent of whether the eventual MMLU delta turns out good or bad).
+Accuracy numbers at n=8/16/32 are noise, not signal — same caveat as any
+small-N read, not treated as an early result.
+
+**n=32 result narrows the full-run stall's cause.** It processes the exact
+same first 32 prompts, in the exact same order, as every 570-prompt
+attempt — including request 27-31, right where both full runs froze — and
+completes cleanly through all of them. Same prompts, same order, no
+stall. This weighs against "a specific poisoned prompt around position
+~28" and toward something tied to how many requests are still *queued*
+behind the ones being processed (hundreds, in the full run; none, here) —
+scheduler queue depth or KV-cache admission behavior under real shadow-
+execution load, not yet pinned down further. n=64 next — if it also
+degrades or stalls, that's a real signal on the queue-depth theory; if
+still clean, the threshold is somewhere past 64.
+
+One more finding, fixed in this same sub-entry:
+`eval_mmlu_gcsg.py`'s closing NOTE hardcoded "shadow_activations resta 0
+per costruzione" — false now that the pool loads and fires. Made
+conditional on `guard_stats["shadow_activations"] > 0`; module docstring
+and two log lines updated too (still said "hook-only mode").
+
+### n=64 confirms it: real, reproducible, request-count-dependent stall — and a wrong hypothesis, corrected
+
+n=64 in a single `generate()` call froze at exactly 27/64 — same signature
+as both full-570 attempts, GPU utilization low (15-25%, not the 100%-pegged
+fragmentation pattern from the earlier Marlin-proxy hang) and the `tqdm`
+counter completely static for 150s+.
+
+**Hypothesis tried and disproven, not just tried:** `_register_gate_hooks`'s
+`captured_router_logits.append(router_logits.detach())` — explicitly
+commented "smoke-test observability... non usata dal path di produzione" —
+fires unconditionally on every `.gate` hook call (every layer, every
+forward pass) and was never bounded, so it grows for the entire process
+lifetime holding live GPU tensor references. Real bug regardless (n=32
+alone evaluates 506,784 tokens; this list would hold tens of thousands of
+un-freeable GPU tensors by the time a full 570-prompt run finished) — fixed
+with a hard cap (`_MAX_CAPTURED_ROUTER_LOGITS = 1000`, verified the two
+smoke-test consumers only ever read `len()` and one shape, never affected
+by capping). **But re-ran n=64 single-call with the cap in place and it
+froze at exactly 27/64 again** — identical point, identical signature. The
+cap is still worth keeping (it was a real, if different, problem) but it
+is **not** the cause of this stall. Corrected here rather than left
+standing as a claimed fix that wasn't verified to work.
+
+User's steer at this point: keep the `--chunk-size` approach as the
+working path forward regardless of root cause, and progress gradually
+(8/16/32/64/128/252, not straight to 570) until the full set passes,
+rather than resolve the mechanism first. Root cause of the 27-request
+stall stays formally open — a genuine unknown, not quietly dropped.
+
+### In-process chunking tried, also fails — then a sharper test overturns the "process reuse" theory entirely
+
+Added `--prompt-start`/`--results-file`/per-chunk JSON-line logging to
+`eval_mmlu_gcsg.py` (issue #10/#16: mark which slice a stall happens in,
+persist partial results so a later stall doesn't erase earlier progress).
+Re-ran n=64 with `--chunk-size 32` (two `generate()` calls, same process,
+same fix in place): chunk 1 `[0:32)` completed clean — identical to the
+standalone n=32 run — chunk 2 `[32:64)` froze almost immediately, at 1/32.
+Same process, second call, near-instant freeze — seemed to confirm
+same-process-reuse as the cause, distinct from single-call queue depth.
+
+**User's sharper test, before committing to any bigger fix: run `[32:64)`
+standalone — fresh process, no prior chunk 1 in that process at all.**
+Direct hit: froze again, at 1/32, this time with GPU pinned at 100%
+(different signature from the earlier 15-25%-util freezes) — a single
+request (position 33 in the full 570) that never completed even in total
+isolation, 180s+, killed rather than waited out further.
+
+**This overturns the process-reuse hypothesis, not just weakens it.** If
+`[32:64)` stalls in a completely fresh process, "cumulative state
+building up across calls in the same worker" cannot be the explanation —
+n=32 (`[0:31]`) was clean not because it stayed under some reuse
+threshold, but because it never touched whatever is at position ~32-33 in
+the prompt list. Every failing run so far — both full-570 attempts
+(froze ~27-31), n=64 single-call (froze at 27), n=64 chunked (chunk 2,
+starting at 32, froze immediately), and now the standalone `[32:64)`
+slice (froze at position 33) — is consistent with one simpler explanation:
+something specific to a prompt or subject in roughly that index range,
+not a mechanism that degrades with cumulative usage. Not yet identified
+which prompt/subject that is — deliberately not chased further this
+session; per the user's explicit call, `[32:64)` is skipped and the
+gradual coverage continues past it rather than blocking on root-causing
+it now. Whether it's one poisoned prompt or a whole subject needs its own
+follow-up.
+
+**Second data point weakens "one bad prompt" too.** `[64:96)`, fresh
+process: also stalled, but at absolute position ~79 (index 15 of 32),
+GPU pinned 100%, 180s+ no progress — a *different* absolute position than
+the `[32:64)` stall (~33). Two isolated fresh-process stalls at two
+different positions, both roughly 15-30 requests into their respective
+runs, argues against "one specific poisoned prompt at a fixed index" and
+toward something that recurs on a rough period (every ~15-30 real
+requests processed) regardless of which specific content those requests
+are. Still not identified. User's call: reduce slice size to 16 going
+forward, to narrow this down with tighter isolation per attempt instead
+of guessing further.
+
+One process limitation surfaced by this: the incremental `--results-file`
+write only happens once per whole non-chunked invocation, at the end — a
+mid-slice kill (as happened here) loses that slice's results entirely,
+not just the stalled request. Smaller slices (16, per the steer above)
+shrink how much is lost per stall, but per-request incremental logging
+within a single `generate()` call isn't implemented — noted, not fixed
+this session.
+
+**Prompt token length ruled out too** (cheap CPU-only check,
+`scripts/inspect_prompt_lengths_near_stalls.py`, real tokenizer, no GPU):
+position 33 is 627 tokens, position 79 is 955 — both unremarkable against
+a 684-token average. The real length outliers in this 570-prompt set
+(2500-3300 tokens, `high_school_european_history` positions 210-219 and
+`high_school_us_history` 303-309) are nowhere near either stall and
+haven't even been reached yet. No correlation with subject boundaries
+either (33 and 79 both fall mid-subject, not at the every-10-questions
+subject change). Root cause still open; length and subject-boundary are
+now both eliminated as explanations, not just unconfirmed.
+
+`--prompt-start`/`--max-prompts`, slice size reduced to 16 per the user's
+steer: `[64:80)` (16 prompts, fresh process) completed clean —
+62.5% (10/16), 20,270 shadow activations.
+
+**`[80:96)` stalls too — and this one resisted the script's own
+`os.kill(..., SIGKILL)`.** Froze around index 6 (absolute position ~86),
+GPU pinned 100%. The in-process watchdog fired correctly at 300s
+(`SIGTERM` then `SIGKILL` per its own log lines) but the process kept
+emitting heartbeats for 60s+ *after* the SIGKILL — a signal that should be
+unblockable in normal circumstances. `docker kill` from outside the
+container succeeded immediately after. Read as: this specific stall isn't
+"very slow Python," it's the process genuinely stuck inside an
+uninterruptible GPU/driver call — consistent with the GPU-pinned-100%
+signature on the other stalls too, but this is the first direct evidence
+(SIGKILL not landing) that it's a kernel-level block, not just an
+expensive but interruptible computation. Killed via `docker kill`, GPU
+confirmed freed after (17% util, 504MiB). `[80:96)` skipped, same
+skip-and-continue approach — `[96:112)` next.
+
+Three stall positions now on record, all in fresh processes, none
+explained by length or subject boundary: ~33, ~79, ~86. Loosely
+clustered but not on any obvious fixed period.
+
+### `[96:112)` stalls too, back-to-back with `[80:96)` — a real candidate for the actual root cause, from the host side
+
+Same signature (froze at index 1, GPU 100%, in-process `SIGKILL` didn't
+land, `docker kill` did). Two failures in a row after a run of successes
+is itself a new data point.
+
+**User's observation, mid-investigation: WSL2 host RAM is at 42GB and
+climbing** — the same growing-memory-with-no-clear-cause pattern that
+motivated this session's earlier WSL/Docker restart, now recurring after
+dozens more `docker compose run`/`docker kill` cycles since. WSL2 is
+documented to not reliably return host memory to Windows after a
+container's process tree exits, even with `--rm`. This reframes the
+"content-specific stall" reading from earlier in this entry: the
+positions (~33, ~79, ~86, ~97) may not be about *what* content is at that
+index at all — they may just mark *when*, in the session's cumulative
+container count, host memory pressure had built up enough to start
+starving something the CUDA driver needs on the host side (staging
+buffers for H2D copies is the standing suspect, same territory as the
+`pin_memory=False`-under-WSL2 mechanism from earlier today). Two stalls
+back-to-back late in a long session, after one clean run earlier in the
+same session, fits a monotonically-worsening host resource explanation at
+least as well as a content-specific one — better, arguably, since it
+doesn't require four unrelated prompts at four different unremarkable
+positions to each independently be "poisoned."
+
+Not confirmed — the next real test is whether a WSL restart makes the
+following slices reliably clean again. If it does, that's strong evidence
+for host memory pressure over content; if slices still fail at
+comparable positions post-restart, content-specific returns to the table.
+Recommended to the user rather than restarted unilaterally mid-run.
+
+**Tested directly instead of restarting — cheaper, and decisive either
+way (user's suggestion): re-ran `[0:16)`, known clean from early in the
+session, without restarting anything.** Still clean — and not just clean,
+*identical*: 50.0% (8/16), 10,084 shadow activations, same numbers to the
+digit as the very first `n=16` run hours and dozens of container cycles
+earlier. This weighs directly against the host-degradation hypothesis: if
+WSL RAM growth were driving the stalls, the same content that worked
+before should be more likely to fail now too, not reproduce byte-for-byte
+identical behavior late in a long, container-churn-heavy session. It
+didn't degrade at all. Host memory pressure isn't ruled out as *a* factor
+(42GB and climbing is still true, still worth a restart at some point) but
+it's now clearly not sufficient on its own to explain these stalls —
+evidence returns to something specific about the content/position at
+`[80:96)` and `[96:112)` specifically, not a general session-length
+effect. Cheaper and more informative than restarting first and hoping —
+same principle as the earlier fresh-process test that overturned the
+process-reuse hypothesis: test the specific claim directly instead of
+changing the environment and inferring from the outcome.
+
+### Determinism vs. probabilistic race — tested directly, 4/4
+
+User's question, sharper than "does one repeat prove anything": if a
+known-good slice is genuinely *safe* (deterministic, tied to its content)
+vs. just *unlucky-free-so-far* (a race condition that could hit any
+content with some probability), those imply very different things about
+whether skip-and-continue is a sound strategy at all — under the
+probabilistic reading, no slice is really safe, including the ones
+already marked clean.
+
+Re-ran `[0:16)` three more times (four total counting the earlier
+re-test), each its own fresh container. **All four identical**: 50.0%
+(8/16), 10,084 shadow activations, to the digit, every time. Deterministic,
+not probabilistic — this specific content reliably does not trigger
+whatever the failure mode is, not "hasn't yet." Confirms skip-and-continue
+is methodologically sound: a slice marked clean stays clean, a slice
+marked bad is bad because of something about it (still unidentified —
+not length, not subject boundary, not host memory pressure), not because
+of run-to-run luck.
+
+### Sprint 6 (Stockholm) added to the roadmap — new leg, not a rewrite
+
+`README.md`'s roadmap table gets a new row (`6 | Telemetry + observability
+dashboard`) without touching Sprints 0-5 — separate initiative (a metrics
+dashboard sitting on top of the `.stats()` methods every module already
+exposes, via the already-scaffolded-but-never-wired
+`configs/prometheus.yml`), named for the same reason every sprint here is
+named after a real place: conversation happened while traveling through
+Stockholm. Two-phase mini-roadmap written into the README itself
+(single-worker telemetry first — zero new instrumentation, just exposing
+existing counters; multi-worker aggregation second, explicitly gated on
+issue #8's dual-GPU hardware blocker rather than left as a vague "later").
+
 ## 2026-08-09 — Oskarshamn, continued: issue #10 stopgap — Marlin-packed shadow path disabled, not fixed
 
 **Release:** [Oskarshamn] v0.4.0-dev — in progress. Closes the immediate

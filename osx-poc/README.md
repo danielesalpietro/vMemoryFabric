@@ -158,6 +158,34 @@ vMemoryFabric/                  (repo root)
 | 3      | M3 — Expert Scheduler  | 7–8 | 🔲 pending  |
 | 4      | Integration + benchmarks | 9–12 | 🔲 pending |
 | 5      | PoC delivery + paper   | 13–16 | 🔲 pending |
+| 6      | Telemetry + observability dashboard | TBD | 🔲 pending — **Stockholm** |
+
+Sprint 6 (Stockholm) is a new leg, added without reordering or reweighting
+Sprints 0–5 above — those stay exactly as planned. Named deliberately:
+Stockholm is the seat of the Swedish government, and this sprint's job is
+oversight, not operation — a dashboard that *observes* GCSG/EAT/Tier
+Manager state, without sitting in the hot path of any of them.
+
+Two phases, in order, not scoped together:
+
+1. **Single-worker telemetry** — the low-overhead path. `GCSGGuard`,
+   `AERManager`, `PTPEPClassifier`, `TierManager`, and `EAT` already each
+   expose a `.stats()` method returning counters accumulated as a
+   byproduct of work already happening (tokens evaluated, shadow
+   activations, contamination rate, tier promotions, latencies) — zero new
+   instrumentation needed, only an adapter. Exposes these via a
+   `/metrics` endpoint (`prometheus_client`), wired into the
+   already-scaffolded but never-connected `configs/prometheus.yml` and
+   `make metrics-up`/`metrics-down` targets. Scope: one `GCSGWorker`
+   process, one dashboard.
+2. **Multi-worker aggregation** — deferred until there's more than one
+   worker process to aggregate across, which today means issue #8
+   (dual-GPU / AER, blocked on RTX 5080 arrival) landing first. Needs a
+   real design decision this project hasn't made yet (Prometheus
+   multi-target scraping by instance label vs. a pushgateway pattern for
+   short-lived workers) — not started until phase 1 is real and the
+   hardware blocker clears, tracked as a dependency rather than an
+   arbitrary "later."
 
 Non-functional targets (acceptance criteria for PoC):
 

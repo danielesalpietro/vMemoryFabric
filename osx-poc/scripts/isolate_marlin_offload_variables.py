@@ -99,8 +99,13 @@ def main() -> None:
         sys.exit(1)
 
     hs = torch.randn(4, hf_config.hidden_size, dtype=torch.float16, device="cuda")
+    # Nota (2026-08-10): _MarlinFusedShadowExpert prende ora entry per-layer
+    # (fused, expert_id, num_experts) invece di (fused_list, expert_id,
+    # num_experts) uniforme — vedi gcsg.py. Qui chiamiamo direttamente sul
+    # tensore ORIGINALE (non pinnato) apposta, e' quello che questo script
+    # isola.
     shadow = _MarlinFusedShadowExpert(
-        [experts], expert_id=0, num_experts=hf_config.num_local_experts,
+        [(experts, 0, hf_config.num_local_experts)],
     )
     print(f"Chiamo _MarlinFusedShadowExpert(expert_id=0).__call__() direttamente — "
           f"variant={args.variant}, device layer={actual_device}...")

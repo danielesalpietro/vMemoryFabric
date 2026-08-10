@@ -109,9 +109,18 @@ def main() -> None:
         worker_cls="scheduler.gcsg.GCSGWorker",
         quantization="awq_marlin",
         cpu_offload_gb=4,
-        gpu_memory_utilization=0.90,
+        # gpu_memory_utilization=0.95, max_num_seqs=16, max_model_len=3328 —
+        # SOLO per ambienti di test/validazione, non di produzione (issue
+        # #10/#16). Con shadow pool pinnato in GPU (~1.02-1.05GiB sempre
+        # residenti), gpu_memory_utilization=0.90 (il vecchio default, dai
+        # tempi in cui lo shadow pool era in hook-only) non lascia budget
+        # sufficiente per la KV-cache — verificato empiricamente
+        # (scripts/probe_kv_blocks.py, 2026-08-10): stessi valori usati in
+        # eval_mmlu_gcsg.py per coerenza, vedi lì per il dettaglio del calcolo.
+        gpu_memory_utilization=0.95,
+        max_num_seqs=16,
         enforce_eager=True,
-        max_model_len=2048,
+        max_model_len=3328,
         hf_overrides={"head_dim": 128},
     )
     _log("load_model() completed — GCSGWorker attached, real Mixtral-8x7B loaded. [checklist 1-3 OK]")
