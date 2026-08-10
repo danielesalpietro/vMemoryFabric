@@ -19,7 +19,7 @@ non ce l'ha. Controlliamo sia il decoder layer sia i singoli expert.
 
 Usage:
     PYTHONPATH=src python scripts/map_offload_state.py --quantization awq
-    PYTHONPATH=src python scripts/map_offload_state.py --quantization awq_marlin
+    PYTHONPATH=src python scripts/map_offload_state.py --quantization awq_marlin --cpu-offload-gb 6
 """
 from __future__ import annotations
 
@@ -35,15 +35,17 @@ def _is_wrapped(forward_fn) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--quantization", choices=["awq", "awq_marlin"], required=True)
+    parser.add_argument("--cpu-offload-gb", type=float, default=4)
     args = parser.parse_args()
 
     from vllm import LLM
 
-    print(f"Loading {MODEL_PATH} (quantization={args.quantization}, cpu_offload_gb=4)...")
+    print(f"Loading {MODEL_PATH} (quantization={args.quantization}, "
+          f"cpu_offload_gb={args.cpu_offload_gb})...")
     llm = LLM(
         model=MODEL_PATH,
         quantization=args.quantization,
-        cpu_offload_gb=4,
+        cpu_offload_gb=args.cpu_offload_gb,
         gpu_memory_utilization=0.90,
         enforce_eager=True,
         max_model_len=2048,

@@ -5,6 +5,216 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-11 — Oskarshamn, continued: the "stall" was never a deadlock — root cause found, confirmed by direct manipulation
+
+**Release:** [Oskarshamn] v0.4.0-dev — still in progress. Picks up the
+`[32:40)`/`[40:48)` split left as the next step at the previous session's
+close. Never got there — a lower-level question ("is this actually a
+deadlock?") turned out to have a clean, decisive answer, and pursuing it
+replaced the planned split entirely.
+
+### GPU-level instrumentation: never idle, and the watchdog is unreliable
+
+Before profiling tools, cheap checks: `nvidia-smi dmon` sampled every 2s
+through a `[32:48)` batch=16 stall, alongside the process's own state
+(`ps -o stat`). Result: **SM utilization pinned at 100% continuously**
+throughout the "stalled" window — no dip, no idle gap. Rules out a classic
+host-side deadlock (that would show 0% SM, a blocked/`D`-state process).
+
+Bigger surprise: the in-process watchdog (`SIGTERM` at T+250s, `SIGKILL` at
+T+255s if that fails) **did not stop the process**. It kept running at
+100% SM for 60-150+ more seconds past the `SIGKILL` and then completed
+normally on its own — full `Accuratezza`/`GCSGGuard stats` output, clean
+exit. `py-spy dump` was attempted to see the stuck Python frame directly;
+failed with `Permission denied` — the container has no
+`--cap-add=SYS_PTRACE`, noted for next time, not chased further this
+session.
+
+**Consequence for the whole investigation**: every previous session's
+"stall = failure" classification relied on this same watchdog+`SIGKILL`
+mechanism. If `SIGKILL` doesn't reliably work on this workload, "stalled
+per the watchdog" and "hung forever" are not the same claim. Re-ran the
+identical `[32:48)` batch=16 repro **5 times** back to back: all 5
+completed (never truly hung), same accuracy every time (68.8%, 11/16),
+nearly identical `shadow_activations` (11362-11363) — but wall time varied
+wildly and unpredictably: 238s, ~380s, ~590s, ~350-410s (after a manual
+`wsl --shutdown`, RAM 70GB→32GB used, partial improvement not full reset),
+~470s. Not a deadlock. A severe, variable, but always-terminating slowdown.
+
+### vLLM's own engine telemetry: silent, even at DEBUG
+
+Tried to read `vLLM`'s periodic engine stats (`Avg prompt throughput...,
+Running/Swapped/Pending, GPU/CPU KV cache usage%`, logged every 5s per
+`_LOCAL_LOGGING_INTERVAL_SEC` in `llm_engine.py`) to see scheduler-level
+behavior during the slow window. Never printed once, in any run, at any
+grep pattern. Suspected log-level suppression (`metrics.py`'s "avoid log
+noise on idle" branch downgrades to `logger.debug` when throughput reads
+zero) — set `VLLM_LOGGING_LEVEL=DEBUG` or a full rerun to test. Confirmed
+DEBUG *was* active (real DEBUG lines from elsewhere printed), and the
+telemetry line **still** never appeared. Not a verbosity problem — this
+workload's engine-level stat logging genuinely isn't reached. Read as
+weak evidence the slow region is dominated by one (or very few) long
+`engine.step()` calls rather than scheduler-level swap/pending churn —
+not pursued further once the real cause (below) made it moot.
+
+### Isolating the variable: `cpu_offload_gb`, not batch composition
+
+Controlled A/B on `[0:16)` (the slice that had always run clean/fast in
+prior sessions) instead of the flaky `[32:48)`:
+
+| `cpu_offload_gb` | total time | first item | accuracy |
+|---|---|---|---|
+| 4 (original) | **~13s** | 6.62s | 50.0% (8/16) |
+| 8 | ~118s (9x) | **70.23s** | 50.0% (8/16) |
+
+Same slice, same content, same accuracy — only `cpu_offload_gb` changed,
+and wall time moved 9x. This is the first clean, single-variable isolation
+of the session; content/batch-composition (last session's leading
+hypothesis) is not the driver — accuracy never moved, only latency, and
+only with this one knob.
+
+### `map_offload_state.py`: a real finding, but not a new one
+
+Ran `scripts/map_offload_state.py` (`--cpu-offload-gb 6`, new CLI arg —
+see below) to map exactly which layers/experts are CPU-resident at load.
+Result: 9/32 layers (0-8) offloaded; for every one of them, `layer.forward`
+is wrapped by `maybe_offload_to_cpu()`, but the `experts` (`FusedMoE`)
+module's own `.forward` is **not** — confirmed by `__qualname__`
+inspection, same technique the script already used.
+
+Read this as a fresh discovery pointing at `GCSGWorker`'s shadow hooks
+(direct expert calls bypassing the wrapper). It wasn't fresh: an external
+review caught it immediately — this exact mechanism, and this exact
+script, are already cited verbatim in `_load_shadow_pool()`'s own
+docstring (`gcsg.py:819-835`, commit `e59a16d`, same-day). The fix already
+shipped: `_pin_awq_expert_to_gpu()` / `_build_marlin_shadow_pool()` +
+`_PinnedMarlinExperts` guarantee every shadow-pool expert is GPU-resident
+*by construction* before it's ever registered — if pinning fails for even
+one layer, the whole `expert_id` stays out of the pool rather than risking
+a partially-pinned call. The shadow path was already hardened against
+exactly this. Correction accepted and verified by rereading the cited
+lines directly — they match verbatim.
+
+### Hook-only isolation: shadow path excluded, definitively
+
+If the shadow path is already hardened, the real-model forward path
+(the one that legitimately goes through the wrapped `layer.forward()`)
+becomes the remaining suspect. Test: same `[0:16)`, same
+`cpu_offload_gb=8`, but `GCSGGuard.shadow_pool_size` forced to `0`
+(temporary default-value edit, reverted after) — pure hook-only, verified
+via the final stats (`shadow_activations: 0`, `shadow_pool_size: 0`).
+
+**First item: 88.20s — slightly worse than the shadow-on run (70.23s), not
+better.** Disabling shadow execution entirely does not fix the slowdown;
+if anything it's noise-level worse. The shadow path is excluded as a
+contributor. What's left: the real model's own offloaded-layer forward
+pass, through the wrapper that *is* correctly used, but evidently does
+something expensive on it.
+
+### Upstream: confirmed, structural, and already known to be unfixed
+
+Checked `vllm-project/vllm`'s own issue tracker before trusting a "this
+must be a WSL2 problem" hunch:
+
+- **[#37883](https://github.com/vllm-project/vllm/issues/37883)** — "UVA
+  CPU offload completely broken on WSL... three distinct crashes." One of
+  the three ("Crash 3") is exactly this mechanism: vLLM detects WSL, sets
+  `pin_memory=False` (same warning line this project has seen in every
+  run since day one), but `UVAOffloader.forward()` still uses
+  `non_blocking=True` for CPU→GPU transfers — undefined behavior in CUDA
+  without pinned memory, no fallback to blocking transfers when pinning
+  isn't available. Filed on vLLM 0.17.1/0.18.0, far newer than this
+  project's pinned 0.6.6.post1 — same bug family survives version bumps.
+  Closed `not_planned`, but by the stale-issue bot after 90+30 days of
+  silence, not a deliberate maintainer rejection — worth the distinction,
+  doesn't change the practical takeaway (unfixed, no active work).
+- **[#1084](https://github.com/vllm-project/vllm/issues/1084)** (2023) —
+  a vLLM maintainer (`hmellor`) states directly: *"This is an issue with
+  WSL that is unavoidable in vLLM,"* citing NVIDIA's own CUDA-on-WSL user
+  guide ("Pinned system memory... availability for applications is
+  limited"). Confirms this project's own README line (`Pinned CUDA memory
+  ❌ not available` under dev constraints) is not just a local workaround
+  but a documented platform ceiling.
+
+Neither upstream issue mentions the wrapper-granularity detail found by
+`map_offload_state.py` (layer-level wrap, not expert-level) — that appears
+to be a genuinely new-to-the-public-record detail, even though the
+broader mechanism isn't.
+
+### Direct confirmation, not just correlation
+
+Reused the `vllm.platforms.interface.in_wsl` monkey-patch pattern (already
+established in `scripts/smoke_test_fetta2_pinmemory.py`,
+`isolate_awq_offload_variables.py`, `isolate_marlin_offload_variables.py`)
+on the real `eval_mmlu_gcsg.py` path this time, not an isolated call:
+same hook-only config as the run above (`[0:16)`, `cpu_offload_gb=8`,
+`shadow_pool_size=0`), plus `pin_memory` forced `True`.
+
+**First item: 16.28s** — down from 88.20s, a ~5.4x reduction, moving in
+lockstep with the one variable flipped. Total run time 95s vs ~148s.
+Accuracy unchanged (50.0%, 8/16). This is the same class of evidence as
+the original NaN/crash root-causing from 2026-08-09/10 (pin_memory flip,
+clean before/after) — direct manipulation, not just an observed
+correlation, and it converges with three independent lines of evidence
+from this session: the `cpu_offload_gb` correlation, the hook-only
+persistence, and the upstream-confirmed mechanism.
+
+### What this is not
+
+Same caution already on record from the original pin_memory
+investigation (2026-08-09/10): forcing `pin_memory=True` bypasses vLLM's
+own deliberate WSL guard rather than satisfying it. A single fast-running
+batch not crashing or corrupting doesn't rule out silent corruption or
+instability under sustained real load — never tested here, not proposed
+as a shippable fix. Diagnostic-only, same as every previous use of this
+monkey-patch in this project.
+
+### Housekeeping
+
+- `scripts/map_offload_state.py`: `cpu_offload_gb` is now a CLI arg
+  (`--cpu-offload-gb`, default 4) instead of hardcoded — this script will
+  clearly be rerun.
+- All diagnostic edits from this session (`eval_mmlu_gcsg.py`'s
+  `cpu_offload_gb`, `gcsg.py`'s `GCSGGuard.shadow_pool_size` default, the
+  temporary `in_wsl` monkey-patch) reverted; `git diff` on both files is
+  empty post-session except the intentional CLI-arg change above.
+- Issues #10/#16 updated with this session's outcome (see GitHub).
+
+### End of day state
+
+- Root cause of the reproducible "stall" from the previous session:
+  **found**. Not a deadlock (GPU never idle, watchdog `SIGKILL`
+  unreliable, every repro eventually completed). Not GCSG/shadow-path
+  related (already hardened against the one real risk found; hook-only
+  reproduces the slowdown just as badly). Not batch-composition/content
+  (accuracy and correctness never moved across any variant). **Is**:
+  `vllm.model_executor.models.utils.maybe_offload_to_cpu()`'s CPU→GPU
+  swap-in for offloaded decoder layers, running over pageable (not
+  pinned) host memory because vLLM correctly detects WSL2 and disables
+  `pin_memory` — a structural NVIDIA CUDA-on-WSL2 limitation, confirmed
+  by vLLM's own maintainers as unavoidable on their end
+  (vllm-project/vllm#1084) and still an open, unfixed crash-adjacent bug
+  in much newer vLLM releases (vllm-project/vllm#37883, closed
+  `not_planned`).
+- Not fixed — this is a platform ceiling, not a bug in this project's
+  code, and the diagnostic fix (`pin_memory=True`) is explicitly not safe
+  to ship without further validation under sustained load.
+- Practical implication for MMLU coverage: full 570-question runs will
+  remain slow and highly variable under real offload, but should no
+  longer *hang* — the watchdog/SIGKILL unreliability is now a separate,
+  known wrinkle (worth a harder kill, e.g. external `docker kill`, next
+  time coverage is attempted) rather than a sign of a true deadlock.
+
+Next session: decide whether to attempt the full 570-question MMLU run
+now that "it will finish, just slowly and variably" replaces "it might
+hang forever" as the operating assumption; consider whether `docker kill`
+(external signal) is a more reliable stop mechanism than the in-process
+watchdog for any future timeout handling; the `[32:40)`/`[40:48)` split
+planned at the previous session's close is no longer necessary — the
+variable was never batch composition.
+
+---
+
 ## 2026-08-10 — Oskarshamn, continued: content ruled out, batch composition confirmed as the real variable — session close
 
 **Release:** [Oskarshamn] v0.4.0-dev — still in progress. Picks up right
