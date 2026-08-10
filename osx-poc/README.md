@@ -68,7 +68,7 @@ make build
 # 2. Verify hardware and environment
 make smoke
 
-# 3. Run all tests (M1/M2 pass as of Sprint 2; M3 still NotImplementedError — expected)
+# 3. Run all tests (M1/M2/M3 pass as of Sprint 3 — GCSG shadow execution real, see LOGBOOK for the open stall)
 make test
 
 # 4. Interactive shell
@@ -155,10 +155,20 @@ vMemoryFabric/                  (repo root)
 | 0      | Environment + skeleton | 1–2 | ✅ **Karlshamn** |
 | 1      | M1 — EAT               | 3–4 | ✅ **Möllstorp** |
 | 2      | M2 — Tier Manager      | 5–6 | ✅ **Eketorp**  |
-| 3      | M3 — Expert Scheduler  | 7–8 | 🔲 pending  |
+| 3      | M3 — Expert Scheduler  | 7–8 | 🟡 in progress — **Oskarshamn** |
 | 4      | Integration + benchmarks | 9–12 | 🔲 pending |
 | 5      | PoC delivery + paper   | 13–16 | 🔲 pending |
 | 6      | Telemetry + observability dashboard | TBD | 🔲 pending — **Stockholm** |
+
+Sprint 3 (Oskarshamn) is real, not a stub: GCSG shadow execution actually
+runs against the real Mixtral-8x7B checkpoint (both the AWQ ModuleList and
+Marlin-packed paths), with a real fix for the CPU-offload/pin_memory crash
+class that blocked it (issues [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16)) verified
+end-to-end. What's still open: a separate, reproducible stall under
+certain concurrent batch compositions blocks full 570-question MMLU
+coverage — root cause not yet found, tracked in the same two issues,
+deliberately left open rather than closed on a partial fix. See
+`LOGBOOK.md` (2026-08-10 entries) for the full investigation trail.
 
 Sprint 6 (Stockholm) is a new leg, added without reordering or reweighting
 Sprints 0–5 above — those stay exactly as planned. Named deliberately:
@@ -212,6 +222,9 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6) | No `pyproject.toml`/`ruff.toml` | Pre-existing style debt across the whole codebase |
 | [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) | PMEM (EMH-2) integration | Blocked on hardware availability |
 | [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival |
+| [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10) | GCSG shadow-execution stall under certain concurrent batch compositions (Marlin path) | Blocks full 570-question MMLU coverage; the original offload/pin_memory crash is fixed, this is a separate, still-open failure |
+| [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint`/`test`/`bench` fail on relative paths — container `WORKDIR` (`/workspace`) doesn't match `osx-poc/`'s relative paths | Workaround in use everywhere: `docker compose run --rm osx-dev bash -c "cd osx-poc && ..."` |
+| [#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) | Same stall as #10, AWQ ModuleList path | Same root cause investigation, tracked separately since the two are distinct code paths |
 
 ---
 

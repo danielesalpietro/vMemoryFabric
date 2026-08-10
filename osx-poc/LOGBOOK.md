@@ -5,6 +5,210 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-10 — Oskarshamn, continued: content ruled out, batch composition confirmed as the real variable — session close
+
+**Release:** [Oskarshamn] v0.4.0-dev — still in progress. Picks up right
+after the determinism check (4/4 identical `[0:16)` re-runs) and the
+Sprint 6 addition. Two more targeted tests close out the "what qualifies a
+stalling prompt" question left open at the end of the last sub-entry —
+answer: nothing about the prompt itself. Session wraps up here; issues
+#10/#16 stay open on purpose, per the standing rule not to close them
+until the MMLU comparison actually holds up.
+
+### Qualitative read of the four known stall positions — no shared textual trait
+
+Per the user's request: instead of guessing at structural features (already
+exhausted — length, subject boundary, host memory all ruled out), read the
+actual prompt text at the four confirmed stall positions (~33, ~79, ~86,
+~97) and ask what a human would flag as unusual.
+`scripts/dump_prompts_at_positions.py` (raw final question only) and
+`scripts/dump_full_prompts_at_stalls.py` (complete 5-shot prompt + char
+stats: length, `___` run count, non-ASCII count, newline count) — both
+CPU-only, no GPU needed.
+
+- **Position 33** (business_ethics): genuinely unusual — 36 runs of `___`
+  (fill-in-the-blank formatting), the only one of the four with anything
+  structurally distinctive.
+- **Position 79** (college_computer_science): dense OS/CS notation
+  (multilevel directory sharing, link counts), but no denser than the
+  *working* positions 70-78 in the same subject.
+- **Position 86** (college_mathematics): a related-rates calculus problem
+  with `sqrt()` notation — unremarkable.
+- **Position 97** (college_medicine): the one non-ASCII character
+  (`unicode_non_ascii=1`) turned out to be a literal `°` in "25°C" —
+  checked directly (`ord(c) > 127` scan inside the container, not
+  guessed) rather than assumed to be something exotic.
+
+No common qualifier across all four. The underscore-heavy formatting is
+unique to position 33; 79/86/97 read as ordinary MMLU prompts,
+indistinguishable by eye from prompts that already ran clean. Content
+complexity/domain/notation, the thing this sub-investigation set out to
+find, is **not** the answer — reported honestly as a negative result
+rather than stretched into a weak pattern.
+
+### Single prompt, alone: passes clean — rules out "position 33 is just poisoned"
+
+User's proposed test: run position 33 by itself — `--prompt-start 33
+--max-prompts 1`, batch size 1, fresh container — and see whether pure
+isolation is enough to make it pass. It is:
+
+```
+Accuratezza: 100.0% (1/1)
+GCSGGuard stats: total_tokens_evaluated=20064, shadow_activations=682,
+                 activation_rate=3.4%
+generate() completed cleanly, ~5s of actual inference
+```
+
+682 real shadow activations on this exact content, no crash, no stall.
+This isn't a low-activation fluke that got lucky — the shadow path was
+genuinely exercised hundreds of times against this prompt's routing
+pattern and still completed. Combined with everything already
+established (fresh-process re-runs, ruled out process-reuse; identical
+4/4 repeats, ruled out probabilistic race), this rules out "position 33's
+content is inherently unsafe regardless of context."
+
+### `[32:48)` at batch=16 also stalls — the same content, batch=16, still fails
+
+If content alone isn't sufficient to explain the stall, and batch=32 was
+already known to fail, the next question is where between 1 and 32 the
+threshold sits — same batch size (16) that ran clean for `[0:16)` and
+`[64:80)` earlier, applied to the neighborhood that contains position 33.
+
+It also stalled: `Processed prompts: 6%|▋| 1/16` (position 32 completed,
+16.64s), then nothing — no progress on position 33 or beyond for the
+remaining 220s+ until the watchdog fired at T+250s (`SIGTERM`, per the
+250s `--watchdog-timeout`).
+
+This is the sharper finding of the two: batch=16 is *not* a uniformly
+safe concurrency depth (as `[0:16)`/`[64:80)` might have suggested) — this
+specific 16-prompt neighborhood fails at the same size that's safe
+elsewhere. Combined with position 33 succeeding completely alone, content
+alone and generic batch-size threshold are both insufficient explanations
+on their own. What's left standing: an **interaction effect** — position
+33 concurrently scheduled with some subset of positions 34-47 triggers
+it, position 33 scheduled with nothing (or with a different set of
+neighbors, e.g. in the `[0:16)`/`[64:80)` slices) does not. Which
+neighbor(s) matter, and through what mechanism (KV-block admission
+timing, H2D copy contention under the offload path, or something else)
+is not identified — flagged as the natural next step (`[32:40)` vs.
+`[40:48)` binary search), not chased further this session per the
+decision to close out here.
+
+### An external second opinion, checked against the record instead of acted on
+
+A third-party review of this stall (CUDA Graph capture/replay colliding
+with the shadow hook; VRAM exhaustion causing driver-level thrashing;
+suggested dropping `cpu_offload_gb=4` and adding `enforce_eager=True`) was
+checked against what's actually in the logs and code before acting on any
+of it, per this session's standing rule. Two of its four concrete
+suggestions turned out to rest on stale or wrong premises:
+
+- `enforce_eager=True` is already set on both `eval_mmlu_gcsg.py` and
+  `smoke_test_gcsg_mixtral8x7b.py` — confirmed by the `cuda.py:98` warning
+  present in every run's own log ("Since, enforce-eager is enabled, async
+  output processor cannot be used"). CUDA Graphs are already fully
+  disabled; they can't be the mechanism.
+- Dropping `cpu_offload_gb=4` was already tried and rejected for an
+  unrelated, already-documented reason
+  (`scripts/smoke_test_gcsg_mixtral8x7b.py`'s own docstring: removing it
+  "hits a separate, confirmed real bug — Marlin repacking hangs without
+  the scratch-space headroom offload provides"). Re-testing it now would
+  just re-trigger a different known hang, not isolate this one.
+
+The other two suggestions (external `timeout` wrapping instead of relying
+on the in-process `SIGKILL` watchdog; per-request incremental result
+persistence instead of per-chunk) were already in place or already an
+identified-but-unfixed gap, respectively — nothing new adopted from this
+review, but useful as a real cross-check that the session's own findings
+hold up against outside scrutiny.
+
+### A second-opinion suggestion that *did* find something real — tried, and disproven
+
+A follow-up round of the same external review, after being corrected on
+the two stale points above, proposed a third mechanism grounded directly
+in the code rather than in general vLLM internals: `_evaluate_gcsg_for_rows()`
+(`gcsg.py`) builds a `GatingContext` per row, per `.gate` hook call,
+inside a Python `for row_idx in range(...)` loop — and `gating_scores=
+probs[row_idx].tolist()` / `token_entropy=float(entropy[row_idx])` both
+force a blocking CUDA device→host sync, per row, per layer. Verified
+directly by reading the real file (`grep`, not assumed): confirmed present,
+unconditional, inside the loop. With batch=1 that's 32 syncs (one per
+layer); batch=16 is 512. The scaling matched the empirical data (33 alone:
+cheap; `[32:48)` at batch=16: 16x the sync pressure, stalls) closely
+enough to be worth a real test rather than dismissed like the other two.
+
+**Fix implemented**: hoisted `.tolist()` out of the loop — `probs.tolist()`
+and `entropy.tolist()` called once per tensor (covering the whole batch)
+instead of once per row. Same data reaches the same `GatingContext`
+fields, same `should_activate_shadow()`/`run_shadow()` logic downstream,
+zero behavior change — pure sync-count reduction (2 per hook call instead
+of 2×batch_size). Unit suite green after the change (30 passed, 3 skipped,
+`test_evaluate_gcsg_for_rows_passes_2d_hidden_states_slice` included, no
+regression).
+
+**Re-ran `[32:48)` at batch=16 with the fix in place — stalled identically.**
+Position 32 completed (5.59s/it), then nothing for 250s+ until the
+watchdog fired, same exact point as both pre-fix attempts. **Disproven,
+not just untested** — the per-row sync hypothesis, despite being a
+well-grounded, code-verified candidate with a plausible scaling story, is
+not the (sole, or even a contributing) cause of this stall. The fix itself
+is kept regardless (real, harmless efficiency improvement — fewer blocking
+syncs is never wrong), same pattern as the `captured_router_logits` cap
+earlier this session: a legitimate independent fix, explicitly not the
+stall's resolution.
+
+This narrows the remaining search space further: not chunked prefill
+(already off), not CUDA Graphs (already off, `enforce_eager=True`), not
+`cpu_offload_gb` removal (already tried, different known hang), not the
+per-row CPU-GPU sync pattern (just tested, disproven). Whatever drives the
+batch-composition interaction found earlier in this entry is still
+unidentified after five independent mechanisms have been checked and
+excluded.
+
+### End of day state — session close
+
+- Root cause of the reproducible stall remains **open**, but sharply
+  narrowed from where this sub-entry started: not raw prompt content
+  (position 33 alone: clean, 682 activations), not a generic batch-size
+  ceiling (batch=16 clean elsewhere, failing here), not host memory
+  pressure (ruled out earlier), not CUDA Graph interaction (already
+  disabled), not the already-fixed fragmentation hang's mechanism
+  (different GPU-utilization signature). What's left: a specific
+  interaction between position 33 and some subset of its scheduled
+  neighbors — unidentified, next step is the `[32:40)`/`[40:48)` split.
+- MMLU coverage stays partial — skip-and-continue over confirmed-clean
+  slices, `[80:96)` and `[96:112)` still unprocessed (both stalled on
+  first attempt, not yet retried post-determinism-check). The
+  representativeness caveat from earlier in this entry (skipped ranges
+  could bias subject coverage vs. the 72.3% hook-only baseline) still
+  applies — no final, defensible accuracy number yet.
+- `e59a16d` (real GPU pinning fix, both shadow paths) pushed to
+  `origin/Sprint-3-Oskarshamn`.
+- `src/scheduler/gcsg.py`: `_evaluate_gcsg_for_rows()` batches its
+  device→host sync (`.tolist()` once per tensor instead of once per row) —
+  a real efficiency fix, tested directly as a stall-cause candidate and
+  disproven, kept anyway on its own merits.
+- New diagnostic scripts this sub-entry:
+  `scripts/dump_prompts_at_positions.py`,
+  `scripts/dump_full_prompts_at_stalls.py` — kept in-tree per this
+  project's convention, alongside their output
+  (`prompts_dump.txt`/`prompts_full_dump.txt`, gitignored-worthy scratch
+  output, committed anyway for continuity into the next session).
+- Issues #10 and #16 **left open deliberately** — the real fix (GPU
+  pinning) is shipped and verified for what it targeted (the original
+  offload/pin_memory crash class), but the newly-found stall is a
+  different, still-open failure mode surfaced by the same code path under
+  real load. Closing either issue now would overstate what's actually
+  resolved.
+
+Next session: `[32:40)` vs. `[40:48)` split to localize which neighbor(s)
+of position 33 matter; resume skip-and-continue coverage past `[112:...)`;
+decide on a methodology for a defensible partial-coverage accuracy number
+if the stall isn't root-caused soon; `_ShadowExpertINT4` (path 1) still
+untested for the original offload exposure, independent of this stall.
+
+---
+
 ## 2026-08-10 — Oskarshamn, continued: issue #10 Fase 0/1 — a3 confirmed feasible, but the Marlin crash and a second AWQ crash turn out to share one mechanism
 
 **Release:** [Oskarshamn] v0.4.0-dev — in progress. Set out to verify

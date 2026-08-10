@@ -1068,12 +1068,23 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         n_experts = probs.shape[-1]
         entropy = -(probs * probs.clamp_min(1e-12).log()).sum(dim=-1) / math.log(n_experts)
 
+        # Batched device->host sync (2026-08-10, candidate mechanism for a
+        # reproducible stall under certain batch compositions — see LOGBOOK):
+        # previously .tolist()/float() ran INSIDE the loop below, one CUDA sync
+        # pair per row. Every .gate hook call (every layer, every forward pass)
+        # paid that N times — 32 layers x batch_size blocking syncs per token,
+        # scaling with batch size. Hoisted out of the loop: same data, same
+        # GatingContext fields, same should_activate_shadow()/run_shadow()
+        # logic below, just two syncs total per hook call instead of 2xN.
+        gating_scores_batch = probs.tolist()
+        entropy_batch = entropy.tolist()
+
         for row_idx, request_id in enumerate(row_request_ids):
             ctx = GatingContext(
                 token_id=row_idx,
                 request_id=request_id,
-                gating_scores=probs[row_idx].tolist(),
-                token_entropy=float(entropy[row_idx]),
+                gating_scores=gating_scores_batch[row_idx],
+                token_entropy=entropy_batch[row_idx],
             )
             should, _ = self.guard.should_activate_shadow(ctx)
             if should:

@@ -18,6 +18,88 @@ Releases are named after cities where significant project milestones were reache
 
 
 
+## [Oskarshamn] — v0.4.0-dev — 2026-08-10 (in progress, not yet released)
+
+*Named after Oskarshamn, Sweden, where M3 — Expert Scheduler work is happening.*
+
+### Added
+
+**M3 — GCSG shadow execution, real (not stub)**
+
+- `src/scheduler/gcsg.py` — `GCSGWorker._load_shadow_pool()` now actually populates the shadow pool against the real Mixtral-8x7B-Instruct checkpoint, for both quantization paths: AWQ ModuleList (`_pin_awq_expert_to_gpu()`, direct `.to('cuda')` per expert) and Marlin-packed AWQ (`_build_marlin_shadow_pool()` + new `_PinnedMarlinExperts` proxy class, GPU-resident slices of the shared `w13_qweight`/`w2_qweight`/etc. tensors, built only for layers actually offloaded to CPU — resident layers reuse the original module, zero extra allocation)
+- `_MarlinFusedShadowExpert` — constructor changed from one `(expert_id, num_experts)` per instance to per-layer `(fused, expert_id, num_experts)` entries, since offloaded layers now route through the 2-expert pinned proxy (local index) while resident layers use the original 8-expert tensor (global id)
+- First real, non-zero `GCSGGuard.stats()["shadow_activations"]` this project has ever measured — every prior run had shadow execution stubbed to hook-only
+
+### Fixed
+
+**GCSGWorker — shadow-execution call on a CPU-offloaded expert crashes (issues [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10), [#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16))**
+
+- Root cause: `_load_shadow_pool()` registered shadow experts by reference into vLLM's normal `cpu_offload_gb` mechanism, which wraps only whole decoder layers' `.forward` in an async (`non_blocking=True`) H2D copy — never individual expert submodules. A direct, out-of-sequence call into an expert that happens to be CPU-resident at that moment bypasses the real swap-in path entirely and crashes with `CUDA error: illegal memory access`. Reproduced identically on both the Marlin path (original issue #10) and the AWQ ModuleList path (new issue #16, found while investigating #10) — one shared mechanism, two code paths
+- Fix: pin every shadow-pool expert explicitly GPU-resident at load time (see Added above), verified numerically (`scripts/verify_marlin_pinned_proxy.py`, proxy vs. same-layer original, rtol=1e-2/atol=1e-3, PASS) and end-to-end (`scripts/verify_shadow_pool_pinning_e2e.py`, both quantization paths, PASS)
+- A real allocator-fragmentation hang was hit and fixed mid-implementation: the first attempt built the pinned Marlin proxy for all 32 layers instead of only the 6 offloaded ones (192 small allocations vs. 36, on an already-near-full 24GiB model) — GPU pegged at 100%, 9 minutes with zero progress, confirmed via `nvidia-smi` and killed rather than waited out. Fixed by scoping proxy construction to `w13_qweight.device.type == "cpu"` layers only
+
+**GCSGWorker — 1D vs. 2D `hidden_states` in `_evaluate_gcsg_for_rows()`**
+
+- `hidden_states[row_idx]` collapsed the row dimension to a 1D tensor; `_MarlinFusedShadowExpert` assumes 2D and misreads `hidden_dim` as the row count, crashing several calls later inside vLLM's own `fused_topk` — the error surfaced far from its actual cause. Fix: `hidden_states[row_idx : row_idx + 1]` (slice, preserves 2D shape). Only reachable once shadow execution actually ran past `should_activate_shadow()` for the first time this session — predates this session's other changes entirely, just never exercised before
+
+**`_evaluate_gcsg_for_rows()` — per-row CUDA sync batched into a single per-tensor sync**
+
+- `gating_scores=probs[row_idx].tolist()` / `token_entropy=float(entropy[row_idx])` previously ran inside the per-row loop, forcing a blocking GPU→CPU sync twice per row per layer (32 layers × batch_size per token). Hoisted `.tolist()` above the loop — same data, same downstream logic, 2 syncs per hook call instead of 2×batch_size. Tested directly as a candidate cause of the stall below (a plausible, code-verified hypothesis, not a guess) and **disproven** — `[32:48)` at batch=16 stalled identically with the fix in place. Kept regardless as a real, independent efficiency improvement
+
+**`captured_router_logits` unbounded growth**
+
+- Fired on every `.gate` hook call, every layer, every forward pass, holding live GPU tensor references for the full process lifetime — a real bug (tens of thousands of un-freeable tensors over a full 570-prompt run), fixed with a hard cap (`_MAX_CAPTURED_ROUTER_LOGITS = 1000`). Hypothesized as the cause of a separate reproducible stall (below); re-tested with the cap in place and the stall recurred identically — kept as a legitimate independent fix, explicitly **not** claimed as the stall's resolution
+
+### Known issue — not fixed this release
+
+**Reproducible stall under certain concurrent batch compositions (issues #10/#16, reopened scope)**
+
+Full 570-question MMLU runs, and several smaller batched runs, stall
+reproducibly (GPU pinned near 100%, or 15-25% depending on the run, no
+forward progress for 100s+, in-process `SIGKILL` sometimes doesn't land —
+`docker kill` required) at specific points. Extensively isolated this
+session and **not** explained by: prompt content in isolation (a known
+stall position run alone, batch=1, completes cleanly with hundreds of
+real shadow activations), a generic batch-size ceiling (batch=16 is clean
+for some slices, stalls for others), process reuse (fresh-process re-runs
+stall identically), determinism/race (4/4 identical repeats of a known-
+clean slice), prompt length, subject boundaries, or host memory pressure
+(all directly tested and ruled out — see `LOGBOOK.md`, 2026-08-10
+entries), CUDA Graph interaction (already disabled, `enforce_eager=True`),
+chunked prefill (already disabled), or per-row CPU-GPU sync pressure in
+the GCSG hook (a well-grounded, code-verified candidate — tested directly
+with a real fix in place, disproven). Current best explanation: an
+interaction effect between specific concurrently-scheduled prompts,
+mechanism unidentified. Tracked
+as an open item on issues #10/#16, which stay open on purpose rather than
+being closed against a partial fix.
+
+### Status
+
+**In progress — not released.** Shadow execution is real and verified for
+what it targets (the offload/pin_memory crash class is fixed on both
+quantization paths, numerically and end-to-end). Full-dataset MMLU
+quality comparison against the 72.3% hook-only baseline (Möllstorp-era
+measurement) is blocked by the stall above — partial coverage only via a
+skip-and-continue strategy, with an acknowledged representativeness
+caveat (skipped slices could bias subject coverage). Not marked Released
+like Karlshamn/Möllstorp/Eketorp above, on purpose — the module works,
+but the sprint's own acceptance criterion (GCSG quality degradation < 2%,
+MMLU-5shot) can't be evaluated yet without full coverage.
+
+### Tracking
+
+- Issues #10 and #16 kept open, cross-referenced, updated with the shared-
+  mechanism finding and the real fix — not closed, since the stall above
+  is a distinct, still-open failure surfaced by the same code path
+- Board [OSX-PoC Roadmap](https://github.com/users/danielesalpietro/projects/1) updated: Sprint 3 card moved to In Progress with the real state (not the original stub-scope description), Sprint 6 (Stockholm, telemetry — added mid-sprint, see README) card body filled in, issues #10/#12/#16 added
+
+---
+
+*Next: root-cause the batch-composition stall (issues #10/#16), resume skip-and-continue MMLU coverage, then close out Sprint 3 for real once the acceptance criterion can actually be measured.*
+
+---
+
 \## \[Eketorp] — v0.3.0-dev — 2026-08-08
 
 
