@@ -13,6 +13,7 @@ cosa è risultato rilevante (e per quale sprint/modulo), cosa no, e perché.
 | Progetto | Licenza | Modulo/sprint più rilevante | File |
 |---|---|---|---|
 | [exo-explore/exo](https://github.com/exo-explore/exo) | Apache-2.0 | M2 (Sprint 2, Eketorp) — async shard downloader; M3/AER (stub) — placement topology-aware | [exo-explore-exo.md](exo-explore-exo.md) |
+| [EfficientMoE/MoE-Infinity](https://github.com/EfficientMoE/MoE-Infinity) | Apache-2.0 | Sprint 3 (Oskarshamn) — issue #10, GCSG shadow pool su esperti AWQ-Marlin-packed | [moe-infinity.md](moe-infinity.md) |
 
 ## Template per nuove voci
 
