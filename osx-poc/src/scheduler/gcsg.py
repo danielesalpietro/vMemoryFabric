@@ -721,6 +721,27 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
            "shadow" è un secondo forward sullo stesso expert, non una copia
            INT4 separata.
 
+           STOPGAP (2026-08-10, issue nuova — scoperta indagando issue #10
+           su un checkpoint reale, non specifica di Marlin): chiamare un
+           modulo MixtralMLP direttamente — cioè esattamente cosa fa
+           _AWQShadowExpert.__call__(), fuori dal forward sequenziale del
+           modello — produce `CUDA error: illegal memory access` sul
+           checkpoint reale (casperhansen/mixtral-instruct-awq) quando
+           quell'expert è offloaded su CPU (cpu_offload_gb=4, l'UNICA
+           configurazione in cui questo checkpoint sta in VRAM su una
+           3090 — non è opzionale). Isolato con hidden_states sia catturati
+           che sintetici (esclude un problema di lifetime del tensore), e
+           confermato assente su un expert non-offloaded stesso checkpoint/
+           config (layer 5 expert 6, device=cuda: nessun errore) — quindi
+           specifico dell'interazione offload + chiamata diretta fuori
+           sequenza, non una fragilità generale di _AWQShadowExpert in sé.
+           Non ancora root-causato (in corso: pin_memory forzato come
+           variabile). Finché non lo è, disabilitato INCONDIZIONATAMENTE
+           (non solo quando cpu_offload_gb>0): stesso principio già
+           applicato al path Marlin — hook-only resta la degradazione
+           sicura di default finché un fix non è verificato, non solo nel
+           sottocaso già riprodotto.
+
         Selezione expert: placeholder round-robin (range(shadow_pool_size)),
         non guidato da carico reale — quali expert cachare in base
         all'hotness è integrazione EAT/Tier Manager (M1/M2), non disponibile
@@ -760,10 +781,18 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                     per_layer_w2.append(_quantize_int4(w2))
                 self._shadow_pool[expert_id] = _ShadowExpertINT4(per_layer_w13, per_layer_w2)
             else:
-                modules_per_layer = [
-                    layer.block_sparse_moe.experts[expert_id] for layer in layers
-                ]
-                self._shadow_pool[expert_id] = _AWQShadowExpert(modules_per_layer)
+                # Stopgap (2026-08-10): _AWQShadowExpert.__call__() chiama
+                # modules_per_layer[layer_id](hidden_states) direttamente, fuori
+                # dal forward sequenziale del modello — su un checkpoint reale con
+                # cpu_offload_gb=4 (l'unica config in cui questo checkpoint sta in
+                # VRAM) questo produce CUDA illegal memory access quando l'expert
+                # chiamato è offloaded su CPU. Confermato assente su un expert
+                # non-offloaded, stesso checkpoint/config — quindi non una
+                # fragilità generale di _AWQShadowExpert, ma non ancora
+                # root-causato abbastanza da restringere il guard al solo caso
+                # cpu_offload_gb>0. Disabilitato incondizionatamente finché non lo
+                # è — vedi docstring del metodo per lo stato dell'indagine.
+                continue
 
         if is_marlin_packed:
             log.warning(
@@ -776,11 +805,23 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                 "possibile finché issue #10 non si chiude.",
                 len(expert_ids), expert_ids, len(layers),
             )
-        else:
-            path = "FusedMoE+INT4-simulato" if is_fused else "AWQ-pre-quantizzato"
+        elif is_fused:
             log.info(
-                "GCSG: shadow pool caricato — %d expert (%s) su %d layer, path=%s.",
-                len(expert_ids), expert_ids, len(layers), path,
+                "GCSG: shadow pool caricato — %d expert (%s) su %d layer, "
+                "path=FusedMoE+INT4-simulato.",
+                len(expert_ids), expert_ids, len(layers),
+            )
+        else:
+            log.warning(
+                "GCSG: shadow pool NON caricato per %d expert AWQ-pre-quantizzati "
+                "(%s) su %d layer — path disabilitato (stopgap 2026-08-10: "
+                "_AWQShadowExpert crasha con CUDA illegal memory access quando "
+                "l'expert chiamato è offloaded su CPU, indagine in corso, non "
+                "ancora root-causato). GCSGWorker gira in modalità hook-only per "
+                "questi expert: hook/request_id/contamination bookkeeping restano "
+                "verificabili, nessuna shadow execution possibile finché questo "
+                "path non ha un fix verificato.",
+                len(expert_ids), expert_ids, len(layers),
             )
 
     def _register_gate_hooks(self) -> None:

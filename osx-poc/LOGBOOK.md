@@ -5,6 +5,191 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-10 — Oskarshamn, continued: issue #10 Fase 0/1 — a3 confirmed feasible, but a second, unrelated CUDA crash found before it could be tested end to end
+
+**Release:** [Oskarshamn] v0.4.0-dev — in progress. Set out to verify
+direction (a3) for issue #10 (Marlin-packed shadow path) — reuse
+`_AWQShadowExpert`'s already-working `MixtralMLP` machinery, populated by
+hand from the checkpoint on disk, instead of hand-rolling AWQ
+dequantization (a2) or reverse-engineering Marlin's repack format (a1).
+Fase 0 confirmed a3 is the right direction. Fase 1's verification harness
+never got to test it: it hit a second, unrelated `CUDA illegal memory
+access` — this time in the already-shipped `_AWQShadowExpert` path (path
+3), on the real checkpoint, never before exercised in this exact regime.
+That crash is more urgent than issue #10 itself: unlike Marlin, path 3 was
+live-wired with no stopgap. Disabled it unconditionally this session;
+issue #10 (Marlin) itself is unchanged — a3 still needs to be verified
+against it directly.
+
+### Fase 0: why a3, not a1 or a2
+
+Read the real installed `awq_marlin.py` (vLLM 0.6.6.post1, in-container,
+not a GitHub tag guess): `AWQMoEMethod.create_weights()` allocates plain
+AWQ-format tensors; `process_weights_after_loading()` then converts them
+in place via `ops.awq_marlin_moe_repack()` — a compiled CUDA op, not a
+Python-inspectable permutation. Reversing that (a1) means
+reverse-engineering an undocumented kernel's tile layout — high risk,
+close to direction (c) in disguise.
+
+Checked the real checkpoint instead
+(`/data/nvme/models/mixtral-instruct-awq/model.safetensors.index.json`):
+per-expert flat AWQ tensors (`experts.{e}.w1.qweight/.qzeros/.scales`,
+same for w2/w3) — exactly the layout `MixtralMLP` (`mixtral_quant.py`)
+already expects, matching `quant_config.json` 1:1 via
+`AWQConfig.from_config()`. No hand-rolled dequant math needed (a2) — just
+construct a standalone `MixtralMLP`, populate it from disk, reuse
+`_AWQShadowExpert` as-is.
+
+### Three assumptions checked before writing the harness, not assumed
+
+Standard set by this session: verify every "should work" claim against the
+real installed source or a real run before building on it, since two
+ungrounded claims (a nonexistent-commit claim, a "Marlin path is
+live-wired" claim — both made mid-review, both re-checked against actual
+`git`/file state and found false) already cost a round of back-and-forth
+this session.
+
+1. `AWQLinearMethod.apply()` (real path, batch<256 branch) requires
+   CUDA — confirmed by direct test: `_C::awq_gemm` has no CPU kernel
+   registered (`NotImplementedError`, only `[CUDA, Meta, ...]` backends).
+   Corrected the Fase 1 plan from "CPU/offline prototype" to "one
+   `.cuda()` module standalone, no `LLMEngine`" — still well inside the
+   "no live engine, no awq_marlin" constraint.
+2. Constructing `ReplicatedLinear` (what `MixtralMLP` uses internally)
+   requires an initialized distributed process group. Confirmed: `LLM()`
+   initializes it as a side effect (TP=1 NCCL single-rank), and
+   `ReplicatedLinear(quant_config=AWQConfig(...))` constructs cleanly
+   afterward, same process.
+3. `MixtralMLP.__init__` does **not** pass `params_dtype` to its three
+   `ReplicatedLinear`s — defaults to `torch.get_default_dtype()`, not
+   necessarily fp16 outside vLLM's own loading context. Used vLLM's own
+   `set_default_torch_dtype` context manager (same one the real loader
+   uses) to wrap construction, instead of assuming ambient dtype state.
+
+### Fase 1 harness: crashed before it could test what it was built to test
+
+`scripts/verify_awq_manual_shadow_expert.py`: load the real checkpoint
+once via the normal loader (`quantization="awq"`, `cpu_offload_gb=4` —
+confirmed the only config in which this checkpoint fits in 24GiB VRAM),
+capture real `hidden_states` via a hook on `.gate`, then compare the
+loader's own expert module against a standalone one built via a3. Never
+reached the standalone module: the **reference** call —
+`layer0.block_sparse_moe.experts[0](hidden_states)`, the real,
+already-loaded module, called directly outside the model's sequential
+forward — crashed with `CUDA error: illegal memory access` at
+`torch.cuda.synchronize()`.
+
+### Why this is bigger than a3/issue #10
+
+`_AWQShadowExpert.__call__()` (`gcsg.py`, path 3) does exactly this: calls
+a `MixtralMLP` submodule directly, from a hook, outside the model's normal
+per-layer forward. It was verified end-to-end only on
+`hf-internal-testing/Mixtral-tiny` — 2 layers, unquantized, no
+`cpu_offload_gb` (LOGBOOK 2026-08-09) — never against the real 8x7B
+checkpoint, where `cpu_offload_gb=4` is not optional (needed to fit in
+VRAM at all). The MMLU baseline run was in hook-only mode for an unrelated
+reason (Marlin blocked loading), so this path was never actually exercised
+in the regime where it breaks. Not "verified, now broken" — "never
+verified in the regime that breaks it."
+
+### Isolating the cause: four more runs, one real candidate mechanism
+
+`scripts/isolate_awq_shadow_call_crash.py`,
+`scripts/isolate_awq_offload_variables.py` — each variant a separate
+container run (CUDA errors are sticky for the rest of a process; no
+chaining a crashing call after a crashing call in one process).
+
+- **Tensor lifetime (H1) excluded**: fresh synthetic `hidden_states`
+  (`torch.randn`, same shape/dtype/device) crashes identically to the
+  hook-captured one. Not a stale-tensor bug.
+- **Offload implicated**: the identical call on a non-offloaded expert,
+  same checkpoint/config (found by scanning for one still on `cuda:0`
+  under `cpu_offload_gb=4` — layer 5 expert 6) — no error. Direct
+  out-of-sequence calls are not unsafe in general; offloaded ones
+  specifically are.
+- **pin_memory forced True** (monkeypatched
+  `vllm.platforms.interface.in_wsl` — the exact function
+  `Platform.is_pin_memory_available()` calls at runtime, found by reading
+  `interface.py:230-238`) on the *same* expert that crashed twice (layer
+  0, expert 0): no error.
+
+Candidate mechanism: unpinned host memory under WSL2 (vLLM's own guard:
+"Pinning memory in WSL is not supported," citing NVIDIA's docs) + an async
+H2D copy in the offload swap-in path. **Not a verified fix** — forcing
+`pin_memory=True` bypasses that guard rather than satisfying it; a single
+small synthetic forward not crashing doesn't rule out silent corruption or
+instability under sustained real load. Determinism also stays open: the
+two same-process repeat crashes in `isolate_awq_shadow_call_crash.py` ran
+in an already-corrupted CUDA context after the first, so they're not clean
+evidence of determinism — the clean pin_memory flip on an otherwise-
+identical call is suggestive of a real, mechanism-driven cause rather than
+a pure race, but wasn't confirmed with independent fresh-process repeats.
+
+### Stopgap applied — broader than the isolated cause, deliberately
+
+Offload is implicated but not proven to be the *only* trigger — scoping
+the guard to `cpu_offload_gb>0` would under-protect if the direct-call
+pattern turns out to be unsafe more generally. Disabled path 3
+unconditionally in `_load_shadow_pool()` (`gcsg.py`), same "hook-only
+stays the safe default" principle already applied to Marlin (`7a01a11`) —
+not the narrower, offload-only guard originally on the table, on the
+reasoning that narrowing it later (once fully root-caused) costs nothing
+extra now, while under-scoping it now and being wrong costs a live crash.
+
+Regression test added
+(`test_load_shadow_pool_never_populates_awq_moduleslist_path`): constructs
+`GCSGWorker` via `__new__` (bypasses `__init__`'s real
+`vllm.worker.worker.Worker` import — `_load_shadow_pool()` itself does no
+vLLM import, pure duck-typing on `self._base.model_runner.model`,
+consistent with the module's existing "importable without vLLM installed"
+design) with a fake `ModuleList`-shaped model, asserts `shadow_pool` stays
+empty. Full suite: 80 passed, 3 skipped (one net-new test, same 3
+pre-existing skips) — verified in-container.
+
+### Open questions, explicit
+
+- Is `pin_memory=True` actually safe to ship for this path, or does it
+  trade a loud crash for a quieter one that a synthetic single forward
+  wouldn't surface? Not answered this session.
+- True determinism of the original (unpinned) crash: not established
+  independently of the pin_memory flip.
+- Does `_ShadowExpertINT4` (path 1, raw fp16 `FusedMoE`) have the same
+  exposure? Never tested under `cpu_offload_gb` with a direct
+  out-of-sequence call — only the tiny unquantized model (no offload
+  needed) and now path 3 have been checked.
+- a3 itself, for issue #10: Fase 0 confirmed it's the right direction, but
+  Fase 1 got interrupted by this unrelated crash before the
+  standalone-module comparison could run even once. Issue #10 is exactly
+  where it was before this session started — open, Marlin path still
+  hook-only.
+- New issue for the path-3 crash: not filed yet, pending.
+
+### End of day state
+
+- `src/scheduler/gcsg.py`: path 3 (`_AWQShadowExpert`, ModuleList AWQ) now
+  disabled unconditionally in `_load_shadow_pool()` — hook-only for all
+  three paths as of this commit (Marlin already was, path 3 now is too).
+  Path 1 (fp16 raw `FusedMoE`) is the only one still live.
+- `tests/test_scheduler.py`: new regression test guarding path 3's
+  stopgap. Full suite 80 passed, 3 skipped.
+- `scripts/verify_awq_manual_shadow_expert.py`,
+  `scripts/isolate_awq_shadow_call_crash.py`,
+  `scripts/isolate_awq_offload_variables.py`: the a3 harness (never
+  completed its actual comparison) and the two isolation scripts, kept
+  in-tree per this project's convention of keeping diagnostic repros, not
+  just their conclusions.
+- Issue #10: unchanged, still open, a1/a2/a3 assessment now recorded but
+  a3 unverified against the actual Marlin path.
+- A second issue (path 3 × offload crash) identified, not yet filed.
+
+Next: file the path-3 issue with the four-run isolation table and the
+explicit pin_memory caveat; decide whether to resume a3's Fase 1 against
+Marlin now that path 3 is safely disabled, or investigate path-3's root
+cause first since it's the more urgent live gap; check path 1 for the
+same exposure before assuming it's clean.
+
+---
+
 ## 2026-08-09 — Oskarshamn, continued: issue #10 stopgap — Marlin-packed shadow path disabled, not fixed
 
 **Release:** [Oskarshamn] v0.4.0-dev — in progress. Closes the immediate

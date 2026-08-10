@@ -5,13 +5,14 @@ Coverage target: > 90%.
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from unittest.mock import MagicMock
 
 from scheduler import PTPEPClassifier, DomainLabel, GCSGGuard, AERManager
 from scheduler.ptpep import PTPEPPrediction
-from scheduler.gcsg import GatingContext, ShadowExecutionResult
+from scheduler.gcsg import GatingContext, ShadowExecutionResult, GCSGWorker
 
 _FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 _MODEL_PATH   = Path(__file__).resolve().parent.parent / "models" / "ptpep_tfidf_v1.joblib"
@@ -258,6 +259,49 @@ class TestGCSG:
         stats = gcsg.stats()
         assert stats["thresholds"]["theta_gate"] == 0.85
         assert stats["shadow_pool_size"] == gcsg.shadow_pool_size
+
+    def test_load_shadow_pool_never_populates_awq_moduleslist_path(self):
+        """Stopgap 2026-08-10 (gcsg.py::_load_shadow_pool): chiamare un
+        MixtralMLP direttamente — cioè esattamente cosa fa
+        _AWQShadowExpert.__call__(), fuori dal forward sequenziale del
+        modello — produce CUDA illegal memory access sul checkpoint reale
+        quando l'expert chiamato è offloaded su CPU (cpu_offload_gb=4,
+        l'unica config in cui il checkpoint reale sta in VRAM). Indagine in
+        corso (pin_memory/WSL implicato, non ancora un fix verificato) —
+        finché non lo è, _load_shadow_pool() non deve MAI registrare un
+        _AWQShadowExpert nello shadow_pool, incondizionatamente (non solo
+        quando cpu_offload_gb>0).
+
+        Bypassa GCSGWorker.__init__() (importa vllm.worker.worker.Worker
+        reale) con __new__ + attributi assegnati a mano — stesso principio
+        per cui gcsg.py resta importabile senza vLLM installato (vedi
+        docstring di modulo): _load_shadow_pool() stesso non fa alcun
+        import vllm, tocca solo self._base.model_runner.model per duck
+        typing, quindi un fake minimale basta, senza bisogno di un engine
+        vLLM live.
+        """
+        class _FakeExperts(list):
+            pass   # is_fused = hasattr(experts, "num_experts") -> False per una lista piatta
+
+        num_layers, num_experts = 2, 8
+        layers = [
+            SimpleNamespace(
+                block_sparse_moe=SimpleNamespace(
+                    experts=_FakeExperts(object() for _ in range(num_experts)),
+                ),
+            )
+            for _ in range(num_layers)
+        ]
+        worker = GCSGWorker.__new__(GCSGWorker)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(model=SimpleNamespace(model=SimpleNamespace(layers=layers))),
+        )
+        worker.guard = GCSGGuard(shadow_pool_size=4)
+        worker._shadow_pool = {}
+
+        worker._load_shadow_pool()
+
+        assert worker._shadow_pool == {}
 
     def test_quality_degradation_under_2pct(self):
         """Perplexity degradazione < 2% con θ_contamination=5% — MMLU-5shot."""
