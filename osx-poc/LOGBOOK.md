@@ -5,7 +5,7 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
-## 2026-08-10 — Oskarshamn, continued: issue #10 Fase 0/1 — a3 confirmed feasible, but a second, unrelated CUDA crash found before it could be tested end to end
+## 2026-08-10 — Oskarshamn, continued: issue #10 Fase 0/1 — a3 confirmed feasible, but the Marlin crash and a second AWQ crash turn out to share one mechanism
 
 **Release:** [Oskarshamn] v0.4.0-dev — in progress. Set out to verify
 direction (a3) for issue #10 (Marlin-packed shadow path) — reuse
@@ -16,10 +16,14 @@ Fase 0 confirmed a3 is the right direction. Fase 1's verification harness
 never got to test it: it hit a second, unrelated `CUDA illegal memory
 access` — this time in the already-shipped `_AWQShadowExpert` path (path
 3), on the real checkpoint, never before exercised in this exact regime.
-That crash is more urgent than issue #10 itself: unlike Marlin, path 3 was
-live-wired with no stopgap. Disabled it unconditionally this session;
-issue #10 (Marlin) itself is unchanged — a3 still needs to be verified
-against it directly.
+Isolating that crash pointed at CPU offload + unpinned host memory under
+WSL2; running the identical isolation directly against
+`_MarlinFusedShadowExpert` (the original issue #10 crash, `4ff2026`)
+reproduces the exact same signature under the exact same conditions, and
+clears the exact same way when pinned. The two crashes that looked
+unrelated this morning now look like one mechanism surfacing in two
+places. Neither is fixed — both are stopgapped to hook-only, and the
+candidate mechanism (`pin_memory`) is diagnostic, not adopted.
 
 ### Fase 0: why a3, not a1 or a2
 
@@ -146,47 +150,102 @@ design) with a fake `ModuleList`-shaped model, asserts `shadow_pool` stays
 empty. Full suite: 80 passed, 3 skipped (one net-new test, same 3
 pre-existing skips) — verified in-container.
 
+### Same mechanism in Marlin? Tested directly — matches exactly
+
+The candidate mechanism found for path 3 (offload + `pin_memory=False`
+under WSL2) was never actually tested against the *original* Marlin crash
+(issue #10, `4ff2026`) — that session's two isolation attempts (`top_k=1`,
+then router-logits-only) both ran with `cpu_offload_gb=4` already active
+for VRAM reasons, but neither varied offload/`pin_memory` as a variable,
+and neither recorded whether the specific layer under test was actually
+offloaded at the time.
+
+Ran the identical three-way isolation directly against
+`_MarlinFusedShadowExpert.__call__()`
+(`scripts/isolate_marlin_offload_variables.py`) — same call pattern, same
+checkpoint, same `cpu_offload_gb=4`:
+
+| variant | layer device | pin_memory | result |
+|---|---|---|---|
+| offloaded, unpinned (layer 0) | cpu | False (default) | **crash** — `CUDA error: illegal memory access` |
+| non-offloaded (layer 6) | cuda | False | OK |
+| offloaded, pinned (layer 0) | cpu | True (forced) | OK |
+
+Exact same pattern, exact same crash signature, exact same variable flips
+it. This does **not** retroactively prove the original `4ff2026` crashes
+specifically hit an offloaded layer — that session didn't record which
+layer/expert was involved or its device at the time. But every run in that
+session had `cpu_offload_gb=4` active (required for VRAM) and went through
+real `generate()` calls or full `FusedMoE.forward()` references that
+traverse every layer, so touching an offloaded layer at some point was
+likely, not a stretch. The `top_k=1` vs. router-logits-only comparison in
+that session correctly ruled out `top_k` as the variable — it just turns
+out `top_k` was never the actual cause: offload + `pin_memory=False` was
+present, unvaried, in both of that session's attempts, and is now a
+directly-reproduced match for the same symptom.
+
+**Not yet done**: re-running `4ff2026`'s exact original reproduction
+scripts with `pin_memory` forced, to rule out a coincidence of a different
+code path producing an identical-looking error. This session's evidence is
+strong and direct (same class under test, same checkpoint, same
+before/after flip) but is a new, separate repro — not literally the same
+failing call from `4ff2026` re-run and observed to clear.
+
 ### Open questions, explicit
 
-- Is `pin_memory=True` actually safe to ship for this path, or does it
-  trade a loud crash for a quieter one that a synthetic single forward
-  wouldn't surface? Not answered this session.
-- True determinism of the original (unpinned) crash: not established
-  independently of the pin_memory flip.
+- Is `pin_memory=True` actually safe to ship for either path, or does it
+  trade a loud crash for a quieter one that a small synthetic forward
+  wouldn't surface? Not answered this session — stays diagnostic-only,
+  not a candidate for `GCSGWorker`'s real path, until this is understood.
+- True determinism of the original (unpinned) crash, for both Marlin and
+  AWQ ModuleList: not established independently of the pin_memory flip —
+  no repeated independent fresh-process trials of the unpinned case.
 - Does `_ShadowExpertINT4` (path 1, raw fp16 `FusedMoE`) have the same
   exposure? Never tested under `cpu_offload_gb` with a direct
   out-of-sequence call — only the tiny unquantized model (no offload
-  needed) and now path 3 have been checked.
-- a3 itself, for issue #10: Fase 0 confirmed it's the right direction, but
-  Fase 1 got interrupted by this unrelated crash before the
-  standalone-module comparison could run even once. Issue #10 is exactly
-  where it was before this session started — open, Marlin path still
-  hook-only.
-- New issue for the path-3 crash: not filed yet, pending.
+  needed) has been checked for that path.
+- If offload + `pin_memory` really is the shared root cause: does fixing
+  it (however that ends up looking — not `pin_memory=True` as-is) resolve
+  *both* the Marlin path (issue #10) and path 3 in one fix, or do they
+  still need independent verification even after a real fix lands?
+- a3 itself, for issue #10: Fase 0 confirmed it's the right direction as a
+  way to avoid touching Marlin's kernel at all, but if the actual root
+  cause is one level below the kernel (the offload mechanism, shared by
+  every path), a3 sidesteps Marlin specifically without addressing what
+  might be the real problem. Not verified end-to-end either way this
+  session.
 
 ### End of day state
 
 - `src/scheduler/gcsg.py`: path 3 (`_AWQShadowExpert`, ModuleList AWQ) now
   disabled unconditionally in `_load_shadow_pool()` — hook-only for all
   three paths as of this commit (Marlin already was, path 3 now is too).
-  Path 1 (fp16 raw `FusedMoE`) is the only one still live.
+  Path 1 (fp16 raw `FusedMoE`) is the only one still live, and untested
+  for this exposure.
 - `tests/test_scheduler.py`: new regression test guarding path 3's
   stopgap. Full suite 80 passed, 3 skipped.
 - `scripts/verify_awq_manual_shadow_expert.py`,
   `scripts/isolate_awq_shadow_call_crash.py`,
-  `scripts/isolate_awq_offload_variables.py`: the a3 harness (never
-  completed its actual comparison) and the two isolation scripts, kept
+  `scripts/isolate_awq_offload_variables.py`,
+  `scripts/isolate_marlin_offload_variables.py`: the a3 harness (never
+  completed its actual comparison) and the three isolation scripts, kept
   in-tree per this project's convention of keeping diagnostic repros, not
   just their conclusions.
-- Issue #10: unchanged, still open, a1/a2/a3 assessment now recorded but
-  a3 unverified against the actual Marlin path.
-- A second issue (path 3 × offload crash) identified, not yet filed.
+- Issue #10: still open, but reframed — the crash may not be Marlin-kernel-
+  specific at all. a1/a2/a3 assessment recorded, a3 still unverified
+  end-to-end against the actual Marlin path.
+- A second issue (path 3 × offload crash) drafted, not yet filed — likely
+  to reference issue #10 once filed, given the shared mechanism found
+  today, without merging the two (still two distinct code paths, two
+  distinct fixes needed regardless of a shared cause).
 
-Next: file the path-3 issue with the four-run isolation table and the
-explicit pin_memory caveat; decide whether to resume a3's Fase 1 against
-Marlin now that path 3 is safely disabled, or investigate path-3's root
-cause first since it's the more urgent live gap; check path 1 for the
-same exposure before assuming it's clean.
+Next: file the path-3 issue, cross-referencing issue #10's new finding;
+decide whether to root-cause the shared offload/pin_memory mechanism
+before resuming either issue's "real fix" work, since a fix there could
+change what "real fix" even means for both; check path 1 for the same
+exposure before assuming it's clean; consider re-running `4ff2026`'s
+original scripts with pin_memory forced as the fully clean confirmation
+this session stopped short of.
 
 ---
 
