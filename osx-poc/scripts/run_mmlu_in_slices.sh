@@ -33,11 +33,14 @@ while [ "$start" -lt "$TOTAL" ]; do
     echo ""
     echo "--- Fetta $slice_index: [$start:$end) ($n prompt), processo Docker separato ---"
 
-    PYTHONPATH=src timeout 300 python scripts/eval_mmlu_gcsg.py \
+    # Timeout alzati 2026-08-11 (vedi LOGBOOK): una fetta che completa in
+    # 850s+ e' normale sotto WSL2/cpu_offload_gb, non un segno di stallo —
+    # i vecchi 300s/250s uccidevano fette che stavano solo per finire.
+    PYTHONPATH=src timeout 3000 python scripts/eval_mmlu_gcsg.py \
         --prompt-start "$start" \
         --max-prompts "$n" \
         --results-file "$RESULTS_FILE" \
-        --watchdog-timeout 250
+        --watchdog-timeout 2700
 
     status=$?
     if [ "$status" -ne 0 ]; then

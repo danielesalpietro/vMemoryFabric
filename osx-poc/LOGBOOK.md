@@ -213,6 +213,36 @@ watchdog for any future timeout handling; the `[32:40)`/`[40:48)` split
 planned at the previous session's close is no longer necessary — the
 variable was never batch composition.
 
+### Full 570-question MMLU coverage — same night, first defensible number
+
+Didn't wait for a next session — the operating assumption above
+("it will finish, just slowly") was tested immediately. Raised
+`run_mmlu_in_slices.sh`'s hardcoded per-slice limits (`timeout 300` →
+`3000`, `--watchdog-timeout 250` → `2700`) so a legitimately-slow slice
+wouldn't get killed mid-flight the way the old, now-known-too-short
+values would have, then ran the full orchestrator (18 slices of 32,
+one fresh container/`GCSGWorker` each, unmodified `eval_mmlu_gcsg.py`
+defaults — `cpu_offload_gb=4`, real shadow execution) unattended
+overnight.
+
+**Result: 18/18 slices completed, zero failures. 570/570 prompts, 57/57
+subjects, 72.11% accuracy (411 correct), 0 unresolved.** Total
+`generate()` time summed across slices: 3,690s (~1h03m) — well inside
+the raised timeouts; the slowest single slice (`[32:64)`, containing
+former stall-position 33) took ~30 minutes, comfortably under the new
+2700s/3000s ceiling but far above the old 250s/300s one, confirming
+directly that the old values were killing legitimate work, not hangs.
+
+Compared against the 72.3% hook-only baseline cited in earlier sessions:
+**-0.19 percentage points** — well inside the README's `< 2%` GCSG
+quality-degradation target. First complete, defensible MMLU-5shot number
+this project has produced with real shadow execution active end-to-end,
+not hook-only and not partial/skip-and-continue coverage. Full breakdown
+(per-subject table, methodology, timing): `mmlu_final_report.md`.
+
+Issues #10 and #16 closed on this basis — the condition both were kept
+open for ("until the MMLU comparison actually holds up") is now met.
+
 ---
 
 ## 2026-08-10 — Oskarshamn, continued: content ruled out, batch composition confirmed as the real variable — session close
