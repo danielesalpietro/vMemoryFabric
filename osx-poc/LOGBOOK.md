@@ -5,6 +5,43 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-11 — Tekniska, session close: pod terminated, resume point set
+
+Stopping for the day rather than leaving a GPU pod billing overnight for
+no work happening. Container Disk held nothing worth keeping — checkpoint
+was never downloaded there (would land on the Network Volume anyway, not
+the ephemeral disk) — so the pod was terminated outright rather than just
+paused. No cost of any kind continues; the Network Volume
+(`vmemoryfabric-sprint4-runpod-20260811_volume`, 72GB, EU-RO-1) is
+unaffected either way, it's a resource independent of the pod's lifecycle.
+
+### End of day state
+
+- GHCR image `sprint-4-tekniska`: built, public, verified pullable, and —
+  the part that actually mattered — verified to run as a real persistent
+  service with working SSH (see the entry directly below). Not a
+  hypothesis anymore.
+- RunPod template already points at this tag; redeploying tomorrow is a
+  straight "create pod from template" with no further setup.
+- Nothing yet run inside a working pod except the SSH verification itself
+  — no checkpoint download attempted, no `pin_memory` test executed. Nothing
+  to lose by having terminated.
+
+### Resume point for next session
+
+1. Deploy a pod from the existing template (GPU: whatever's available at
+   the time on EU-RO-1 — A5000/3090 Ti/A6000 preferred for the CC 8.6
+   match, RTX 4090 acceptable for anything that doesn't touch Marlin/GCSG
+   directly, per the architecture-substitution note below).
+2. `ln -s /workspace /data/nvme`, then `ls /data/nvme/models/` — near-
+   certain the checkpoint still needs downloading, the volume has never
+   had anything written to it.
+3. `python -c "import torch; t=torch.zeros(1024).pin_memory(); print(t.is_pinned())"`,
+   then a real soak test if that passes — the actual point of the whole
+   RunPod detour, still not answered.
+
+---
+
 ## 2026-08-11 — Tekniska, continued: SSH fix verified end-to-end, plus a false alarm
 
 **Release:** [Tekniska] v0.5.0-dev — in progress. Closes out the "not yet
