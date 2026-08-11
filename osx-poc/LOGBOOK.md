@@ -5,6 +5,68 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-11 — Tekniska, continued: SSH fix verified end-to-end, plus a false alarm
+
+**Release:** [Tekniska] v0.5.0-dev — in progress. Closes out the "not yet
+done" list from the entry directly below: the GHCR rebuild against
+`Sprint-4-Tekniska` succeeded (workflow run `31544443200`, `success`,
+~23 min — confirmed via the Actions API, not just taken on trust), the
+new `sprint-4-tekniska` tag verified publicly pullable with the same
+anonymous two-step registry check used for the first image, and — the
+actual point of all this — SSH now genuinely works.
+
+### A local build hit a real-looking bug that wasn't in the repo
+
+Building the fixed Dockerfile locally (to verify before trusting the
+GHCR pipeline again) surfaced `/bin/bash^M: bad interpreter: No such
+file or directory` — a CRLF-mangled shebang, `^M` being a carriage
+return. Traced before assuming the committed file was broken:
+`git show HEAD:docker-entrypoint.sh | cat -A` showed only trailing `$`
+(LF), no `^M` — the blob itself was clean. The CRLF was introduced by
+the local Windows checkout's `core.autocrlf=true`, converting LF to CRLF
+on checkout; the GHCR build (Linux runner) reads the same LF blob and
+was never affected. Confirmed independently by re-checking the blob
+directly rather than accepting the read at face value.
+
+Added `.gitattributes` (`*.sh text eol=lf`) anyway — doesn't rewrite
+anything already committed, just stops the next Windows checkout from
+rediscovering the identical false alarm.
+
+### SSH verified for real, not just "the build succeeded"
+
+Republished port 22 (initial timeout was Docker Desktop's Windows-VM
+bridge IP not being directly reachable, not an sshd problem) and did an
+actual login with the project's key pair: `SSH_OK`, `PID 1 = sshd`
+(container stays up, doesn't exit after the banner anymore), pubkey auth
+passed. Also checked the `sed` edits to `sshd_config` landed for real
+inside the container (`PermitRootLogin yes` / `PubkeyAuthentication yes`
+both present) rather than assuming a silent no-op.
+
+### GPU substitution: RTX 4090 also on the table now
+
+EU-RO-1 availability keeps shifting — RTX A5000 (the GA102/CC 8.6 match
+used for the first pod) became unavailable again; RTX 3090 Ti and A6000
+also checked, neither free; RTX 4090 (Ada Lovelace, **CC 8.9** — a
+different generation, not GA102) is what's actually available right now.
+Accepted for the immediate SSH/`pin_memory` verification work, since
+neither depends on GPU architecture at all — flagged explicitly as *not*
+pre-approved for the eventual full MMLU re-run (Sprint 4 sub-goal 3)
+without noting the architecture change in whatever report references
+that run, since the whole point of matching CC 8.6 was isolating one
+variable at a time. VRAM is still 24GB either way, so the memory-budget
+calibration (`cpu_offload_gb`, KV blocks) should still transfer — the
+kernel-architecture question does not.
+
+### Not yet done
+
+- Checkpoint presence check (`ls /data/nvme/models/` after the
+  `/workspace` → `/data/nvme` symlink) — the actual next step now that
+  the environment itself is confirmed sound.
+- The `pin_memory` soak test — the reason this whole RunPod detour
+  exists.
+
+---
+
 ## 2026-08-11 — Tekniska, continued: SSH unreachable — the image never ran as a persistent service
 
 **Release:** [Tekniska] v0.5.0-dev — in progress. Direct continuation of
