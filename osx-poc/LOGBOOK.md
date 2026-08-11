@@ -26,16 +26,22 @@ unaffected either way, it's a resource independent of the pod's lifecycle.
 - Nothing yet run inside a working pod except the SSH verification itself
   — no checkpoint download attempted, no `pin_memory` test executed. Nothing
   to lose by having terminated.
+- **Correction to the entry below**: the Network Volume's mount path was
+  found fixed to `/workspace`, not editable — true for RunPod's direct
+  Pod-creation screen, but the Template configuration screen is a
+  different flow and does let the path be set explicitly. Set to
+  `/data/nvme` there directly — the `ln -s /workspace /data/nvme`
+  workaround is no longer needed for pods deployed from this template.
 
 ### Resume point for next session
 
 1. Deploy a pod from the existing template (GPU: whatever's available at
    the time on EU-RO-1 — A5000/3090 Ti/A6000 preferred for the CC 8.6
    match, RTX 4090 acceptable for anything that doesn't touch Marlin/GCSG
-   directly, per the architecture-substitution note below).
-2. `ln -s /workspace /data/nvme`, then `ls /data/nvme/models/` — near-
-   certain the checkpoint still needs downloading, the volume has never
-   had anything written to it.
+   directly, per the architecture-substitution note below). Volume mounts
+   at `/data/nvme` directly now, no symlink step.
+2. `ls /data/nvme/models/` — near-certain the checkpoint still needs
+   downloading, the volume has never had anything written to it.
 3. `python -c "import torch; t=torch.zeros(1024).pin_memory(); print(t.is_pinned())"`,
    then a real soak test if that passes — the actual point of the whole
    RunPod detour, still not answered.
