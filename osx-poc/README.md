@@ -241,10 +241,9 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) | PMEM (EMH-2) integration | Blocked on hardware availability |
 | [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival |
 | [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint`/`test`/`bench` fail on relative paths — container `WORKDIR` (`/workspace`) doesn't match `osx-poc/`'s relative paths | Workaround in use everywhere: `docker compose run --rm osx-dev bash -c "cd osx-poc && ..."` |
+| [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` uses vLLM's `cpu_offload_gb` directly | `TierManager` is implemented and GPU-verified but nothing in `src/scheduler/` or `scripts/` calls it; see `reports/gcsg_shadow_execution_report.md` §7/§9 |
 
 **Closed:** [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) (2026-08-11) — GCSG shadow-execution crash and the related batch-composition slowdown, both root-caused to WSL2/CUDA pageable-memory offload behavior (structural, upstream-confirmed, not a project bug). Full trail: `reports/gcsg_shadow_execution_report.md`.
-
-**Not yet a filed issue, tracked in the GCSG report instead:** `TierManager`/`EAT` (M1/M2) are not in the shadow pool's actual data path — `GCSGWorker` uses vLLM's `cpu_offload_gb` directly. See `reports/gcsg_shadow_execution_report.md` §7/§9.
 
 ---
 
