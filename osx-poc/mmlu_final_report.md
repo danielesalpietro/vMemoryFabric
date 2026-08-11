@@ -18,13 +18,15 @@
 | Correct | 411 |
 | Unresolved (no valid answer-letter logprob) | 0 |
 | **Overall accuracy** | **72.11%** |
-| Shadow activations (cumulative) | 13,756 |
+| Shadow activations (sum across all 18 slices) | 562,338 |
 | Slices attempted / failed | 18 / 0 |
 | Total `generate()` time (summed across slices) | 3,690s (~1h 03m) |
 | Average slice time | 205.0s |
 | Slowest slice | `[32:64)` — 1,784.7s (~29.7 min) |
 
 This is the first complete, defensible MMLU-5shot accuracy number this project has measured with real shadow execution active end-to-end (not hook-only, not partial/skip-and-continue coverage). Every one of the 570 questions across all 57 MMLU subjects was evaluated in a single overnight run, with zero slice failures.
+
+**Correction (2026-08-11, post-review):** the shadow-activations figure originally reported here was 13,756 — the value of `shadow_activations_cumulative` on the *last* of the 18 result rows, mistaken for a run-wide total. Each slice runs in its own fresh Docker container/`GCSGWorker`, so that counter resets to 0 at the start of every slice and only ever reflects *that slice's* own count — it never accumulates across slices. The correct run-wide total is the **sum across all 18 rows: 562,338**, recomputed directly from `mmlu_results_overnight_20260811.jsonl`. Note this total has no companion `total_tokens_evaluated` per slice in the results file, so an aggregate shadow-activation *rate* (activations / tokens evaluated) cannot be derived from this file alone — recompute from a rerun with that field logged if the rate is needed.
 
 ## Quality target
 
