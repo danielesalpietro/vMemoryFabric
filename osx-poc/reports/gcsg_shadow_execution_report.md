@@ -373,10 +373,24 @@ rather than GCSG in isolation:
 
 1. Route the shadow pool's promotion/eviction through EAT/Tier Manager
    (M1/M2) instead of vLLM's `cpu_offload_gb`, replacing round-robin
-   expert selection with real hotness-driven selection — this also
-   sidesteps the WSL2 pinned-memory limitation entirely for the shadow
-   path, since the project would control the H2D transfer itself rather
-   than depending on vLLM's platform-gated one.
+   expert selection with real hotness-driven selection. **Correction
+   (post-review):** this does not automatically sidestep the WSL2
+   pinned-memory limitation — §5's platform constraint applies to any
+   CUDA process under WSL2, not specifically to vLLM's offload path. M1
+   (EAT) itself never touches this question at all; it is pure
+   in-process bookkeeping with no transfer code. What controlling the
+   transfer *does* buy: avoiding `non_blocking=True` on an unpinned
+   buffer (the exact crash-class mechanism in §4) is fully within the
+   project's control regardless of pinning. Whether a manually pinned
+   buffer (`torch.Tensor.pin_memory()`, called directly rather than
+   through vLLM's `is_pin_memory_available()` gate) is actually fast and
+   stable under sustained load on this platform is a separate, open,
+   testable question this project has not answered rigorously — an
+   early, informal check from before this investigation began
+   (`torch.zeros(1024).pin_memory()` reporting `is_pinned() == True`)
+   exists, but was never soak-tested. This needs its own direct
+   verification before assuming Tier-Manager-mediated transfer would be
+   materially faster than what vLLM does today.
 2. Repeat this same MMLU evaluation on that path once it exists, as the
    next data point against this report's baseline.
 3. Exercise path 1 (`_ShadowExpertINT4`) under real offload for parity

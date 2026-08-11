@@ -155,20 +155,38 @@ vMemoryFabric/                  (repo root)
 | 0      | Environment + skeleton | 1–2 | ✅ **Karlshamn** |
 | 1      | M1 — EAT               | 3–4 | ✅ **Möllstorp** |
 | 2      | M2 — Tier Manager      | 5–6 | ✅ **Eketorp**  |
-| 3      | M3 — Expert Scheduler  | 7–8 | 🟡 in progress — **Oskarshamn** |
+| 3      | M3 — Expert Scheduler  | 7–8 | 🟡 in progress (~78%) — **Oskarshamn** |
 | 4      | Integration + benchmarks | 9–12 | 🔲 pending |
 | 5      | PoC delivery + paper   | 13–16 | 🔲 pending |
 | 6      | Telemetry + observability dashboard | TBD | 🔲 pending — **Stockholm** |
 
-Sprint 3 (Oskarshamn) is real, not a stub: GCSG shadow execution actually
-runs against the real Mixtral-8x7B checkpoint (both the AWQ ModuleList and
+Sprint 3 (Oskarshamn) is real, not a stub: GCSG shadow execution runs
+against the real Mixtral-8x7B checkpoint (both the AWQ ModuleList and
 Marlin-packed paths), with a real fix for the CPU-offload/pin_memory crash
-class that blocked it (issues [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16)) verified
-end-to-end. What's still open: a separate, reproducible stall under
-certain concurrent batch compositions blocks full 570-question MMLU
-coverage — root cause not yet found, tracked in the same two issues,
-deliberately left open rather than closed on a partial fix. See
-`LOGBOOK.md` (2026-08-10 entries) for the full investigation trail.
+class that blocked it (issues [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16), both **closed**
+2026-08-11) verified end-to-end. The separate, reproducible slowdown under
+certain concurrent batch compositions that blocked full 570-question MMLU
+coverage is also resolved — root-caused to a structural WSL2/CUDA
+pageable-memory limitation (confirmed against vLLM's own upstream issue
+tracker, not a bug in this project's code), not a deadlock. Full 570/570
+MMLU-5shot coverage achieved with real shadow execution active: 72.11% vs.
+a 72.3% hook-only baseline (−0.19pp, inside the <2% target). Full writeup:
+[`reports/gcsg_shadow_execution_report.md`](reports/gcsg_shadow_execution_report.md)
+(also available as `.docx`, EN/IT, in the same directory) — marked
+preliminary/baseline, not a final result.
+
+Still open within Sprint 3, keeping it below 100%: PT-PEP ships as a
+TF-IDF+centroid classifier rather than the originally-planned BERT-small,
+a documented deviation (hit rate 87.2%, past the >70% target, but on a
+same-distribution held-out set, not OOD); AER is trigger-logic-only by
+design, blocked on dual-GPU hardware (#8); the shadow pool's expert
+selection is still a round-robin placeholder, not hotness-driven; and — the
+most significant gap — **M2 (Tier Manager) is not in the path that
+produced the MMLU result above**: `GCSGWorker` reaches VRAM through vLLM's
+own `cpu_offload_gb`, not through `TierManager`/`EAT`. `TierManager` is
+implemented and independently GPU-verified (Sprint 2), but nothing in
+`src/scheduler/` or `scripts/` currently calls it. See the GCSG report's
+own Limitations (§7) and Future Work (§9) sections for the full list.
 
 Sprint 6 (Stockholm) is a new leg, added without reordering or reweighting
 Sprints 0–5 above — those stay exactly as planned. Named deliberately:
@@ -222,9 +240,11 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6) | No `pyproject.toml`/`ruff.toml` | Pre-existing style debt across the whole codebase |
 | [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) | PMEM (EMH-2) integration | Blocked on hardware availability |
 | [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival |
-| [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10) | GCSG shadow-execution stall under certain concurrent batch compositions (Marlin path) | Blocks full 570-question MMLU coverage; the original offload/pin_memory crash is fixed, this is a separate, still-open failure |
 | [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint`/`test`/`bench` fail on relative paths — container `WORKDIR` (`/workspace`) doesn't match `osx-poc/`'s relative paths | Workaround in use everywhere: `docker compose run --rm osx-dev bash -c "cd osx-poc && ..."` |
-| [#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) | Same stall as #10, AWQ ModuleList path | Same root cause investigation, tracked separately since the two are distinct code paths |
+
+**Closed:** [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) (2026-08-11) — GCSG shadow-execution crash and the related batch-composition slowdown, both root-caused to WSL2/CUDA pageable-memory offload behavior (structural, upstream-confirmed, not a project bug). Full trail: `reports/gcsg_shadow_execution_report.md`.
+
+**Not yet a filed issue, tracked in the GCSG report instead:** `TierManager`/`EAT` (M1/M2) are not in the shadow pool's actual data path — `GCSGWorker` uses vLLM's `cpu_offload_gb` directly. See `reports/gcsg_shadow_execution_report.md` §7/§9.
 
 ---
 
