@@ -5,6 +5,101 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-11 — Tekniska, continued: first RunPod pod live
+
+**Release:** [Tekniska] v0.5.0-dev — in progress. Picks up right after the
+kickoff entry below: image published to GHCR
+(`ghcr.io/danielesalpietro/vmemoryfabric:sprint-3-oskarshamn`, verified
+publicly pullable — see the two-step anonymous-token manifest check, not
+just "the visibility toggle says Public"), Network Volume created, first
+pod deployed against it.
+
+### GPU choice: RTX 3090 unavailable at the volume's datacenter, A5000 substituted
+
+Network Volumes on RunPod are datacenter-locked — ours (`72GB`, region
+**EU-RO-1**) forces every pod using it into that same datacenter. RTX 3090
+had no capacity there: the deploy UI would only offer ephemeral Volume Disk
+for it, never the Network Volume option, implying "3090 exists, just not
+in this datacenter." RTX A5000 did show the Network Volume option but
+initially reported "not deployable" (no free A5000 instances in EU-RO-1 at
+that moment either) — resolved itself a short time later once capacity
+freed up, no configuration change needed.
+
+A5000 was already the first choice among the WSL2-escape candidates
+(GA102 die, compute capability 8.6 — identical to the 3090's, 24GB VRAM,
+same as the reference hardware every measurement in
+`reports/gcsg_shadow_execution_report.md` is calibrated against), not a
+downgrade. RTX 3090 Ti / RTX A6000 (same CC 8.6) were the fallbacks in
+that order had A5000 also been unavailable; never needed.
+
+### Pod details, verified from the RunPod dashboard (not estimated)
+
+```
+Pod name:        vmemoryfabric-sprint4-runpod-20260811
+GPU:              RTX A5000 x1
+vCPU:             12 (AMD EPYC 7B13 64-Core Processor)
+Memory:           25 GB
+Container disk:   50 GB
+Region:           EU-RO-1 (forced by the Network Volume; not shown directly
+                  in the pod summary, but the only datacenter the volume
+                  can be in)
+Pricing:          $0.27/hr compute + $0.007/hr container storage
+                  = $0.28/hr total
+Image:            ghcr.io/danielesalpietro/vmemoryfabric:sprint-3-oskarshamn
+Template ID:      57t6fqbfiv
+Network volume:   vmemoryfabric-sprint4-runpod-20260811_volume, 72 GB,
+                  mount path /workspace
+```
+
+### Container Disk sizing — measured, not guessed
+
+Before deploying: pulled the real image manifest from GHCR (anonymous
+token, two-step registry protocol — a bare unauthenticated GET returns 401
+by design even for public images, not evidence of a private package;
+confirmed public separately). **18 layers, 10.63 GB compressed total.**
+Uncompressed-on-disk is typically 2-2.5× compressed for this kind of
+content (CUDA libs, Python wheels) — estimated ~22-27 GB just to unpack
+the image. Container Disk set to **50 GB**, not the platform's 5 GB
+default (which would almost certainly have failed mid-pull with "no space
+left on device" rather than failing loudly upfront).
+
+### `/workspace`, not `/data/nvme` — the mount path is fixed, not a field to edit
+
+Expected to set the Network Volume's mount path to `/data/nvme` (the path
+hardcoded in ~17 project scripts' `MODEL_PATH`) at deploy time. RunPod's
+UI doesn't expose that as an editable field for a Network Volume — it's
+fixed to `/workspace`. Workaround decided rather than editing every
+script: `ln -s /workspace /data/nvme` once per pod, immediately after
+first connecting. One command, needs repeating only if the pod is
+recreated from scratch (not on a simple restart — the container filesystem
+persists across those).
+
+### Access: SSH only, no direct network path from this Claude session
+
+This session's own network egress is allowlisted to specific domains
+(confirmed: GitHub reachable; `runpod.io`/`api.runpod.io` both return a
+`403` policy denial from the environment's own proxy, and raw SSH on port
+22 times out outright — not a credentials problem, a network-policy one,
+not something to route around). Pod access for hands-on verification
+(`nvidia-smi`, the `pin_memory` soak test, checkpoint download) is handed
+to the session running on the physical GPU workstation instead, which has
+real network reach — briefed via a separate, self-contained prompt.
+
+### Not yet done, next in this same sub-session
+
+- Confirm the model checkpoint (`casperhansen/mixtral-instruct-awq`) is
+  actually on the volume — near-certain it isn't, since the volume was
+  created empty and nothing has been uploaded to it yet. `ls
+  /data/nvme/models/` (after the symlink above) is the first real command
+  to run, before anything else.
+- The test this whole RunPod detour exists to run:
+  `torch.zeros(1024).pin_memory().is_pinned()`, then something closer to a
+  real soak test under load if that passes — the open question left by the
+  GCSG report's §9 correction, not yet answered with anything more rigorous
+  than a pre-investigation, never-stress-tested check.
+
+---
+
 ## 2026-08-11 — Tekniska: Sprint 4 kickoff, plan
 
 **Release:** [Tekniska] v0.5.0-dev — branch `Sprint-4-Tekniska`, cut from
