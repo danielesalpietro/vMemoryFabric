@@ -156,7 +156,7 @@ vMemoryFabric/                  (repo root)
 | 1      | M1 — EAT               | 3–4 | ✅ **Möllstorp** |
 | 2      | M2 — Tier Manager      | 5–6 | ✅ **Eketorp**  |
 | 3      | M3 — Expert Scheduler  | 7–8 | 🟡 in progress (~78%) — **Oskarshamn** |
-| 4      | Integration + benchmarks | 9–12 | 🔲 pending |
+| 4      | Integration + benchmarks | 9–12 | 🔲 pending — **Tekniska** (branch `Sprint-4-Tekniska`) |
 | 5      | PoC delivery + paper   | 13–16 | 🔲 pending |
 | 6      | Telemetry + observability dashboard | TBD | 🔲 pending — **Stockholm** |
 
@@ -187,6 +187,17 @@ own `cpu_offload_gb`, not through `TierManager`/`EAT`. `TierManager` is
 implemented and independently GPU-verified (Sprint 2), but nothing in
 `src/scheduler/` or `scripts/` currently calls it. See the GCSG report's
 own Limitations (§7) and Future Work (§9) sections for the full list.
+
+Sprint 4 (Tekniska) is issue #17 given real scope: wire `GCSGWorker`'s
+shadow pool through `TierManager`/`EAT` instead of vLLM's `cpu_offload_gb`,
+resolve the open pinning-strategy question from the GCSG report's §9
+correction, re-run the MMLU-5shot evaluation on the integrated path, and
+measure the "shard promotion latency within 1.5× theoretical bandwidth"
+target that's had nothing to measure until now. Also closes out the M1
+debt (#1 Bloom filter fate, #2 `RLock` contention, #4 `remove_expert()`)
+that Sprint 1/2 explicitly deferred until M3 generated real concurrent
+traffic — this is that moment. Full sub-goal breakdown:
+`LOGBOOK.md`, 2026-08-11 "Tekniska: Sprint 4 kickoff" entry.
 
 Sprint 6 (Stockholm) is a new leg, added without reordering or reweighting
 Sprints 0–5 above — those stay exactly as planned. Named deliberately:

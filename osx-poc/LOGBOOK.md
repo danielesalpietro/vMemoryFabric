@@ -5,6 +5,81 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-11 — Tekniska: Sprint 4 kickoff, plan
+
+**Release:** [Tekniska] v0.5.0-dev — branch `Sprint-4-Tekniska`, cut from
+`Sprint-3-Oskarshamn` at `91cb6da`. Named for the same reason every sprint
+here is — conversation happened at the Tekniska museet, Stockholm.
+
+### Why Sprint 4 starts here
+
+The roadmap has carried an "Integration + benchmarks" placeholder for
+Sprint 4 since Karlshamn, with no real content behind it until now. What
+gives it real content is [issue #17](https://github.com/danielesalpietro/vMemoryFabric/issues/17),
+found while writing the GCSG preliminary report: M1 (EAT) and M2 (Tier
+Manager) are both implemented and independently GPU-verified, but nothing
+in `src/scheduler/` or `scripts/` ever calls them — GCSG's one real,
+validated result (72.11% MMLU-5shot, `reports/gcsg_shadow_execution_report.md`)
+was produced entirely through vLLM's own `cpu_offload_gb`, not through
+this project's own tiering system. Sprint 4 is that gap, plus everything
+that was explicitly deferred pending "real end-to-end numbers" or "M3
+adding real concurrent traffic" — both preconditions Sprint 3 just
+satisfied.
+
+### Sub-goals
+
+1. **Wire the shadow pool through TierManager/EAT (core of #17).**
+   `GCSGWorker._load_shadow_pool()` calls `TierManager.promote()`/
+   `prefetch()` instead of relying on vLLM's `cpu_offload_gb` + the
+   explicit `.to('cuda')` pinning added in `e59a16d`; expert selection
+   moves from the current round-robin placeholder to
+   `EAT.eviction_candidates()`.
+2. **Resolve the pinning-strategy question the GCSG report's §9
+   correction left open.** Soak-test `torch.Tensor.pin_memory()` called
+   directly (bypassing vLLM's `is_pin_memory_available()` gate) under
+   sustained real load in this environment — not the one-off, never
+   stress-tested check this project has been carrying since before the
+   crash investigation started. Decide, with evidence, whether
+   `TierManager.GPUTransfer` should attempt real pinning or keep GCSG's
+   current "stay permanently GPU-resident" approach for the shard sizes
+   actually in play.
+3. **Re-run the MMLU-5shot evaluation on the integrated path** as the
+   next data point against Tekniska's own baseline (the 2026-08-11 GCSG
+   report) — same method as that report, same slicing/orchestration
+   unless the integration changes the failure modes it was built around.
+4. **Measure the one non-functional target that's never been
+   measurable:** "shard promotion latency within 1.5× theoretical
+   bandwidth" (`README.md`'s acceptance criteria) has had no real
+   `TierManager.promote()` call to measure until sub-goal 1 lands.
+5. **Close out the M1 debt Sprint 1/2 explicitly deferred to this
+   moment.** Issues #1 (Bloom filter ~5-14× slower than a plain dict)
+   and #2 (`RLock` p99 degrades ~1360× under contention) were both
+   recorded as "Sprint 2/M3 candidates" specifically because M3 would be
+   the thing generating real concurrent traffic against the EAT — that's
+   what sub-goal 1 does. Issue #4 (`BloomFilter.remove_expert()`
+   unimplemented) stops being a theoretical gap once EAT does live
+   evictions in the real pipeline instead of only in unit tests.
+6. **Path 1 (`_ShadowExpertINT4`) parity under real offload** — the one
+   shadow path never exercised against the real checkpoint under real
+   offload (GCSG report §7), naturally in scope alongside the
+   `_load_shadow_pool()` rewrite in sub-goal 1.
+7. **Close-out:** update the GCSG report/README/LOGBOOK with whatever
+   sub-goals 1-6 actually find (including negative results — same
+   standard as every prior sprint here); close #17 and whichever of
+   #1/#2/#4 get real resolutions, not partial ones; mark Sprint 4 done
+   in the roadmap table only once it is.
+
+### What's deliberately not in scope
+
+M4 (RecursiveMAS LED Bridge) — unrelated, still out of PoC scope, not
+touched by this sprint despite the name similarity to "Sprint 4." Dual-GPU
+/ AER (#8) and PMEM (#7) stay hardware-blocked. Sprint 5 (PoC delivery +
+paper) and Sprint 6 (Stockholm, telemetry) stay untouched until this
+sprint's own scope is real, per the same discipline used when Sprint 6 was
+added without reordering Sprints 0-5.
+
+---
+
 ## 2026-08-11 — Oskarshamn, continued: the "stall" was never a deadlock — root cause found, confirmed by direct manipulation
 
 **Release:** [Oskarshamn] v0.4.0-dev — still in progress. Picks up the
