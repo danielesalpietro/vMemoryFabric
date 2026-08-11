@@ -20,7 +20,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     nvtop \
+    openssh-server \
     && rm -rf /var/lib/apt/lists/*
+
+# ── SSH (Sprint 4 / Tekniska: RunPod pod access) ────────────────────────────────
+# The base image + this Dockerfile never ran as a persistent service before —
+# `docker compose run` always passes an explicit command, which masked two real
+# gaps: no sshd installed, and CMD was bare `/bin/bash` (exits immediately with
+# no TTY attached, e.g. under a cloud provider's container supervisor). Neither
+# gap mattered for local interactive dev; both are fatal for a RunPod Pod, which
+# needs the container to (a) stay running and (b) accept SSH.
+# RunPod's own convention: injects the account's registered public key into the
+# $PUBLIC_KEY env var at pod boot — docker-entrypoint.sh below writes it to
+# authorized_keys before starting sshd, rather than baking any key into the image.
+RUN mkdir -p /var/run/sshd /root/.ssh \
+ && chmod 700 /root/.ssh \
+ && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
+ && sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 
 # make python3.12 the default and bootstrap pip for it
 # (the apt python3-pip package targets Ubuntu's default python3, not deadsnakes' 3.12)
@@ -53,4 +69,11 @@ ENV CUDA_VISIBLE_DEVICES=0
 ENV TOKENIZERS_PARALLELISM=false
 ENV OMP_NUM_THREADS=8
 
-CMD ["/bin/bash"]
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Local dev (`docker compose run` / `make shell`) always passes an explicit
+# command, which replaces this CMD entirely — unaffected by the change below.
+# With no override (a RunPod Pod), this now keeps the container alive and
+# SSH-reachable instead of exiting immediately (see docker-entrypoint.sh).
+CMD ["/usr/local/bin/docker-entrypoint.sh"]
