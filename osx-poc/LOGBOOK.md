@@ -5,6 +5,90 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-11 — Tekniska, continued: SSH unreachable — the image never ran as a persistent service
+
+**Release:** [Tekniska] v0.5.0-dev — in progress. Direct continuation of
+the pod-deployment entry below: pod came up, image pull completed, but
+`ssh <pod-user>@ssh.runpod.io -i ~/.ssh/id_ed25519` failed outright.
+
+### Wrong first guesses, ruled out before touching anything
+
+Initial hypotheses — mount path wrong, model download still in progress
+blocking something, SSH key mismatch — were all plausible given the
+session so far, but none matched the actual evidence once asked for
+directly. The pod's boot log, requested specifically instead of guessing
+from the SSH client's own error alone, showed only the base
+`nvidia/cuda` image's standard license banner (`CUDA Version 12.1.1`,
+NGC container license text, `==========`) and **nothing after it** — not
+a truncated log, the actual last thing the container ever printed.
+
+### Root cause: two real gaps in the image, both invisible until now
+
+Read `Dockerfile` directly rather than guessing further:
+
+1. **`CMD ["/bin/bash"]`** — with no TTY attached (exactly the case for a
+   cloud provider's container supervisor, unlike `docker compose run -it`
+   locally), `bash` reads EOF on stdin immediately and exits. The
+   container was never staying up long enough to do anything, SSH
+   included — the banner is the last output because the container died
+   right after printing it.
+2. **No `openssh-server` anywhere in the image.** Even had (1) not
+   existed, nothing was listening for SSH connections inside the
+   container at all.
+
+Neither gap was ever visible before: every local invocation of this image
+(`make smoke`, `make test`, `make shell`, CI's `docker compose run`) goes
+through `docker compose run`, which always passes an explicit command
+that replaces `CMD` entirely — confirmed by rereading `osx-poc/Makefile`'s
+own header comment ("Tutti i target girano nel container via docker
+compose run") and the `shell:` target
+(`docker compose run --rm -it $(SERVICE) /bin/bash`) before changing
+anything, rather than assuming the fix wouldn't break local dev. This
+image had simply never been asked to run as a standing service before
+today — a RunPod Pod is the first thing that does.
+
+### Fix — `openssh-server` + an entrypoint, not a RunPod-side workaround
+
+`Dockerfile`: installs `openssh-server`, enables `PermitRootLogin`/
+`PubkeyAuthentication` in `sshd_config`. New `docker-entrypoint.sh`:
+writes RunPod's `$PUBLIC_KEY` (their documented convention for injecting
+the account's registered SSH key into a pod at boot) to
+`/root/.ssh/authorized_keys` if present, then `exec`s `sshd -D` as the
+container's foreground process — no key baked into the image itself.
+Default `CMD` changed to run this entrypoint; local workflows are
+unaffected since, as confirmed above, they override `CMD` unconditionally
+regardless of what it's set to.
+
+**Not build-verified in this sub-session** — no Docker daemon available
+to actually build the image where this fix was written; `docker build
+--check` confirmed the daemon itself wasn't reachable, syntax was checked
+by re-reading the Dockerfile carefully instead. Needs a real build (via
+the GHCR workflow, targeting `Sprint-4-Tekniska` this time, not the
+`Sprint-3-Oskarshamn` default) before trusting it — flagged explicitly
+rather than assumed to work.
+
+### Deliberately not touched: `Sprint-3-Oskarshamn`
+
+This is a RunPod-deployment concern, not a correction to anything the
+GCSG report's numbers depend on. Fixed on `Sprint-4-Tekniska` and
+published as a new `sprint-4-tekniska` image tag instead of editing the
+closed baseline branch — same discipline as not touching
+`mmlu_final_report.md`'s underlying run data when correcting its
+reported total earlier this sprint.
+
+### Not yet done
+
+- Rerun the GHCR publish workflow against `Sprint-4-Tekniska` (this
+  session cannot dispatch it — no `actions: write` permission, same
+  403 hit earlier this sprint; needs `gh workflow run` from a session
+  with real credentials, same pattern as before).
+- Redeploy the RunPod pod against the new `sprint-4-tekniska` tag — the
+  Network Volume is unaffected, no need to recreate it.
+- Confirm SSH actually works this time, then resume the original plan:
+  checkpoint presence check, the `pin_memory` soak test.
+
+---
+
 ## 2026-08-11 — Tekniska, continued: first RunPod pod live
 
 **Release:** [Tekniska] v0.5.0-dev — in progress. Picks up right after the
