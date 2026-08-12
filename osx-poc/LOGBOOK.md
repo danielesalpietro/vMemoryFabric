@@ -5,6 +5,65 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: `pin=True` confirmed on the pod — TierManager/EAT wiring checklist now 5/5 on real Linux, fetta0 result independently re-verified from source
+
+Pod resumed (RTX 3090 this time, no A5000 substitution needed), and the
+one item the Z8 pass couldn't cover — `pin=True` — is now confirmed on
+the hardware that actually matters for it.
+
+### Fetta0 re-checked from the raw file, not just the summary
+
+`osx-poc/mmlu_tier_manager_fetta0_20260812_183539.jsonl` was pushed
+alongside the `--wire-tier-manager` flag (commit `f7d72ce`, other
+session) — checked it directly rather than trusting the earlier relayed
+numbers: `correct: 21/32`, `per_subject_correct` = `{abstract_algebra: 4,
+anatomy: 7, astronomy: 9, business_ethics: 1}`, `tier_manager_wired: true`.
+Diffed against `mmlu_results_overnight_20260811.jsonl`'s own first entry
+(the historical Marlin baseline) directly, both files in this checkout:
+identical range, identical `correct`, identical `per_subject_correct` —
+byte-for-byte, not approximately. Upgrades the previous entry's "relayed,
+not re-verified" status to independently confirmed.
+
+### `pin=True` — the last untested branch, now closed
+
+Same 5-item checklist as the Z8 run, this time on the pod (CC 8.6, real
+Linux, no WSL2):
+
+| # | Check | Outcome |
+|---|---|---|
+| 1 | `asyncio.run()` in `load_model()` | OK |
+| 2 | Real GPU transfer + EAT → `Tier.VRAM`, **`pin=True`** | 12 promotions confirmed, no fallback to pageable, no "pin_memory() fallito" warning |
+| 3 | AWQ dominant parameter fits `SHARD_SIZE_BYTES` | shadow pool populated `[0,1]` |
+| 4 | Real per-token EAT traffic | 256/256 |
+| 5 | `refresh_shadow_pool_selection()` | pool changed `[0,1]→[2,6]` after traffic |
+
+`is_pinned() == True` confirmed directly, and vLLM's own log shows no WSL
+warning this time (contrast with the Z8 run's `"Using 'pin_memory=False'
+as WSL is detected"`). Load 92.3s, `generate()` 7s for 3 prompts —
+faster than the Z8 pass, consistent with no WSL2/pageable-swap overhead
+(Root Cause II doesn't apply here by construction).
+
+**This closes the full "NOT run on real hardware" list from the
+original sub-goal 1 entry** (2026-08-12, "sub-goal 1 ... implemented,
+unit-tested, NOT yet run on real hardware") — all 5 items are now
+confirmed on real hardware, across two different platforms (Z8/WSL2 for
+4/5, pod/real-Linux for 5/5). Reported by the other session; no raw log
+was pushed for this specific run (unlike fetta0 above), so the exact
+numbers in the table are recorded as relayed, not re-derived — the
+`pin=True`/no-WSL-warning distinction is the one that matters most here
+and is a clean binary signal either way.
+
+### Not yet done
+
+- More MMLU slices across varied subjects, or the full comparison run —
+  open question for the next entry (asked, not yet decided as of this
+  writing).
+- Path 1 parity (sub-goal 6), M1 debt issues #1/#2/#4 exercised under
+  real load now that traffic exists (sub-goal 5), Marlin-path TierManager
+  wiring (deferred, see earlier entries).
+
+---
+
 ## 2026-08-12 — Tekniska, continued: first real MMLU data point on the TierManager-wired path — exact per-subject match against the Marlin baseline, slice 1/18
 
 Sub-goal 3 (integrated-path MMLU rerun) had no script to do it with until
