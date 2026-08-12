@@ -30,7 +30,11 @@ variable-latency slowdown initially mistaken for a deadlock (traced to the
 same pageable-memory mechanism operating correctly but slowly). Both
 findings are cross-checked against vLLM's own upstream issue tracker,
 which confirms the underlying platform limitation is real, structural, and
-currently unaddressed upstream.
+currently unaddressed upstream. **Update (2026-08-12, Sprint 4):** the
+same evaluation reproduced on real Linux (no WSL2) scores 72.28% sliced /
+72.3% single-process — matching the original result within noise on
+different hardware and a different OS/virtualization stack — see §6 and
+§9.
 
 ---
 
@@ -146,6 +150,18 @@ process (`scripts/run_mmlu_in_slices.sh`), with a per-slice watchdog of
 §5's root cause was understood). Results are persisted per-slice to
 `mmlu_results_overnight_20260811.jsonl` so a single slice's timeout or
 failure does not lose the rest of the run.
+
+**Update (2026-08-12, Sprint 4):** slicing was a WSL2-specific mitigation
+for §5's slowdown and an additional, never-root-caused stall observed in
+single-process runs around request 27-31 — not a property of `GCSGWorker`
+itself. On real Linux (RunPod, no WSL2, `pin_memory=True`), the same
+570-question evaluation completed in a single process, single model load,
+without stalling: 570.3s total (106.3s load + 464.0s `generate()`),
+scoring 412/570 (72.3%) — statistically the same result as the sliced run
+on the same platform (412/570, 72.28%) and the original WSL2 run (411/570,
+72.11%). This closes the open question: the process-reuse stall was a
+WSL2 artifact, and slicing is not required on this platform. Full data:
+`LOGBOOK.md`, 2026-08-12 "burn-test" entries.
 
 ---
 
@@ -306,6 +322,34 @@ total. No per-slice `total_tokens_evaluated` is logged in the results
 file, so an aggregate activation *rate* cannot be derived from this run;
 a rerun with that field added would be needed.
 
+### 6.1 Cross-hardware / cross-platform reproduction (2026-08-12, Sprint 4)
+
+The same evaluation was repeated on real Linux (RunPod, RTX A5000, no
+WSL2), both sliced (matching this section's method) and single-process
+(§2.6):
+
+| Run | Platform | Correct | Accuracy | Wall time |
+|---|---|---|---|---|
+| Original | WSL2, RTX 3090 | 411/570 | 72.11% | overnight (hours) |
+| Sliced (18×) | Real Linux, RTX A5000 | 412/570 | 72.28% | ~38-40 min |
+| Single-process | Real Linux, RTX A5000 | 412/570 | 72.3% | 9.5 min |
+
+All three agree within noise on a 570-question sample. This is evidence
+the pipeline's quality behavior is stable across GPU generation, driver
+stack, and OS/virtualization layer — not a claim of statistical
+significance (§7 still applies: three runs, not a distribution).
+
+**New finding — shadow-execution activation rate correlates with latency,
+not accuracy.** Per-slice `shadow_activations` vs. per-slice accuracy:
+r=0.04 (no relationship — contamination doesn't selectively degrade
+high-activation slices). Per-slice `shadow_activations` vs. per-slice
+wall time: r=0.95 (strong) — the four slowest slices in the sliced run
+were exactly the four with 3-4× the typical activation count, consistent
+with each shadow activation being an extra forward pass through the INT4
+verification expert. This is a real, previously-unmeasured *performance*
+cost of shadow execution, distinct from the quality-cost figures this
+report otherwise focuses on — see §9.
+
 ---
 
 ## 7. Limitations
@@ -324,12 +368,17 @@ M1 technical report's limitations section) rather than left implicit:
   "vMemoryFabric is alive" as a claim about the full system is **not**
   what this report supports; what it supports is narrower and stated in
   the abstract.
-- **Single run, no statistical repetition.** The 72.11% figure is one
-  overnight run. Earlier benchmark work on this same hardware (M1
-  `bench_eat.py`) observed ~32% run-to-run variance on unrelated timing
-  metrics with no code change — accuracy is a different, more discrete
-  metric, but repeated full runs have not been done to establish a
-  confidence interval here.
+- **Still no formal confidence interval, despite now three runs.** The
+  original 72.11% figure was one overnight run; two more full runs on
+  different hardware/OS (§6.1: 72.28% sliced, 72.3% single-process, both
+  real Linux) landed within noise of it. That is evidence of
+  cross-platform stability, not a substitute for repeated runs on fixed
+  hardware to establish a real confidence interval — the three runs
+  differ in platform, not just in random seed. Earlier benchmark work on
+  this same hardware (M1 `bench_eat.py`) observed ~32% run-to-run
+  variance on unrelated timing metrics with no code change — accuracy is
+  a different, more discrete metric, but a proper repeated-runs interval
+  still has not been established.
 - **`pin_memory=True` is diagnostic only.** Used to confirm the mechanism
   in §5, never validated under sustained production-scale load; not
   proposed as a shippable configuration change.
@@ -411,11 +460,31 @@ rather than GCSG in isolation:
    safe and stable under sustained load on this platform. Full data:
    `LOGBOOK.md`, 2026-08-12 "pinning soak test" entry.
 2. Repeat this same MMLU evaluation on that path once it exists, as the
-   next data point against this report's baseline.
+   next data point against this report's baseline. **Update
+   (2026-08-12):** partially superseded — see §6.1. The evaluation was
+   repeated on real Linux (not the Tier-Manager-routed path, which still
+   doesn't exist) and reproduced within noise (72.28%/72.3% vs. 72.11%),
+   confirming the result isn't an artifact of the original WSL2 run
+   specifically. The Tier-Manager-routed rerun (the original intent of
+   this item) remains open — tracked as issue #17.
 3. Exercise path 1 (`_ShadowExpertINT4`) under real offload for parity
    with paths 2/3.
 4. Establish a confidence interval via repeated full runs rather than a
    single overnight pass.
+5. **New (2026-08-12):** quantify and, if worthwhile, reduce the latency
+   cost of shadow execution itself. §6.1 found per-slice wall time
+   strongly tracks activation count (r=0.95) — each activation is an
+   extra forward pass through the INT4 verification expert. The
+   project's `<2%` target has only ever been a *quality* budget; this is
+   a first measurement of the *performance* side, not yet bounded by any
+   stated target or optimized against.
+6. **New (2026-08-12):** the fresh-process-per-slice orchestration
+   (§2.6) was a WSL2-specific workaround for an undiagnosed stall and is
+   confirmed unnecessary on real Linux (§2.6 update) — a single process
+   completed all 570 questions cleanly. On platforms without that
+   constraint, single-process evaluation is simpler and ~4× faster
+   wall-clock (9.5 min vs. ~38-40 min for the same result) purely from
+   avoiding 18× redundant model loads.
 
 ---
 
