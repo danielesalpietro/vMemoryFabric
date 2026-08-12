@@ -1,20 +1,38 @@
 """Benchmark M2 — EMH Tier Manager: latenza promozione per tier.
 
 Sezioni:
-    nvme_to_ddr4  — latenza promote(NVME→DDR4) per N shard, P50/P95/P99.
-                    Gira ovunque torch sia importabile (nessuna CUDA reale
-                    richiesta per questo hop).
-    ddr4_to_vram  — latenza promote(DDR4→VRAM). Guardia esplicita su
-                    torch.cuda.is_available(): se assente, la sezione
-                    riporta {"status": "skipped", ...} invece di far
-                    fallire l'intero benchmark o inventare numeri da un
-                    path che non ha davvero toccato la GPU.
+    nvme_to_ddr4         — latenza promote(NVME→DDR4) per N shard,
+                           P50/P95/P99. Gira ovunque torch sia importabile
+                           (nessuna CUDA reale richiesta per questo hop).
+    ddr4_to_vram         — latenza promote(DDR4→VRAM), file-based (il
+                           path NVMe→DDR4→VRAM "classico" di M2). Guardia
+                           esplicita su torch.cuda.is_available(): se
+                           assente, la sezione riporta
+                           {"status": "skipped", ...} invece di far
+                           fallire l'intero benchmark o inventare numeri
+                           da un path che non ha davvero toccato la GPU.
+    promote_live_tensor  — latenza di TierManager.promote_live_tensor()
+                           (2026-08-12, issue #17) — il path REALMENTE
+                           usato da GCSGWorker per lo shadow pool, non un
+                           file-shard da NVMe ma un tensore CPU già in
+                           memoria. Misura separatamente pin=False
+                           (comportamento storico, quello esercitato
+                           sulla Z8/WSL2) e pin=True (quello verificato
+                           sicuro sotto carico sostenuto solo su Linux
+                           reale — vedi LOGBOOK.md, soak test e checklist
+                           2026-08-12). Sprint 4 sotto-obiettivo 4 —
+                           "shard promotion latency within 1.5x
+                           theoretical bandwidth" (README, non misurabile
+                           finché questo path non esisteva).
 
 Deviazione benchmark-only, dichiarata esplicitamente: usa shard sintetici
 più piccoli dei 256 MB (SHARD_SIZE_BYTES) di produzione, per tenere il
 run in tempi ragionevoli. La latenza assoluta NVMe/PCIe non è quindi
 comparabile 1:1 col target di produzione — l'ordine di grandezza
-relativo tra i due hop sì.
+relativo tra i due hop sì. Stessa deviazione, stesso motivo, per
+promote_live_tensor: un vero parametro AWQ dominante può arrivare a
+decine di MB (mai misurato con precisione — vedi la checklist
+gcsg_tier_manager per il perché), non i 4 MB sintetici qui.
 
 Usage:
     python benchmarks/bench_tier.py
@@ -111,10 +129,92 @@ async def bench_ddr4_to_vram() -> dict:
         }
 
 
+# ── promote_live_tensor (2026-08-12, issue #17, Sprint 4 sotto-obiettivo 4) ──
+
+# PCIe Gen3 ~8 GB/s unidirezionale — stesso numero già in tier/gpu.py
+# docstring ("Teorico pinned: ~32 ms" per 256MB, cioè 256MiB/32ms ≈ 8GB/s).
+# Base per il criterio di accettazione del README ("within 1.5x
+# theoretical bandwidth"), non un nuovo numero inventato qui.
+_PCIE_GEN3_BANDWIDTH_BYTES_PER_SEC = 8 * 1024 ** 3
+
+
+def _theoretical_transfer_s(size_bytes: int) -> float:
+    return size_bytes / _PCIE_GEN3_BANDWIDTH_BYTES_PER_SEC
+
+
+async def bench_promote_live_tensor() -> dict:
+    """Latenza di TierManager.promote_live_tensor() — il path REALE usato
+    da GCSGWorker per lo shadow pool (non promote(), che è per shard-file
+    da NVMe). Misura pin=False e pin=True separatamente: pin=False è
+    quanto già gira sulla Z8/WSL2 (dove in_wsl() disattiva pin=True per
+    design), pin=True è il ramo verificato sicuro solo su Linux reale
+    (soak test + checklist, 2026-08-12) — questo benchmark quantifica per
+    la prima volta QUANTO costa in latenza, non solo se è sicuro.
+
+    Il criterio di accettazione del README ("shard promotion latency
+    within 1.5x theoretical bandwidth") è calcolato qui contro la
+    dimensione sintetica del benchmark (BENCH_SHARD_SIZE_BYTES), non i
+    256 MB di produzione — stessa deviazione dichiarata nel docstring di
+    modulo, l'ordine di grandezza relativo pin=True vs pin=False è il
+    dato che conta di più qui, non il valore assoluto.
+    """
+    import torch
+    if not torch.cuda.is_available():
+        return {"status": "skipped", "reason": "CUDA non disponibile su questo host"}
+
+    theoretical_s = _theoretical_transfer_s(BENCH_SHARD_SIZE_BYTES)
+    acceptance_threshold_s = theoretical_s * 1.5   # README: "within 1.5x theoretical bandwidth"
+
+    results = {}
+    for pin in (False, True):
+        eat = ExpertAccessTable(capacity=N_SHARDS * 2, n_slots=N_SHARDS)
+        eat.initialize()
+        with tempfile.TemporaryDirectory() as tmp:
+            # nvme_path non è mai letto/scritto da promote_live_tensor()
+            # (bypassa AsyncNVMeIO per costruzione — vedi la sua
+            # docstring in tier/manager.py) — una dir temporanea vuota
+            # basta solo perché TierManager.__init__ la richiede comunque.
+            mgr = TierManager(eat=eat, nvme_path=tmp, gpu_device=0)
+
+            # Payload pre-allocati FUORI dal loop cronometrato — misura
+            # solo il costo di promote_live_tensor() (pin + transfer),
+            # non l'allocazione del tensore CPU sorgente. Stesso principio
+            # di bench_ddr4_to_vram() sopra, che pre-popola DDR4 prima di
+            # cronometrare solo l'hop DDR4->VRAM.
+            payloads = [
+                torch.full((BENCH_SHARD_SIZE_BYTES,), 0xAB, dtype=torch.uint8)
+                for _ in range(N_SHARDS)
+            ]
+
+            latencies_us = []
+            for shard_idx, data in enumerate(payloads):
+                t0 = time.perf_counter()
+                await mgr.promote_live_tensor(
+                    expert_id=0, shard_idx=shard_idx, cpu_data=data, pin=pin,
+                )
+                latencies_us.append((time.perf_counter() - t0) * 1e6)
+
+        eat.shutdown()
+        pct = _percentiles(latencies_us)
+        p50_s = (pct["p50_us"] or 0) / 1e6
+        results[f"pin_{pin}"] = {
+            "n_shards": N_SHARDS,
+            "shard_size_bytes": BENCH_SHARD_SIZE_BYTES,
+            "latency_us": pct,
+            "within_1.5x_theoretical_bandwidth_at_p50": p50_s <= acceptance_threshold_s,
+        }
+
+    return {
+        "theoretical_transfer_s_at_bench_size": theoretical_s,
+        "acceptance_threshold_s_1.5x": acceptance_threshold_s,
+        **results,
+    }
+
+
 async def _main_async() -> dict:
     return {
         "status": "done",
-        "sprint": 2,
+        "sprint": "2 (nvme_to_ddr4/ddr4_to_vram) + 4 (promote_live_tensor, issue #17)",
         "module": "TierManager",
         "note": (
             f"shard sintetici da {BENCH_SHARD_SIZE_BYTES} byte, non i "
@@ -122,6 +222,7 @@ async def _main_async() -> dict:
         ),
         "nvme_to_ddr4": await bench_nvme_to_ddr4(),
         "ddr4_to_vram": await bench_ddr4_to_vram(),
+        "promote_live_tensor": await bench_promote_live_tensor(),
     }
 
 
