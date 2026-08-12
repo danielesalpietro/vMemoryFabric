@@ -5,6 +5,44 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: per-slice timing breakdown — ~80% of wall-clock is model reload, not inference
+
+Further into the same run, a finer-grained look at where the per-slice
+time actually goes (8 slices sampled):
+
+| | range | avg |
+|---|---|---|
+| dataset setup | ~2-6s | — |
+| model load (18.8GB AWQ checkpoint, network volume) | 92-104s | ~96s |
+| `generate()` | 17-27s (one outlier: 53.7s) | — |
+| total per slice | 112-148s | — |
+
+Model reload is ~80% of wall-clock time. This is the cost of the
+fresh-process-per-slice design (§ previous entries): each of the 18
+slices starts a brand-new process and reloads the full checkpoint from
+scratch, specifically to avoid resuming a process-reuse stall that was
+never root-caused on WSL2 (2026-08-10/11 entries — ruled out content and
+batch composition as the variable, but the underlying mechanism was
+never pinned down, just avoided).
+
+**Not touched now** — changing the reuse pattern mid-run risks
+resurfacing that undiagnosed stall on a run we can't afford to
+invalidate. Logged as a concrete follow-up instead: now that pinning is
+confirmed stable under sustained load on real Linux (soak test, this
+morning's entry), it's worth testing separately — after this run
+completes — whether that old stall was itself a WSL2 artifact. If so,
+reusing one process across slices would cut the ~80% reload overhead.
+Filed here rather than acted on, per the same discipline as the
+Dockerfile-unification and `/etc/environment`-verification items already
+queued below.
+
+### Not yet done
+
+- Everything from the entry below, plus: test whether process reuse
+  across slices is safe on real Linux (separate from and after this run).
+
+---
+
 ## 2026-08-12 — Tekniska, continued: MMLU run in progress — speed already conclusive, quality not yet
 
 Interim update, 3/18 slices in — not the final numbers, but the speed
