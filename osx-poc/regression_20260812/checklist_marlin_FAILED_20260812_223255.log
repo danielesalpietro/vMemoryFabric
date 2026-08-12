@@ -1,0 +1,38 @@
+[T+   0.0s] Building EAT + TierManager (real instances, no GPU touched yet)...
+[T+   0.0s] TierManager wired via GCSGWorker.configure_tier_manager() — vLLM will pick it up when it constructs the worker itself (no direct kwarg path exists, see the docstring on configure_tier_manager()/_pending_tier_manager in gcsg.py).
+[T+   0.0s] Loading /data/nvme/models/mixtral-instruct-awq via EngineArgs(worker_cls=GCSGWorker), quantization=awq_marlin, cpu_offload_gb=4 ...
+INFO 08-12 20:33:05 config.py:280] Overriding HF config with {'head_dim': 128}
+`torch_dtype` is deprecated! Use `dtype` instead!
+INFO 08-12 20:33:14 config.py:510] This model supports multiple tasks: {'embed', 'score', 'reward', 'generate', 'classify'}. Defaulting to 'generate'.
+INFO 08-12 20:33:15 awq_marlin.py:109] The model is convertible to awq_marlin during runtime. Using awq_marlin kernel.
+WARNING 08-12 20:33:15 cuda.py:98] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+WARNING 08-12 20:33:15 config.py:642] Async output processing is not supported on the current platform type cuda.
+INFO 08-12 20:33:15 llm_engine.py:234] Initializing an LLM engine (v0.6.6.post1) with config: model='/data/nvme/models/mixtral-instruct-awq', speculative_config=None, tokenizer='/data/nvme/models/mixtral-instruct-awq', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=3328, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=awq_marlin, enforce_eager=True, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=/data/nvme/models/mixtral-instruct-awq, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=False, chunked_prefill_enabled=False, use_async_output_proc=False, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"candidate_compile_sizes":[],"compile_sizes":[],"capture_sizes":[],"max_capture_size":0}, use_cached_outputs=False, 
+INFO 08-12 20:33:15 selector.py:120] Using Flash Attention backend.
+INFO 08-12 20:33:16 model_runner.py:1094] Starting to load model /data/nvme/models/mixtral-instruct-awq...
+Loading safetensors checkpoint shards:   0% Completed | 0/3 [00:00<?, ?it/s]
+[T+  30.0s] heartbeat — process still alive, waiting on the next log line
+[T+  60.0s] heartbeat — process still alive, waiting on the next log line
+Loading safetensors checkpoint shards:  33% Completed | 1/3 [00:51<01:42, 51.08s/it]
+Loading safetensors checkpoint shards:  67% Completed | 2/3 [00:55<00:23, 23.41s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:56<00:00, 13.41s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:56<00:00, 18.88s/it]
+
+INFO 08-12 20:34:19 model_runner.py:1099] Loading model weights took 18.8251 GB
+GCSG: impossibile pinnare gli expert Marlin [0, 1] (layer 5, offloaded) in GPU (cannot pin 'torch.cuda.HalfTensor' only dense CPU tensors can be pinned) — path Marlin escluso dallo shadow pool.
+GCSG: shadow pool NON caricato per 2 expert Marlin-packed ([0, 1]) su 32 layer — pinning GPU fallito (vedi warning precedente). Hook-only per questi expert.
+WARNING 08-12 20:34:21 fused_moe.py:374] Using default MoE config. Performance might be sub-optimal! Config file not found at /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/configs/E=8,N=8192,device_name=NVIDIA_GeForce_RTX_3090.json
+INFO 08-12 20:34:23 worker.py:241] Memory profiling takes 2.45 seconds
+INFO 08-12 20:34:23 worker.py:241] the current vLLM instance can use total_gpu_memory (23.56GiB) x gpu_memory_utilization (0.95) = 22.38GiB
+INFO 08-12 20:34:23 worker.py:241] model weights take 18.83GiB; non_torch_memory takes 1.23GiB; PyTorch activation peak memory takes 1.55GiB; the rest of the memory reserved for KV Cache is 0.78GiB.
+INFO 08-12 20:34:23 gpu_executor.py:76] # GPU blocks: 397, # CPU blocks: 2048
+INFO 08-12 20:34:23 gpu_executor.py:80] Maximum concurrency for 3328 tokens per request: 1.91x
+INFO 08-12 20:34:26 llm_engine.py:431] init engine (profile, create kv cache, warmup model) took 5.86 seconds
+[T+  81.3s] load_model() completed with tier_manager wired — checklist item 1 (asyncio.run() bridging inside load_model() didn't raise) PASSES by construction: we got here.
+worker._tier_manager is the real TierManager instance. [checklist wiring OK]
+
+EAT entries after load_model(): 262 total (256 DDR4, 6 VRAM).
+EAT seeded with at least one entry. [checklist item 2 partial: seeding OK]
+Shadow pool populated: expert(s) [] (shadow_pool_size configured: 2).
+FAIL: worker._shadow_pool is empty — either _pin_awq_expert_to_gpu() failed for every candidate expert (check for 'impossibile pinnare' warnings above — this is checklist item 3, SHARD_SIZE_BYTES may be too small for a real dominant parameter) or _select_shadow_expert_ids() returned nothing.
+[rank0]:[W812 20:34:27.187381123 ProcessGroupNCCL.cpp:1250] Warning: WARNING: process group has NOT been destroyed before we destruct ProcessGroupNCCL. On normal program exit, the application should call destroy_process_group to ensure that any pending NCCL operations have finished in this process. In rare cases this process can exit before this point and block the progress of another member of the process group. This constraint has always been present,  but this warning has only been added since PyTorch 2.4 (function operator())

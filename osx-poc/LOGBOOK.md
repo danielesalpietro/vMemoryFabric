@@ -5,6 +5,71 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: 4-test regression pass on the pod, Marlin path (path 2) verified on real hardware for the first time — caught and fixed a real crash on the way
+
+Ran the 4-test sequence the other session laid out (`af6b51f`, then
+`6727a04` mid-sequence), one at a time, stopping to report before
+continuing per their instruction — real value this time: it actually
+caught something.
+
+### Test 1 — full pytest, GPU-marked included: green
+
+`110 passed, 3 skipped, 0 failed` (6.76s). Skips dropped from the
+sandbox's 18 to 3, all pre-existing TODO/blocked markers unrelated to
+GPU availability (one references issue #10, already closed — the skip
+marker itself just hasn't been revisited, not this session's job to fix).
+
+### Test 2 — AWQ path checklist: green, unchanged
+
+Same 5/5 result as every prior run today — Bloom filter removal
+(`64f6bdc`) didn't touch this path, as expected.
+
+### Test 3 — Marlin path checklist, first time ever on real hardware: FAILED, then fixed, then green
+
+First attempt:
+
+```
+GCSG: impossibile pinnare gli expert Marlin [0, 1] (layer 5, offloaded) in GPU
+(cannot pin 'torch.cuda.HalfTensor' only dense CPU tensors can be pinned)
+FAIL: worker._shadow_pool is empty
+```
+
+Reported the full output rather than just the failing assertion, per the
+other session's own instruction ("qui è dove un bug nel wiring Marlin si
+manifesterebbe — riporta l'intero output"). Root cause, confirmed by the
+other session reading the code against this exact error (commit
+`6727a04`): `_build_marlin_shadow_pool()` decides "offloaded" by checking
+only `w13_qweight` — the other five Marlin-packed tensors on the same
+layer don't necessarily share that device (`cpu_offload_gb` doesn't treat
+the module as one indivisible unit). The non-dominant-tensor promotion
+branch called `.pin_memory()` unconditionally on tensors that could
+already be CUDA-resident. The AWQ path already guarded this
+(`p.device.type != "cuda"` filter); the newer Marlin path didn't. Not the
+sentinel-key bug both sessions initially suspected — simpler and more
+fundamental.
+
+Pulled the fix, reran from Test 3 (not from 1 — already green, no reason
+to redo): **green**, 5/5, plus the Marlin-specific line the checklist
+prints when it finds them: **"Marlin-path sentinel entries (expert_id=-1)
+reached Tier.VRAM: 6 confirmed."** First time path 2's TierManager wiring
+has run successfully against real hardware at all.
+
+### Test 4 — `bench_eat.py`, confirms the Bloom filter removal: green
+
+`eat_vs_baseline_delta_us`: hit_p50 0.019µs, miss_p50 0.010µs — near
+zero, same conclusion as the sandbox's ~0.07µs, actually tighter here.
+
+### Files brought back before this (non-persistent) pod goes away
+
+`osx-poc/regression_20260812/`: `pytest_regression_20260812_222841.log`,
+`checklist_awq_20260812_222932.log`,
+`checklist_marlin_FAILED_20260812_223255.log` (kept, not discarded — the
+failure is the useful part of this record),
+`checklist_marlin_retry_20260812_224026.log` (the green rerun),
+`bench_eat_20260812_224334.log`.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: Marlin path's first real-hardware test failed — real bug found and fixed, NOT the one anyone suspected
 
 Pre-96GB-test regression pass (4 scripted tests, one at a time, stop on

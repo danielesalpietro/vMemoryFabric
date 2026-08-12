@@ -1,0 +1,14 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-8.2.1, pluggy-1.6.0
+rootdir: /workspace/repo/osx-poc
+configfile: pytest.ini
+plugins: anyio-4.4.0, hypothesis-6.103.1, asyncio-0.23.7, cov-5.0.0
+asyncio: mode=Mode.AUTO
+collected 113 items
+
+tests/test_eat.py .........................                              [ 22%]
+tests/test_scheduler.py .......................ss....................... [ 64%]
+.....s                                                                   [ 69%]
+tests/test_tier.py ..................................                    [100%]
+
+======================== 110 passed, 3 skipped in 6.76s ========================
