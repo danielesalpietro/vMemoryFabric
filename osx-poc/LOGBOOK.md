@@ -5,6 +5,85 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: single-shot MMLU run is deterministic (byte-for-byte rerun), `bench_tier.py`'s `promote_live_tensor` section closes sub-goal 4 on real hardware
+
+### Determinism check on the previous entry's 411/570 result
+
+Reran the exact same single-shot 570-question command
+(`--wire-tier-manager`, same pod, same checkpoint) to see whether the
+4-subject divergence from baseline (previous entry) was run-to-run noise
+or a stable property of this code path. **Byte-identical to the first
+run**: 411/570, all 57 per-subject scores identical, even
+`shadow_activations_cumulative` identical (562,354 both times) — greedy
+decoding + `seed=0` + no randomness anywhere in this path reproduces
+exactly, as it should.
+
+This re-frames the earlier finding: the divergence against the
+`awq_marlin` baselines isn't instability introduced by this session's
+work — it's a **stable, reproducible** difference. Cross-checked the two
+`awq_marlin` baselines against each other where visible (worst-10 lists
+in `LogBook_20260812_1344/mmlu_burn_singleshot/burn_singleshot.log` vs.
+the sliced run's aggregated per-subject data) and they agree with each
+other too (e.g. `electrical_engineering` 30.0% in both). Working
+hypothesis, still not root-caused: the divergence tracks the
+`awq`-vs-`awq_marlin` kernel switch itself (forced by
+`--wire-tier-manager`, since the wiring only touches path 3), not
+anything in `TierManager`/EAT's own logic. Consistent with, not proof of.
+
+Also re-diffed against the closer real-Linux baseline
+(`LogBook_20260812_1344/mmlu_sliced_run/mmlu_results.jsonl`, 412/570,
+72.28%, same hardware class as today, not the WSL2 one used first): 5
+subjects off by 1 each, net -1 (412→411) — same order of magnitude as
+the WSL2 comparison, same conclusion.
+
+### `bench_tier.py`'s `promote_live_tensor` section (commit `51b516b`, sub-goal 4)
+
+Pulled it from a stale pod checkout the first time (cloned before
+`51b516b`/`dfa9a9d` landed — `git pull` on the pod's clone had never been
+re-run since the initial `git clone`, an easy thing to forget once a
+checkout exists) — first run's JSON was silently missing the
+`promote_live_tensor` key entirely, not an error, just old code. Caught
+by checking the output against what the commit message described before
+trusting it, pulled the pod's checkout current, reran.
+
+**Both `pin=False` and `pin=True` pass the README's "within 1.5x
+theoretical bandwidth" criterion at P50**, on real hardware (RTX 3090,
+CC 8.6, real Linux):
+
+| | P50 | P95/P99 | Within 1.5x @ P50 |
+|---|---|---|---|
+| `pin=False` | 684.2 µs | 29.8 ms | true |
+| `pin=True` | 194.1 µs | 82.7 ms | true |
+
+`pin=True` P50 is ~3.5x faster than `pin=False` — expected direction,
+pinned host memory avoiding the intermediate staging copy. P95/P99 go
+the *other* way (worse for `pin=True`) — with only 20 synthetic 4MB
+shards (declared deviation from the 256MB production `SHARD_SIZE_BYTES`,
+see the module docstring), P95/P99 on n=20 is essentially 1-2 outlier
+samples, not a statistically meaningful tail measurement. Not
+investigated further — the P50 pass/fail is what the README criterion
+actually asks for.
+
+### Files brought back before this (non-persistent) pod goes away
+
+- `osx-poc/mmlu_tier_manager_pod_singleshot_rerun_20260812_210821.jsonl`
+  — the determinism-check rerun
+- `osx-poc/bench_tier_pod_20260812_212555.log` — the valid
+  `bench_tier.py` run (post-pod-checkout-pull); the stale pre-pull run's
+  output was not kept, it's missing data, not a different result
+
+### Not yet done
+
+- Root-causing the `awq`-vs-`awq_marlin` divergence hypothesis — plausible,
+  not verified.
+- `promote_live_tensor` at production shard scale (real AWQ dominant
+  parameter size, not 4MB synthetic) — still unmeasured, same caveat as
+  `nvme_to_ddr4`/`ddr4_to_vram` always had.
+- Sub-goal 5 (issue #1/#2/#4 analysis under real EAT traffic), 6 (path 1
+  parity), Marlin path (path 2) wiring — all still open.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: full 570-question single-shot MMLU run, TierManager wired, on the pod — no hang, accuracy within noise, but NOT byte-identical to baseline (correcting an earlier overclaim)
 
 New pod (RunPod, different DC than the earlier EU-RO-1 one — Network
