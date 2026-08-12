@@ -4,7 +4,7 @@ A heterogeneous multi-tier memory fabric for MoE and LLM inference. Hot AI objec
 
 Developed under the internal codename **OSX** ("Operating System for Experts") — a system-level framework for managing the lifecycle of experts in Mixture-of-Experts (MoE) large language models. It treats experts as first-class objects governed by a dedicated runtime, with hierarchical memory placement, predictive prefetching, gating-aware scheduling, and adaptive replication.
 
-> *Current release: **Oskarshamn** (v0.4.0-dev) — August 11, 2026 — previous: Eketorp (v0.3.0-dev), Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev). In progress: Sprint 4 — **Tekniska** (branch `Sprint-4-Tekniska`).*
+> *Current release: **Tekniska** (v0.5.0-dev) — August 13, 2026 — previous: Oskarshamn (v0.4.0-dev), Eketorp (v0.3.0-dev), Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev). Sprint 4 complete; Sprint 5 (PoC delivery + paper) not yet started.*
 
 ---
 
@@ -165,14 +165,15 @@ vMemoryFabric/                  (repo root)
 | 1      | M1 — EAT               | 3–4 | ✅ **Möllstorp** (~92%) |
 | 2      | M2 — Tier Manager      | 5–6 | ✅ **Eketorp** (~85%) |
 | 3      | M3 — Expert Scheduler  | 7–8 | 🟡 in progress (~80%) — **Oskarshamn** |
-| 4      | Integration + benchmarks | 9–12 | 🟡 in progress (~40%) — **Tekniska** (branch `Sprint-4-Tekniska`) |
+| 4      | Integration + benchmarks | 9–12 | ✅ **Tekniska** (100%) (branch `Sprint-4-Tekniska`) |
 | 5      | PoC delivery + paper   | 13–16 | 🔲 pending (~5%) |
 | 6      | Telemetry + observability dashboard | TBD | 🔲 pending (~10%) — **Stockholm** |
 
 Percentages are grounded in code/test/hardware verification, not label
-carry-over — updated 2026-08-12 alongside Sprint 4's TierManager/EAT
-wiring landing. None of Sprints 0/1/2 are 100%: closing that gap is
-exactly what "done" means below.
+carry-over — updated 2026-08-13 with Sprint 4 (Tekniska) complete: all 7
+sub-goals of issue #17 closed, including two real bugs found and fixed on
+real hardware along the way (Marlin's TierManager transfer, path 1 under
+real offload) and a final MMLU quality number for every wired path.
 
 **Sprint 1 (Möllstorp, ~92%):** M1 (EAT) is implemented and unit-tested.
 Three real, measured defects were left open across two subsequent
