@@ -383,10 +383,28 @@ M1 technical report's limitations section) rather than left implicit:
   the project's EAT (M1) or Tier Manager (M2). The shadow pool's expert
   selection is a round-robin placeholder (`range(shadow_pool_size)`), not
   guided by real hotness; that integration is EAT/Tier Manager work not
-  yet done. M1's own extended benchmark found its Bloom filter ~5–14×
-  slower than a plain dict on this workload (issue #1) — an open question
-  independent of this report. Dual-GPU/AER (issue #8) was not exercised.
-  "vMemoryFabric is alive" as a claim about the full system is **not**
+  yet done. **Update (2026-08-12, Sprint 4):** that integration now
+  exists mechanically for both quantization paths — `GCSGWorker`'s shadow
+  pool can be routed through `TierManager`/EAT instead of
+  `cpu_offload_gb` (opt-in, `configure_tier_manager()`). AWQ (path 3) is
+  validated end-to-end: a full 570-question MMLU rerun on the
+  TierManager-routed path scored 411/570 (72.1%), matching the original
+  baseline's total exactly, with one 32-question slice landing an exact
+  per-subject match. Marlin (path 2) is verified mechanically on real
+  hardware (checklist smoke test, 6 sentinel EAT entries confirmed
+  reaching Tier.VRAM) but **not yet quality-validated** — no MMLU rerun
+  exists yet on the TierManager-routed Marlin path specifically, only on
+  Marlin via the original `cpu_offload_gb` path (§6). Round-robin expert
+  selection is still the placeholder in both cases; hotness-driven
+  selection remains open. Full data: `LOGBOOK.md`, 2026-08-12 entries
+  ("TierManager wired" through "Marlin path ... verified on real
+  hardware"). M1's own extended benchmark found its original Bloom filter
+  ~5–14× slower than a plain dict on this workload (issue #1) — **closed
+  2026-08-12**: the Bloom filter was removed from EAT's hot path entirely
+  rather than tuned, since the plain-dict lookup it wrapped was already
+  the correct answer at this scale. Dual-GPU/AER (issue #8) was not
+  exercised. "vMemoryFabric is alive" as a claim about the full system is
+  **not**
   what this report supports; what it supports is narrower and stated in
   the abstract.
 - **Still no formal confidence interval, despite now three runs.** The
@@ -479,7 +497,30 @@ rather than GCSG in isolation:
    all): 0 mismatches, no timing degradation (pin-alloc time improved
    -31% after warm-up, total cycle time flat at -1%). Real pinning is
    safe and stable under sustained load on this platform. Full data:
-   `LOGBOOK.md`, 2026-08-12 "pinning soak test" entry.
+   `LOGBOOK.md`, 2026-08-12 "pinning soak test" entry. **Update
+   (2026-08-12, later the same day):** item 1 itself is now done. Both
+   quantization paths GCSG's shadow pool can use are wired through
+   `TierManager`/EAT (`GCSGWorker.configure_tier_manager()`, opt-in,
+   zero behavior change unless wired): AWQ (path 3) first, verified 5/5
+   on real hardware end-to-end; then Marlin (path 2, a shared per-layer
+   proxy under a sentinel EAT key rather than one entry per expert — see
+   `GCSGWorker._marlin_pool_shard_key()`). The Marlin wiring's first real
+   hardware pass failed
+   (`RuntimeError: cannot pin 'torch.cuda.HalfTensor' only dense CPU
+   tensors can be pinned`, layer 5, experts [0, 1]): root cause was
+   `_build_marlin_shadow_pool()` inferring a whole layer's offload state
+   from a single tensor (`w13_qweight`), when vLLM's `cpu_offload_gb`
+   does not actually offload all of a Marlin-packed layer's tensors as
+   one unit — some (e.g. `w13_scales`) can stay GPU-resident while others
+   are offloaded for the same layer, so the transfer code tried to pin an
+   already-CUDA tensor. Fixed with a device check short-circuit before
+   any pin attempt; retried and passed, with 6 sentinel (`expert_id=-1`)
+   EAT entries confirmed reaching `Tier.VRAM`. Round-robin expert
+   selection (not yet hotness-driven) is the one part of this item still
+   open. Full data: `LOGBOOK.md`, 2026-08-12 "Marlin path (path 2) wired
+   through TierManager" and "Marlin path's first real-hardware test
+   failed" entries; regression logs at
+   `osx-poc/regression_20260812/checklist_marlin_*.log`.
 2. Repeat this same MMLU evaluation on that path once it exists, as the
    next data point against this report's baseline. **Update
    (2026-08-12):** partially superseded — see §6.1. The evaluation was
@@ -487,7 +528,22 @@ rather than GCSG in isolation:
    doesn't exist) and reproduced within noise (72.28%/72.3% vs. 72.11%),
    confirming the result isn't an artifact of the original WSL2 run
    specifically. The Tier-Manager-routed rerun (the original intent of
-   this item) remains open — tracked as issue #17.
+   this item) remains open — tracked as issue #17. **Update (2026-08-12,
+   later the same day):** done for AWQ (path 3), the path every number in
+   this report through §6.1 was actually measured on until now. With
+   `TierManager` wired in (item 1, above) and `--wire-tier-manager` set,
+   a full 570-question single-process run scored 411/570 (72.1%) —
+   matching the original WSL2 baseline's total exactly (though not
+   byte-identical per-answer, consistent with §6.1's cross-run noise), and
+   a 32-question slice (`fetta1`) landed an exact per-subject match
+   against the historical baseline. This closes the item for AWQ. It is
+   **not** closed for Marlin (path 2): item 1's Marlin wiring was only
+   verified mechanically today (checklist smoke test, not an MMLU run);
+   no accuracy number exists yet for shadow execution through
+   TierManager-routed Marlin experts specifically. That is the one
+   quality-validation gap this report still has open on the wiring side.
+   Full data: `LOGBOOK.md`, 2026-08-12 "full 570-question single-shot
+   MMLU run, TierManager wired" entry.
 3. Exercise path 1 (`_ShadowExpertINT4`) under real offload for parity
    with paths 2/3.
 4. Establish a confidence interval via repeated full runs rather than a
