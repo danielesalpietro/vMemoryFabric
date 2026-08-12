@@ -5,6 +5,68 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: sub-goal 6 designed — path 1 real-offload test, not run yet (no GPU here)
+
+Sub-goal 6 (path 1 `_ShadowExpertINT4` parity under real offload) needs
+hardware this environment doesn't have. Wrote the design and the script;
+running it is the pod's or Z8's job.
+
+### Why this is a bigger ask than any prior smoke test in this project
+
+Path 1 only triggers on a checkpoint vLLM loads with raw fp16 FusedMoE
+weights (`w13_weight`) — i.e. genuinely unquantized. Every real Mixtral
+checkpoint used so far in this project is AWQ-quantized (paths 2/3), so
+hitting path 1 for real means loading a different, much larger
+checkpoint: `mistralai/Mixtral-8x7B-Instruct-v0.1`, ~93GB at fp16 (46.7B
+real parameters — Mixtral's non-expert layers are shared, not literally
+8×7B). ~4× the ~23GB AWQ checkpoint every other script here downloads. On
+a 24GB GPU, roughly ~75-80GB of that needs offloading to host RAM — about
+20× the `cpu_offload_gb=4` used everywhere else. Host RAM isn't the
+constraint (pod ~125GB, Z8 256GB DDR4, both comfortably over ~80GB); GPU
+VRAM budget is what forces this.
+
+### What was written, not run
+
+- **`scripts/probe_kv_blocks.py` extended**: `--model-path`,
+  `--cpu-offload-gb`, `--quantization none` added (was hardcoded to the
+  AWQ checkpoint and `cpu_offload_gb=4`). Point: find a `cpu_offload_gb`
+  that leaves a workable KV-cache budget *before* launching a full smoke
+  test that could OOM or hang partway through — same tool, same purpose
+  it was built for in issue #10/#16, just parametrized for a checkpoint
+  ~4× the size.
+- **`scripts/smoke_test_gcsg_path1_real_offload.py`**: new, same
+  watchdog+heartbeat+checklist idiom as every other smoke test in this
+  project. `--cpu-offload-gb` defaults to 78 — an ESTIMATE from the
+  arithmetic above, not a measured value; the script's own docstring
+  tells the operator to run the probe first, not trust the default.
+  Watchdog defaults to 3600s (vs. 900-1200s elsewhere) — this project's
+  own Root Cause II finding (GCSG report §5) showed `cpu_offload_gb`
+  4→8 alone causing a 9× slowdown under WSL2; at ~78GB offloaded (~20×
+  that), a much larger slowdown is plausible and explicitly not treated
+  as a failure signal in the script's own messaging — same "slow ≠ hung"
+  discipline used throughout this project's offload investigations.
+  Checklist: (1) `load_model()` completes and correctly dispatches to
+  path 1, (2) shadow pool populated via `_ShadowExpertINT4`, (3)
+  `generate()` produces non-degenerate output, (4) gate hooks fire, (5)
+  a direct numerical check of the INT4 quantize/dequantize/SwiGLU math
+  at REAL Mixtral-8x7B dimensions (`hidden_size=4096`) — this specific
+  math has only ever been verified at the tiny test model's
+  `hidden_size=1024` (2026-08-09); nothing guarantees it generalizes,
+  and the script says so rather than assuming it.
+
+### Not yet done
+
+- Running the probe, then the smoke test, on real hardware — nothing in
+  this entry has touched a GPU.
+- Deciding whether ~78GB offload is even a sane starting point once real
+  numbers come back — explicitly flagged in the script as an estimate.
+- If results are too slow/ambiguous to interpret, the agreed fallback is
+  evaluating a bigger single GPU (e.g. a 48GB card, same GA102/CC8.6
+  family already used for clean comparisons) or multi-GPU — not decided
+  yet, starting with the GPU already available first.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: issue #4 actually fixed — `BloomFilter.remove_expert()` was never implemented AND never called; both are now real
 
 Continuing sub-goal 5. `remove_expert()` had been a `raise NotImplementedError`
