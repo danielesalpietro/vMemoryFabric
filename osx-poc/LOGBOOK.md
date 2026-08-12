@@ -5,6 +5,46 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-13 — Berg, continued: `mmlu_final_report.md` consolidated across Sprint 3+4
+
+`mmlu_final_report.md` was still frozen at its original Sprint 3 snapshot
+(411/570, 72.11%, the `cpu_offload_gb` hook path only) — none of Sprint 4's
+MMLU work had ever been folded into it, even though the file's own title
+says "Final". Missing: the two cross-hardware `cpu_offload_gb` reruns on
+real Linux/RTX A5000 (412/570 both sliced and single-process), the
+TierManager-wired AWQ rerun (411/570, issue #17 sub-goal 3), the
+TierManager-wired Marlin rerun (412/570, closes #17's last open gap), the
+shadow-activations/latency correlation (r=0.95, refined to r=0.993), and
+the promotion-latency benchmark.
+
+Rewrote it from the raw `.jsonl` files directly rather than re-describing
+README/LOGBOOK's prose — which turned out to be imprecise on one point:
+"4 individual answers flipped (2 up, 2 down)" never said which baseline the
+AWQ-wired rerun was diffed against. Recomputing `per_subject_correct`
+diffs directly resolved it: the WSL2-baseline-vs-AWQ-wired pair (both
+411/570) differs on exactly `college_mathematics`, `elementary_mathematics`,
+`high_school_european_history`, `high_school_world_history` — net zero,
+confirmed by direct computation. The separate 4-subject Marlin divergence
+LOGBOOK's 2026-08-13 entry already named (`college_physics`,
+`electrical_engineering`, `high_school_macroeconomics`,
+`machine_learning`) was independently re-derived the same way and matches
+exactly.
+
+New section (§0) leads with a consolidated 5-run table instead of the
+numbers staying scattered: all five full-570 runs — WSL2 baseline,
+A5000 unwired ×2, TierManager-wired AWQ, TierManager-wired Marlin — land
+within 0.7pp of each other across every axis that varies between them
+(platform, hardware generation, quantization backend, data path). Flagged
+this invariance as the strongest single Evaluation-section claim for the
+paper (Sprint 5 plan §B2), stronger stated once than as five separate
+numbers a reader has to reassemble themselves.
+
+Still open: same consolidation treatment for M1/M2 into a PoC Final Report
+(Sprint 5 plan §A2) — this session only covered the MMLU slice, prioritized
+because it's the input the paper's Evaluation section needs first.
+
+---
+
 ## 2026-08-13 — Berg: Sprint 5 kickoff (PoC delivery + paper)
 
 Sprint 4 (Tekniska) closed 100% the day before. Before planning any new

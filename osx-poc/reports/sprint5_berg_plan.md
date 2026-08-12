@@ -81,9 +81,25 @@ girare):
 
 ### A2. Report finale consolidato del PoC
 
-Oggi i risultati sono sparsi tra README (sezione roadmap, molto lunga),
-`gcsg_shadow_execution_report.md`, `mmlu_final_report.md`, e centinaia di KB
-di `LOGBOOK.md`. Serve un unico **PoC Final Report** (`osx-poc/reports/`) che:
+**Prima fetta fatta (2026-08-12):** `osx-poc/mmlu_final_report.md` era
+fermo allo snapshot di Sprint 3 (411/570, 72.11%, solo path `cpu_offload_gb`)
+e non conteneva nessuno dei run di Sprint 4 — i due cross-hardware repro
+(A5000), i due rerun TierManager-wired (AWQ e Marlin, quest'ultimo la
+chiusura dell'issue #17), la correlazione shadow-activations/latenza
+(r=0.993), il benchmark di promotion latency. Riscritto consolidando tutti
+i run in un'unica tabella (§0 del report), con i diff per-subject
+ricalcolati direttamente dai `.jsonl` grezzi invece che ripresi dal prosa
+di README/LOGBOOK — che su questo punto erano imprecisi su quale run fosse
+confrontato con quale (vedi §2.3 del report aggiornato).
+
+Ancora da fare per il resto di A2: lo stesso trattamento per M1/M2 (oggi
+solo nel README, non in un report dedicato) — il report MMLU era la parte
+più urgente perché alimenta direttamente la sezione Evaluation del paper
+(§B2/B3), ma non esaurisce A2.
+
+Oggi i risultati restanti (M1/M2) sono sparsi tra README (sezione roadmap,
+molto lunga) e centinaia di KB di `LOGBOOK.md`. Serve comunque un unico
+**PoC Final Report** (`osx-poc/reports/`) che:
 
 - raccoglie M1/M2/M3 con i numeri finali per i 4 target non funzionali
   (PT-PEP <3ms p99, PT-PEP hit rate >70%, GCSG degradation <2%, promotion
