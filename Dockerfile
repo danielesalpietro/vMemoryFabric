@@ -63,11 +63,37 @@ RUN pip install --no-cache-dir -r /tmp/requirements-vllm.txt \
 WORKDIR /workspace
 ENV PYTHONPATH=/workspace/src
 
+# Bake the project source into the image (Sprint 4 / Tekniska). Locally this
+# is shadowed by docker-compose.yml's `.:/workspace` bind mount — live code,
+# no rebuild needed to pick up a change — so nothing changes for local dev.
+# On a RunPod Pod there is no bind mount: without this, the image only had
+# the runtime dependencies, no project code at all (found 2026-08-12 —
+# GCSGWorker/TierManager both ImportError on a real pod). Paths match the
+# PYTHONPATH already declared above, not the osx-poc/-relative convention
+# `make`/CI use locally.
+COPY osx-poc/src /workspace/src
+COPY osx-poc/scripts /workspace/scripts
+COPY osx-poc/configs /workspace/configs
+COPY osx-poc/tests /workspace/tests
+
 # ── runtime defaults ──────────────────────────────────────────────────────────
 # CUDA visible devices passed at runtime via docker-compose / docker run --gpus
 ENV CUDA_VISIBLE_DEVICES=0
 ENV TOKENIZERS_PARALLELISM=false
 ENV OMP_NUM_THREADS=8
+
+# `ENV` above sets these for the container's main process and anything
+# exec'd from it — NOT for a separate SSH login session, which gets its own
+# environment via PAM, not from Docker. Confirmed 2026-08-12: PYTHONPATH
+# read as empty over SSH on a real pod despite being set here. Writing the
+# same values to /etc/environment makes PAM's pam_env pick them up for SSH
+# logins too (harmless for local dev, which never goes through sshd).
+RUN { \
+      echo "PYTHONPATH=/workspace/src"; \
+      echo "CUDA_VISIBLE_DEVICES=0"; \
+      echo "TOKENIZERS_PARALLELISM=false"; \
+      echo "OMP_NUM_THREADS=8"; \
+    } >> /etc/environment
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
