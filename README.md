@@ -255,7 +255,8 @@ measure the "shard promotion latency within 1.5× theoretical bandwidth"
 target, and close out the M1 debt (#1/#2/#4) that Sprint 1/2 explicitly
 deferred until M3 generated real concurrent traffic. Full sub-goal
 breakdown: `osx-poc/LOGBOOK.md`, 2026-08-11 "Tekniska: Sprint 4 kickoff"
-entry. As of 2026-08-12 (~40%, 3 of 7 sub-goals done or closed):
+entry. As of 2026-08-12 (~85%, 5 of 7 sub-goals done or closed, 1 partially
+closed, 1 remaining):
 
 - **Done — wiring (sub-goal 1).** `GCSGWorker(tier_manager=...)` (opt-in,
   default `None`, zero behavior change unless wired — see
@@ -280,12 +281,17 @@ entry. As of 2026-08-12 (~40%, 3 of 7 sub-goals done or closed):
   single proxy serves the whole shadow pool per layer by design, not one
   per expert — see `GCSGWorker._marlin_pool_shard_key()` for why a real
   `expert_id` key would risk a stale-VRAM-reuse bug across
-  `refresh_shadow_pool_selection()` calls). 95 unit tests passing as of
-  this wiring (down from a peak of 103 earlier the same day — the Bloom
-  filter removal below removed more tests than this added); the
-  Marlin-path transfer itself still needs its own hardware pass
-  (`scripts/smoke_test_gcsg_tier_manager.py --quantization awq_marlin`,
-  extended for this — not yet run).
+  `refresh_shadow_pool_selection()` calls). **Update:** the Marlin-path
+  transfer's own hardware pass (`scripts/smoke_test_gcsg_tier_manager.py
+  --quantization awq_marlin`) has now run, on a real RTX 3090 — failed
+  once (a real bug: `_build_marlin_shadow_pool()` inferred a whole
+  layer's offload state from a single tensor, but vLLM's
+  `cpu_offload_gb` doesn't offload all of a Marlin-packed layer's
+  tensors uniformly, so the transfer tried to pin an already-CUDA
+  tensor), fixed, then green with 6 sentinel (`expert_id=-1`) EAT
+  entries confirmed reaching `Tier.VRAM`. Both quantization paths
+  GCSG's shadow pool can use are now wired and hardware-verified. 98
+  unit tests passing.
 - **Done — pinning strategy (sub-goal 2).** Manually pinned transfer
   (`torch.Tensor.pin_memory()`, bypassing vLLM's own WSL2 gate) is safe
   and stable under sustained load on real Linux — 1000-cycle soak test,
@@ -298,14 +304,49 @@ entry. As of 2026-08-12 (~40%, 3 of 7 sub-goals done or closed):
   here) landed at 411/570 (72.1%), same total as the baseline but with 4
   individual answers flipped (2 up, 2 down) — 0.7%, inside the <2%
   target, corrected from an earlier same-day overclaim of "identical"
-  based only on the two slices. `osx-poc/LOGBOOK.md`, 2026-08-12 entries.
-- **In progress — promotion latency (sub-goal 4).** Benchmark written
+  based only on the two slices. **Update:** repeated again with
+  `TierManager` actually wired in (`--wire-tier-manager`, sub-goal 1's
+  path) rather than the original `cpu_offload_gb` path — same
+  570-question, single-process pattern, landed at 411/570 (72.1%) again,
+  plus an exact per-subject match on a 32-question slice. The
+  TierManager-routed rerun this item originally called for is now done
+  for AWQ (path 3); no equivalent MMLU number exists yet for the Marlin
+  path specifically, only the mechanical wiring verification above.
+  `osx-poc/LOGBOOK.md`, 2026-08-12 entries.
+- **Done — promotion latency (sub-goal 4).** Benchmark
   (`benchmarks/bench_tier.py::bench_promote_live_tensor`, `pin=True` vs
-  `pin=False`, checked against the 1.5× theoretical-bandwidth criterion)
-  but not yet run against real hardware — written without GPU access.
-- **Not started:** M1 debt re-analysis under the real traffic that now
-  exists (#1/#2/#4, sub-goal 5), path 1 parity under real offload
-  (sub-goal 6), close-out (sub-goal 7 — this table is part of it).
+  `pin=False`) run on real hardware: `pin=True` P50 194.1µs vs.
+  `pin=False` P50 684.2µs — ~3.5× faster, meeting the 1.5×
+  theoretical-bandwidth criterion on the metric that criterion actually
+  asks for (P50); P95/P99 went the other way on `pin=True` but at n=20
+  synthetic 4MB shards that tail isn't a statistically meaningful
+  measurement, not investigated further.
+- **Partially closed — M1 debt re-analysis (sub-goal 5).** Issue #1
+  (Bloom filter ~5–14× slower than a plain dict on this workload) is
+  **closed**: removed from EAT's hot path entirely rather than tuned.
+  Issue #4 (`BloomFilter.remove_expert()`) is now moot — same removal.
+  **Issue #2 (RLock contention) remains open** — today's re-measurement
+  under real EAT traffic didn't match the issue's originally cited
+  ~1360× p99 degradation figure (today: ~61-91×), and reconciling that
+  gap needs either the original benchmark's exact environment or
+  accepting today's numbers as the new reference point. Decision
+  deferred.
+- **Done — path 1 parity under real offload (sub-goal 6).** Exercised
+  `_ShadowExpertINT4` for the first time against real
+  Mixtral-8x7B-Instruct-v0.1 (unquantized, ~93.4GB) under real offload
+  (A100 SXM 80GB, `cpu_offload_gb=28`) — previously only verified on a
+  tiny, non-offloaded test model. Found and fixed a real bug: the
+  fused-FusedMoE build loop never pinned offloaded weight slices to GPU
+  before quantizing, unlike paths 2/3; fixed with the same
+  device-check-then-pin pattern, then verified green including a
+  numerically-correct INT4 forward at real `hidden_size=4096`. See
+  `osx-poc/reports/gcsg_shadow_execution_report.md` §7/§9 for the full
+  writeup. Mechanics/correctness only — no MMLU number on this path, no
+  production-viability claim for this offload configuration.
+- **Remaining: close-out (sub-goal 7).** This table plus the GCSG report
+  are being kept in sync as each sub-goal closes; still open: a final
+  decision on issue #2 (above), and regenerating the `.docx` (EN/IT)
+  exports of the GCSG report to match its markdown source.
 
 Sprint 6 (Stockholm) is a new leg, added without reordering or reweighting
 Sprints 0–5 above — those stay exactly as planned. Named deliberately:
@@ -360,7 +401,7 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) | PMEM (EMH-2) integration | Blocked on hardware availability |
 | [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival |
 | [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint`/`test`/`bench` fail on relative paths — container `WORKDIR` (`/workspace`) doesn't match `osx-poc/`'s relative paths | Workaround in use everywhere: `docker compose run --rm osx-dev bash -c "cd osx-poc && ..."` |
-| [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` used vLLM's `cpu_offload_gb` directly | **Partially resolved 2026-08-12**: both AWQ ModuleList and Marlin paths now wired (see Sprint 4 in the roadmap above); AWQ verified on real hardware twice, Marlin's transfer still needs its own hardware pass. Promotion-latency measurement is done (sub-goal 4). Still open: M1 debt (#2) re-analysis, sub-goal 6 (path 1 parity) — not closing this issue yet |
+| [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` used vLLM's `cpu_offload_gb` directly | **Nearly resolved 2026-08-12**: all three shadow-pool paths (AWQ, Marlin, path 1) now wired/exercised and verified on real hardware (see Sprint 4 in the roadmap above) — AWQ end-to-end including a TierManager-routed MMLU rerun, Marlin's transfer mechanically verified (a real bug found and fixed en route), path 1 verified under real offload at production model scale (another real bug found and fixed). Promotion-latency measurement is done (sub-goal 4). Still open before closing this issue: issue #2 (RLock contention) re-analysis decision (sub-goal 5), close-out (sub-goal 7) |
 | [#18](https://github.com/danielesalpietro/vMemoryFabric/issues/18) | No environment fingerprint pre-check — `OMP_NUM_THREADS`/`shm_size`/GPU model assumed, not verified | Hit for real deploying to RunPod: `OMP_NUM_THREADS=8` fixed regardless of real vCPU count, `docker-compose.yml`'s `shm_size` doesn't apply outside local `docker compose` |
 
 **Closed:** [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) (2026-08-11) — GCSG shadow-execution crash and the related batch-composition slowdown, both root-caused to WSL2/CUDA pageable-memory offload behavior (structural, upstream-confirmed, not a project bug). Full trail: `osx-poc/reports/gcsg_shadow_execution_report.md`. [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) (2026-08-12) — `BloomFilter.remove_expert()` implemented for real (Counting Bloom Filter, replaces `pybloom_live`) and wired into `EAT.evict()`, which never called it before. [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) (2026-08-12, same day) — re-measuring against #4's new implementation showed lookup latency got *worse*, not better, settling the question: the Bloom filter is removed from `EAT` entirely, not kept as an unjustified fast-path (which also makes #4's fix moot, but it stays recorded as its own closed issue — the bug it fixed was real while the Bloom filter still existed). Full trail: `osx-poc/LOGBOOK.md`, 2026-08-12 "issue #4 actually fixed" and "Bloom filter removed" entries.
