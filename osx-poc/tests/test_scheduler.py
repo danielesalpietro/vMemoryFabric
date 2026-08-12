@@ -421,6 +421,15 @@ class TestGCSG:
 
 class TestGCSGTierManagerWiring:
 
+    @pytest.fixture(autouse=True)
+    def _reset_pending_tier_manager(self):
+        """_pending_tier_manager è stato di classe (necessario perché
+        vLLM costruisce GCSGWorker da solo — vedi configure_tier_manager()) —
+        senza reset, un test che lo imposta trapelerebbe negli altri test
+        di questo file e di scheduler.gcsg in generale."""
+        yield
+        GCSGWorker.configure_tier_manager(None)
+
     @staticmethod
     def _real_tier_manager(tmp_path):
         eat = ExpertAccessTable(capacity=1000, n_slots=4)
@@ -434,6 +443,23 @@ class TestGCSGTierManagerWiring:
         worker._n_experts_cached = None
         worker._shadow_pool = {}
         return worker
+
+    # ── configure_tier_manager() — l'unico modo raggiungibile da vLLM ───────
+
+    def test_configure_tier_manager_defaults_to_none(self):
+        """Nessuna leak da altri test — vedi _reset_pending_tier_manager."""
+        assert GCSGWorker._pending_tier_manager is None
+
+    def test_configure_tier_manager_sets_class_level_pending(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        GCSGWorker.configure_tier_manager(mgr)
+        assert GCSGWorker._pending_tier_manager is mgr
+
+    def test_configure_tier_manager_none_clears_pending(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        GCSGWorker.configure_tier_manager(mgr)
+        GCSGWorker.configure_tier_manager(None)
+        assert GCSGWorker._pending_tier_manager is None
 
     # ── _select_shadow_expert_ids ──────────────────────────────────────────
 

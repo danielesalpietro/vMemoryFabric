@@ -5,6 +5,90 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: closed a real injection gap in the TierManager wiring, added a pod verification checklist
+
+Before writing a hardware verification checklist for the previous
+entry's work, checked how a caller would actually supply `tier_manager=`
+to `GCSGWorker` given vLLM constructs the worker itself — and found it
+doesn't work. Worth catching now rather than handing the other session a
+checklist with a broken first step.
+
+### The gap
+
+`GCSGWorker(tier_manager=...)` is a normal constructor kwarg, but vLLM
+never calls that constructor directly: `worker_cls="scheduler.gcsg.GCSGWorker"`
+is a string, resolved internally by
+`vllm.worker.worker_base.init_worker()` (already documented in this
+file's module docstring, point 1) and constructed with vLLM's own
+standard args — there's no path for a caller's extra kwarg to reach it.
+Checked every existing script that uses `worker_cls` in this repo
+(`eval_mmlu_gcsg.py`, `probe_kv_blocks.py`, both `smoke_test_gcsg_*.py`,
+`verify_shadow_pool_pinning_e2e.py`) — none of them ever pass an extra
+kwarg through that path, which is itself evidence no such path exists,
+not just an assumption.
+
+### Fix
+
+Added `GCSGWorker.configure_tier_manager(tier_manager)` — a classmethod
+that sets a class-level `_pending_tier_manager`, called *before*
+constructing `LLM(...)`/`EngineArgs(...)`. `__init__` falls back to it
+when `tier_manager=` isn't passed explicitly. Direct `tier_manager=`
+still works for anyone constructing `GCSGWorker` without going through
+vLLM (all the unit tests from the previous entry use exactly that).
+Documented as class-level, deliberately-simple state — one script
+constructs one worker in every real use in this project, so no need for
+anything fancier; noted the escape hatch (pass `tier_manager=` directly)
+if that ever stops being true.
+
+Added 3 unit tests (`configure_tier_manager` sets/clears the pending
+value correctly) with an `autouse` fixture resetting it after every test
+in that class — class-level state used across a test file is exactly
+the kind of thing that leaks into unrelated tests if not reset
+explicitly. 94 passed / 18 skipped afterward (up from 91 — the 3 new
+tests), still zero failures.
+
+### New: `scripts/smoke_test_gcsg_tier_manager.py`
+
+A verification checklist for the pod, mechanized as far as it can be
+without a GPU, following this project's own established smoke-test
+idiom (docstring-as-checklist, watchdog+heartbeat, explicit PASS/FAIL
+per item — same shape as `smoke_test_gcsg_worker.py`/
+`smoke_test_gcsg_mixtral8x7b.py`). Checks, in the same priority order as
+the previous entry's "NOT run on real hardware" list:
+
+1. `asyncio.run()` inside `_promote_module_via_tier_manager()` doesn't
+   raise — implied by `load_model()` completing at all with
+   `tier_manager` wired.
+2. The real `.to('cuda')`/`pin_memory()` transfer actually completes AND
+   EAT's tier is really updated to `Tier.VRAM` afterward — not just
+   "didn't crash": looks up the shadow pool's expert_ids directly in EAT.
+3. Whether a real AWQ dominant parameter fits under `SHARD_SIZE_BYTES` —
+   surfaced by whether `worker._shadow_pool` actually contains the
+   expected experts (a silent exclusion would show up as a shorter pool
+   + a logged "impossibile pinnare" warning, not a crash).
+4. Real per-token EAT traffic accumulates during `generate()` —
+   checks `access_count > 0` on real EAT entries post-generate.
+5. `refresh_shadow_pool_selection()` is callable post-traffic without
+   raising.
+
+Uses `quantization="awq"` (not `"awq_marlin"`) on the same
+`casperhansen/mixtral-instruct-awq` checkpoint every other script in
+this repo loads with `awq_marlin` — deliberate: the new TierManager
+wiring only touches path 3 (plain AWQ ModuleList), and the tiny test
+model (`hf-internal-testing/Mixtral-tiny`, unquantized) hits path 1
+instead, which would exercise none of today's new code at all. This
+will be slower than the Marlin path (no Marlin kernel) — expected, not
+a regression to chase. Not run here (no GPU) — same "NOT verified on
+real hardware" status as everything else in the previous entry, just
+now with a script that mechanizes the check instead of a prose list.
+
+### Not yet done
+
+- Actually running `smoke_test_gcsg_tier_manager.py` on the pod.
+- Everything from the previous entry's "Not yet done" list, unchanged.
+
+---
+
 ## 2026-08-12 — Tekniska: sub-goal 1 (TierManager/EAT wiring, issue #17) — implemented, unit-tested, NOT yet run on real hardware
 
 Pod is paused; wrote this against the local checkout, to be pulled and

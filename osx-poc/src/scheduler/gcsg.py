@@ -721,11 +721,20 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
     restare importabile — e GCSGGuard testabile — anche in ambienti senza
     vLLM installato (es. CI cpu-tests, che non installa requirements-vllm.txt).
 
-    M1/M2 wiring (2026-08-12, issue #17) — opt-in via tier_manager=,
-    default None (comportamento invariato, byte per byte identico a prima
-    di questa integrazione — zero rischio per il path Marlin già validato
-    dal report GCSG, 72.28%/72.3% su Linux reale, Sprint 4). Con un
-    TierManager passato al costruttore:
+    M1/M2 wiring (2026-08-12, issue #17) — opt-in, default None
+    (comportamento invariato, byte per byte identico a prima di questa
+    integrazione — zero rischio per il path Marlin già validato dal
+    report GCSG, 72.28%/72.3% su Linux reale, Sprint 4).
+
+    Attivazione: quando vLLM costruisce questo worker da sé (il caso
+    reale — worker_cls="scheduler.gcsg.GCSGWorker" risolto internamente,
+    vedi punto 1 sopra), non c'è modo per il chiamante di passare un
+    kwarg extra al costruttore — usare
+    GCSGWorker.configure_tier_manager(tier_manager) PRIMA di costruire
+    LLM(...)/EngineArgs(...). Passare tier_manager= direttamente al
+    costruttore resta valido per chi costruisce GCSGWorker senza passare
+    da vLLM (es. i test). Con un TierManager attivo (in un modo o
+    nell'altro):
 
         - EAT viene seeded a load_model() con una entry (expert_id,
           layer_id) per ogni combinazione reale del modello, a Tier.DDR4
@@ -770,6 +779,44 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
     # del bug di crescita illimitata trovato 2026-08-10.
     _MAX_CAPTURED_ROUTER_LOGITS = 1000
 
+    # Configurazione "pending" per tier_manager (2026-08-12, issue #17).
+    #
+    # PROBLEMA REALE, non ipotetico: vLLM costruisce GCSGWorker da solo,
+    # risolvendo worker_cls come stringa qualname (vedi docstring di
+    # modulo, punto 1) e passandogli i SUOI argomenti standard — non c'è
+    # alcun punto in EngineArgs/LLM() dove un chiamante possa iniettare un
+    # kwarg extra come tier_manager= nel costruttore. Verificato
+    # negativamente: NESSUNO degli script esistenti in scripts/ che usano
+    # worker_cls="scheduler.gcsg.GCSGWorker" (eval_mmlu_gcsg.py,
+    # probe_kv_blocks.py, smoke_test_gcsg_worker.py,
+    # smoke_test_gcsg_mixtral8x7b.py, verify_shadow_pool_pinning_e2e.py)
+    # passa mai un argomento extra attraverso quel path — se ne esistesse
+    # uno, ci si aspetterebbe almeno un precedente.
+    #
+    # Fix: configure_tier_manager() imposta un valore a livello di classe
+    # PRIMA di costruire LLM(...)/EngineArgs(...); __init__ lo usa come
+    # fallback quando tier_manager= non è stato passato esplicitamente
+    # (che resta il modo diretto per chi costruisce GCSGWorker da sé, es.
+    # i test — vedi tests/test_scheduler.py::TestGCSGTierManagerWiring).
+    _pending_tier_manager: Optional[TierManager] = None
+
+    @classmethod
+    def configure_tier_manager(cls, tier_manager: Optional[TierManager]) -> None:
+        """Imposta il TierManager che il PROSSIMO GCSGWorker costruito da
+        vLLM userà. Va chiamato PRIMA di LLM(...)/EngineArgs(...) — vedi
+        il commento sopra _pending_tier_manager per perché serve.
+
+        Stato globale a livello di classe, non di istanza: onesto sui
+        suoi limiti, non nascosto — un solo processo costruisce un solo
+        LLM/worker alla volta in tutti gli usi reali di questo progetto
+        (uno script = un worker), quindi non c'è oggi un caso d'uso reale
+        per più TierManager pendenti in parallelo nello stesso processo.
+        Se dovesse servire, il fix è passare tier_manager= direttamente
+        (bypassando questo meccanismo) a chi costruisce GCSGWorker senza
+        passare da vLLM.
+        """
+        cls._pending_tier_manager = tier_manager
+
     def __init__(
         self, *args, guard: Optional[GCSGGuard] = None,
         tier_manager: Optional[TierManager] = None, **kwargs,
@@ -784,7 +831,11 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         # validato (report GCSG, 72.28%/72.3% su Linux reale). Vedi
         # _load_shadow_pool()/_select_shadow_expert_ids() per dove diverge
         # quando presente, e la classe docstring per lo stato di verifica.
-        self._tier_manager = tier_manager
+        # Fallback a _pending_tier_manager (configure_tier_manager()): vedi
+        # il commento su quell'attributo per perché serve — vLLM costruisce
+        # questo worker da solo, un kwarg esplicito qui non è raggiungibile
+        # dall'esterno quando LLM(worker_cls=...) è il chiamante reale.
+        self._tier_manager = tier_manager if tier_manager is not None else type(self)._pending_tier_manager
         self._n_experts_cached: Optional[int] = None
         self._shadow_pool: Dict[int, object] = {}
         self._gate_hook_handles: List[object] = []
