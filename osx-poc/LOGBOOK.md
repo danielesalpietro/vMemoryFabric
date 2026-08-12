@@ -49,13 +49,45 @@ to `rsync`/`scp` the repo onto the already-running pod directly over the
 working SSH connection as an immediate unblock, independent of a
 rebuild-and-republish cycle.
 
+### Corrected same day: the COPY targets above were themselves wrong
+
+The rsync workaround (whole repo copied over the working SSH connection,
+not just `osx-poc/src`) preserved the repo's real directory structure —
+landing at `/workspace/osx-poc/src`, not `/workspace/src`. That disagreed
+with both the `COPY` fix above and the Dockerfile's own
+`ENV PYTHONPATH=/workspace/src`, forcing a manual `PYTHONPATH` override
+per SSH command. Flagged rather than fixed by the session doing the
+hands-on work — correctly deferred to avoid touching a shared branch
+unilaterally.
+
+Root cause, confirmed rather than guessed: `docker-compose.yml`'s local
+bind mount is `.:/workspace` (repo **root**, not `osx-poc/`), so the code
+has only ever really lived at `/workspace/osx-poc/src`, even for local
+dev — this `ENV` disagreed with that from before Sprint 4 even started,
+masked because `make`/CI always override `PYTHONPATH` explicitly at
+invocation time rather than relying on it. Confirmed independently via
+`scripts/smoke_test.py`'s own internal contradiction:
+`check_osx_src_importable()`'s docstring said
+`PYTHONPATH=/workspace/src`, but its own `_warn` on import failure
+already said `/workspace/osx-poc/src` — and the function imports
+`eat`/`tier`/`scheduler` as top-level packages, which only resolve under
+`osx-poc/src`, never a top-level `src/`. Two independent pieces of
+evidence agreeing, not one claim taken on faith.
+
+`Dockerfile`/`smoke_test.py` (`0b600f2`): `ENV PYTHONPATH`, the `COPY`
+targets from the fix above, and the `/etc/environment` entry all
+corrected to `/workspace/osx-poc/src`; the docstring fixed to match its
+own already-correct `_warn` instead of contradicting it.
+
 ### Not yet done
 
-- Build + publish the Dockerfile fix as a fresh `sprint-4-tekniska` tag.
+- Build + publish the corrected Dockerfile as a fresh `sprint-4-tekniska`
+  tag — now two rounds of fixes bundled into one build instead of one.
 - Verify `CUDA_VISIBLE_DEVICES`/`TOKENIZERS_PARALLELISM`/`OMP_NUM_THREADS`
   actually reach an SSH session now, not just `PYTHONPATH`.
-- The pinning soak test itself, on the rsync'd copy — still the point of
-  today.
+- The pinning soak test itself, on the rsync'd copy (with the manual
+  `PYTHONPATH=/workspace/osx-poc/src` override) — still the point of
+  today, running now.
 
 ---
 
