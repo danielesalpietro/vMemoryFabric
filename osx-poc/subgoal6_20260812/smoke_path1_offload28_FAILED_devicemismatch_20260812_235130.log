@@ -1,0 +1,173 @@
+[T+   0.0s] Import vllm...
+[T+   5.4s] Loading mistralai/Mixtral-8x7B-Instruct-v0.1 — quantization=None (raw fp16, path 1), cpu_offload_gb=28.0, gpu_memory_utilization=0.95 ...
+[T+   5.4s] This is a ~93GB checkpoint — first download in this project will take real time.
+INFO 08-12 21:51:40 config.py:280] Overriding HF config with {'head_dim': 128}
+`torch_dtype` is deprecated! Use `dtype` instead!
+INFO 08-12 21:51:48 config.py:510] This model supports multiple tasks: {'classify', 'reward', 'embed', 'score', 'generate'}. Defaulting to 'generate'.
+WARNING 08-12 21:51:48 cuda.py:98] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+WARNING 08-12 21:51:48 config.py:642] Async output processing is not supported on the current platform type cuda.
+INFO 08-12 21:51:48 llm_engine.py:234] Initializing an LLM engine (v0.6.6.post1) with config: model='mistralai/Mixtral-8x7B-Instruct-v0.1', speculative_config=None, tokenizer='mistralai/Mixtral-8x7B-Instruct-v0.1', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=512, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=True, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=mistralai/Mixtral-8x7B-Instruct-v0.1, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=False, chunked_prefill_enabled=False, use_async_output_proc=False, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"candidate_compile_sizes":[],"compile_sizes":[],"capture_sizes":[],"max_capture_size":0}, use_cached_outputs=False, 
+/usr/local/lib/python3.12/dist-packages/vllm/transformers_utils/tokenizer_group/tokenizer_group.py:23: FutureWarning: It is strongly recommended to run mistral models with `--tokenizer-mode "mistral"` to ensure correct encoding and decoding.
+  self.tokenizer = get_tokenizer(self.tokenizer_id, **tokenizer_config)
+INFO 08-12 21:51:50 selector.py:120] Using Flash Attention backend.
+INFO 08-12 21:51:51 model_runner.py:1094] Starting to load model mistralai/Mixtral-8x7B-Instruct-v0.1...
+[T+  30.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+INFO 08-12 21:52:16 weight_utils.py:251] Using model weights format ['*.safetensors']
+Loading safetensors checkpoint shards:   0% Completed | 0/19 [00:00<?, ?it/s]
+[T+  60.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:   5% Completed | 1/19 [00:17<05:07, 17.11s/it]
+Loading safetensors checkpoint shards:  11% Completed | 2/19 [00:33<04:43, 16.67s/it]
+[T+  90.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  16% Completed | 3/19 [00:47<04:06, 15.38s/it]
+Loading safetensors checkpoint shards:  21% Completed | 4/19 [01:03<03:57, 15.83s/it]
+[T+ 120.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  26% Completed | 5/19 [01:20<03:46, 16.20s/it]
+Loading safetensors checkpoint shards:  32% Completed | 6/19 [01:38<03:36, 16.68s/it]
+[T+ 150.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  37% Completed | 7/19 [01:56<03:25, 17.11s/it]
+Loading safetensors checkpoint shards:  42% Completed | 8/19 [02:13<03:09, 17.20s/it]
+[T+ 180.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  47% Completed | 9/19 [02:27<02:40, 16.00s/it]
+Loading safetensors checkpoint shards:  53% Completed | 10/19 [02:36<02:06, 14.06s/it]
+Loading safetensors checkpoint shards:  58% Completed | 11/19 [02:46<01:41, 12.72s/it]
+[T+ 210.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  63% Completed | 12/19 [03:00<01:31, 13.01s/it]
+Loading safetensors checkpoint shards:  68% Completed | 13/19 [03:14<01:20, 13.39s/it]
+[T+ 240.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  74% Completed | 14/19 [03:26<01:04, 12.96s/it]
+Loading safetensors checkpoint shards:  79% Completed | 15/19 [03:39<00:51, 13.00s/it]
+[T+ 270.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  84% Completed | 16/19 [03:53<00:40, 13.35s/it]
+Loading safetensors checkpoint shards:  89% Completed | 17/19 [04:06<00:26, 13.27s/it]
+[T+ 300.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  95% Completed | 18/19 [04:20<00:13, 13.37s/it]
+Loading safetensors checkpoint shards: 100% Completed | 19/19 [04:32<00:00, 13.15s/it]
+Loading safetensors checkpoint shards: 100% Completed | 19/19 [04:32<00:00, 14.37s/it]
+
+INFO 08-12 21:56:53 model_runner.py:1099] Loading model weights took 58.1383 GB
+WARNING 08-12 21:57:02 fused_moe.py:374] Using default MoE config. Performance might be sub-optimal! Config file not found at /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/configs/E=8,N=14336,device_name=NVIDIA_A100-SXM4-80GB.json
+[T+ 330.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+INFO 08-12 21:57:04 worker.py:241] Memory profiling takes 2.48 seconds
+INFO 08-12 21:57:04 worker.py:241] the current vLLM instance can use total_gpu_memory (79.25GiB) x gpu_memory_utilization (0.95) = 75.29GiB
+INFO 08-12 21:57:04 worker.py:241] model weights take 58.14GiB; non_torch_memory takes 7.16GiB; PyTorch activation peak memory takes 3.12GiB; the rest of the memory reserved for KV Cache is 6.87GiB.
+INFO 08-12 21:57:04 gpu_executor.py:76] # GPU blocks: 3518, # CPU blocks: 2048
+INFO 08-12 21:57:04 gpu_executor.py:80] Maximum concurrency for 512 tokens per request: 109.94x
+INFO 08-12 21:57:08 llm_engine.py:431] init engine (profile, create kv cache, warmup model) took 6.23 seconds
+[T+ 334.2s] load_model() completed. [checklist item 1 OK]
+Shadow pool loaded via path 1: expert(s) [0, 1]. [checklist item 2 OK]
+[T+ 334.2s] Running generate() on 1 short prompt(s), max_tokens=8 — expect this to be slow (heavy offload), that alone is not a failure.
+Processed prompts:   0%|          | 0/1 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]INFO 08-12 21:57:09 model_runner_base.py:120] Writing input of failed execution to /tmp/err_execute_model_input_20260812-215709.pkl...
+INFO 08-12 21:57:09 model_runner_base.py:149] Completed writing input of failed execution to /tmp/err_execute_model_input_20260812-215709.pkl.
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/worker/model_runner_base.py", line 116, in _wrapper
+[rank0]:     return func(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/worker/model_runner.py", line 1691, in execute_model
+[rank0]:     hidden_or_intermediate_states = model_executable(
+[rank0]:                                     ^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/mixtral.py", line 386, in forward
+[rank0]:     hidden_states = self.model(input_ids, positions, kv_caches,
+[rank0]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/compilation/decorators.py", line 168, in __call__
+[rank0]:     return self.forward(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/mixtral.py", line 309, in forward
+[rank0]:     hidden_states, residual = layer(positions, hidden_states,
+[rank0]:                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/utils.py", line 524, in forward
+[rank0]:     output = functional_call(module,
+[rank0]:              ^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/_functorch/functional_call.py", line 148, in functional_call
+[rank0]:     return nn.utils.stateless._functional_call(
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/nn/utils/stateless.py", line 298, in _functional_call
+[rank0]:     return module(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/mixtral.py", line 246, in forward
+[rank0]:     hidden_states = self.block_sparse_moe(hidden_states)
+[rank0]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/mixtral.py", line 101, in forward
+[rank0]:     router_logits, _ = self.gate(hidden_states)
+[rank0]:                        ^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1844, in _call_impl
+[rank0]:     return inner()
+[rank0]:            ^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/nn/modules/module.py", line 1803, in inner
+[rank0]:     hook_result = hook(self, args, result)
+[rank0]:                   ^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/workspace/repo/osx-poc/src/scheduler/gcsg.py", line 1553, in _capture_and_evaluate
+[rank0]:     _worker._evaluate_gcsg_for_rows(router_logits, hidden_states, _layer_id)
+[rank0]:   File "/workspace/repo/osx-poc/src/scheduler/gcsg.py", line 1640, in _evaluate_gcsg_for_rows
+[rank0]:     self.guard.run_shadow(
+[rank0]:   File "/workspace/repo/osx-poc/src/scheduler/gcsg.py", line 318, in run_shadow
+[rank0]:     shadow_pool[shadow_expert_id](hidden_states, layer_id)   # forward INT4 reale
+[rank0]:     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/workspace/repo/osx-poc/src/scheduler/gcsg.py", line 452, in __call__
+[rank0]:     gate_up = hidden_states @ w13.T
+[rank0]:               ~~~~~~~~~~~~~~^~~~~~~
+[rank0]: RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu! (when checking argument for argument mat2 in method wrapper_CUDA_mm)
+
+[rank0]: The above exception was the direct cause of the following exception:
+
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/workspace/repo/osx-poc/scripts/smoke_test_gcsg_path1_real_offload.py", line 250, in <module>
+[rank0]:     main()
+[rank0]:   File "/workspace/repo/osx-poc/scripts/smoke_test_gcsg_path1_real_offload.py", line 191, in main
+[rank0]:     outputs = llm.generate(prompts, SamplingParams(max_tokens=8, temperature=0.0))
+[rank0]:               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/utils.py", line 1021, in inner
+[rank0]:     return fn(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/llm.py", line 462, in generate
+[rank0]:     outputs = self._run_engine(use_tqdm=use_tqdm)
+[rank0]:               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/llm.py", line 1242, in _run_engine
+[rank0]:     step_outputs = self.llm_engine.step()
+[rank0]:                    ^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/engine/llm_engine.py", line 1390, in step
+[rank0]:     outputs = self.model_executor.execute_model(
+[rank0]:               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/executor/gpu_executor.py", line 88, in execute_model
+[rank0]:     output = self.driver_worker.execute_model(execute_model_req)
+[rank0]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/workspace/repo/osx-poc/src/scheduler/gcsg.py", line 1679, in execute_model
+[rank0]:     return self._base.execute_model(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/worker/worker_base.py", line 343, in execute_model
+[rank0]:     output = self.model_runner.execute_model(
+[rank0]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/torch/utils/_contextlib.py", line 116, in decorate_context
+[rank0]:     return func(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/usr/local/lib/python3.12/dist-packages/vllm/worker/model_runner_base.py", line 152, in _wrapper
+[rank0]:     raise type(err)(
+[rank0]: RuntimeError: Error in model execution (input dumped to /tmp/err_execute_model_input_20260812-215709.pkl): Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu! (when checking argument for argument mat2 in method wrapper_CUDA_mm)
+Processed prompts:   0%|          | 0/1 [00:01<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]
+[rank0]:[W812 21:57:10.157917091 ProcessGroupNCCL.cpp:1250] Warning: WARNING: process group has NOT been destroyed before we destruct ProcessGroupNCCL. On normal program exit, the application should call destroy_process_group to ensure that any pending NCCL operations have finished in this process. In rare cases this process can exit before this point and block the progress of another member of the process group. This constraint has always been present,  but this warning has only been added since PyTorch 2.4 (function operator())

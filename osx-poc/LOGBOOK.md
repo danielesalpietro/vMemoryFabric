@@ -5,6 +5,108 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12/13 — Tekniska, continued: sub-goal 6 (path 1, `_ShadowExpertINT4`) verified end-to-end under real offload — two pod swaps, one caught GPU-architecture blocker, one real device-mismatch bug found and fixed
+
+Three different pods this stretch before landing on one that actually
+worked:
+
+1. **RTX PRO 6000 Blackwell (sm_120)** — deployed for the 96GB VRAM.
+   `probe_kv_blocks.py` never got past engine init: `RuntimeError: CUDA
+   error: no kernel image is available for execution on the device`.
+   Confirmed root cause, not guessed: the project's pinned
+   `torch==2.5.1+cu124` reports `torch.cuda.get_arch_list()` =
+   `[sm_50...sm_90]` — no `sm_120` at all. PyTorch 2.5.1 (Oct 2024)
+   predates official Blackwell workstation-GPU support in stable wheels.
+   Not a project bug, not fixable by tuning `cpu_offload_gb` — the
+   RoPE embedding setup fails before offload logic is even reached.
+   Retired this pod; upgrading the whole project's pinned torch/vllm
+   stack to chase one GPU's architecture was judged out of scope here.
+2. **A100 SXM 80GB (sm_80)** — inside the project's supported arch
+   range. This is the pod that actually ran the test.
+
+### Storage: same "the big number isn't your quota" lesson, twice more
+
+Both replacement pods showed `df`-reported multi-petabyte `/data/nvme`
+free space (`1.8P`/`2.3P` total, hundreds of TB "free") — the shared
+MooseFS backend pool, not a per-pod quota, same as the original
+EU-RO-1 pod's `851T`. Asked for the real number from the RunPod
+dashboard both times rather than trusting `df`: RTX PRO 6000's volume
+was **128GB** (`vMemoryFabric_96GB_vRAM_volume`), the A100's was a
+**separate** 128GB volume (`universal_white_lion_volume`, different
+mount hostname — Network Volumes are datacenter-locked, confirmed
+again here since neither carried over when the DC changed pod-to-pod).
+`HF_HOME` redirected to `/data/nvme/hf_cache` on each new pod (default
+cache path is the 50GB container disk, same fix as every prior pod).
+
+### Step 3 (`probe_kv_blocks.py`) — starting value matters, tune per-GPU not copy-paste
+
+24GB VRAM's old default (`--cpu-offload-gb 78`) was never applicable
+here. Other session pre-computed sane starting points per GPU instead
+of reusing 78 blindly: **12GB** for the RTX PRO 6000 (96GB VRAM, never
+got far enough to test), **24GB** for the A100 (80GB VRAM) — came back
+`# GPU blocks: 0` (too little offloaded, model ate the whole KV-cache
+budget). Stepped up to **28GB**: `num_gpu_blocks=1489,
+total_tokens_capacity=23824` — accepted, well above the target
+positive-and-reasonable bar (compare: 3090 configs this sprint ran
+397-764 blocks).
+
+### Step 4 first attempt — real bug, not the sentinel-key issue anyone guessed
+
+```
+RuntimeError: Expected all tensors to be on the same device, but found
+at least two devices, cuda:0 and cpu! (mat2 in wrapper_CUDA_mm)
+```
+
+Checklist items 1-2 passed (load_model + shadow pool populated via path
+1 — the INT4 build itself doesn't crash under offload). Item 3
+(`generate()`) failed immediately: traceback pointed straight at
+`gcsg.py:452`, `_ShadowExpertINT4.__call__`'s `hidden_states @ w13.T`.
+Root cause, fixed by the other session (`3e6c751`): `w13` — the
+INT4-dequantized shadow weight — was built directly from the source
+`w13_weight`, which under real `cpu_offload_gb` can itself be
+CPU-resident; nothing ever moved the dequantized result to GPU, because
+the only prior test of this path (the tiny model, never offloaded) had
+every source weight on GPU already, so the gap never had a chance to
+show. Exactly the class of bug this script's docstring predicted it
+existed to catch.
+
+### Step 4 retry (`3e6c751`/`ad2cbc1` pulled): green, full checklist
+
+```
+generate() completed, 1/1 non-empty: ' The sum of 2 + 2'
+.gate hooks fired 288 times, shadow_activations=35 (5.0%)
+Direct shadow-expert forward at hidden_size=4096: finite, correct shape
+SMOKE TEST: GREEN
+```
+
+First real-hardware, real-dimension (`hidden_size=4096`, not the tiny
+model's 1024) verification of path 1 end-to-end. Closes the mechanical
+half of sub-goal 6 — not an MMLU quality claim, not a statement that
+`cpu_offload_gb=28` on a raw fp16 93GB checkpoint is anywhere near
+production-viable, both explicitly out of scope per the script's own
+docstring.
+
+### A live-monitoring bug caught mid-session, worth remembering
+
+First attempt at a 60s-interval progress Monitor used
+`pgrep -f smoke_test_gcsg_path1_real_offload` to check whether the
+remote process was still alive — classic self-match footgun: `pgrep -f`
+matches its own argv, which contains the search string verbatim, so it
+always reports a hit regardless of the target process's real state.
+Caught by direct `ps`/`nvidia-smi` cross-check when the monitor kept
+saying `RUNNING` well after the process had actually exited and freed
+the GPU. Fixed with the standard `ps aux | grep '[s]moke_test...'`
+bracket trick (breaks self-match by making the grep process's own argv
+not literally contain the unbracketed pattern).
+
+### Files brought back (`osx-poc/subgoal6_20260812/`)
+
+`probe_kv_blocks_offload24_...log`, `probe_kv_blocks_offload28_...log`,
+`smoke_path1_offload28_FAILED_devicemismatch_...log` (kept, not
+discarded), `smoke_path1_offload28_retry_...log` (the green run).
+
+---
+
 ## 2026-08-12 — Tekniska, continued: 4-test regression pass, round 2 — all green again, pod being retired
 
 Reran the same 4-test sequence a second time on this pod, back to back,
