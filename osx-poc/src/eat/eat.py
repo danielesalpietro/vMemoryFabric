@@ -100,11 +100,26 @@ class ExpertAccessTable:
     def evict(self, expert_id: ExpertID, shard_idx: ShardID) -> Optional[EATEntry]:
         """Rimuove uno shard dalla EAT (eviction dal Tier Manager).
 
-        NOTE: il Bloom filter non supporta cancellazione — la entry rimane
-        nel BF come falso positivo fino al prossimo rebuild.
+        Bloom filter aggiornato per davvero (2026-08-12, issue #4 — prima
+        la entry restava un falso positivo permanente, il Bloom filter
+        standard non supportava cancellazione). Livello shard sempre
+        aggiornato; livello expert solo se questo era l'ULTIMO shard di
+        quell'expert ancora nella tabella — altrimenti may_contain_expert()
+        darebbe falsi negativi per gli shard rimanenti dello stesso
+        expert_id, che condividono quel bit/contatore.
         """
         with self._lock:
-            return self._table.pop((expert_id, shard_idx), None)
+            entry = self._table.pop((expert_id, shard_idx), None)
+            if entry is not None:
+                self._bloom.remove_shard(expert_id, shard_idx)
+                # Scan lineare sulla tabella residua — accettabile: evict()
+                # non è un hot path per-token come lookup()/access(), è
+                # tipicamente una call ogni promozione/eviction di shard,
+                # non ogni singola valutazione di routing.
+                no_shards_left = not any(e == expert_id for e, _ in self._table)
+                if no_shards_left:
+                    self._bloom.remove_expert(expert_id)
+            return entry
 
     def access(self, expert_id: ExpertID, shard_idx: ShardID) -> Optional[EATEntry]:
         """Registra un accesso (touch) e restituisce la entry aggiornata."""

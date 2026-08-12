@@ -174,18 +174,26 @@ carry-over — updated 2026-08-12 alongside Sprint 4's TierManager/EAT
 wiring landing. None of Sprints 0/1/2 are 100%: closing that gap is
 exactly what "done" means below.
 
-**Sprint 1 (Möllstorp, ~90%):** M1 (EAT) is implemented and unit-tested,
-but three real, measured defects were never closed across two subsequent
+**Sprint 1 (Möllstorp, ~90%):** M1 (EAT) is implemented and unit-tested.
+Three real, measured defects were left open across two subsequent
 sprints — [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1)
-(Bloom filter ~5–14× slower than a plain dict — never decided whether it
-belongs in the hot path at all), [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2)
-(`RLock` p99 degrades ~1360× under contention), and [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4)
-(`BloomFilter.remove_expert()` unimplemented — evicted shards stay
-permanent false positives, not a cosmetic gap). All three were
-deliberately deferred pending real concurrent EAT traffic from M3, which
-now exists (see Sprint 4 below) — deferred, not closed. `EAT.hottest_candidates()`
-was added 2026-08-12 (issue #17's expert-selection needs) but doesn't
-touch #1/#2/#4.
+(Bloom filter slower than a plain dict — never decided whether it belongs
+in the hot path at all), [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2)
+(`RLock` p99 degrades under contention), and [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4)
+(`BloomFilter.remove_expert()` unimplemented — evicted shards stayed
+permanent false positives). **#4 is now closed** (2026-08-12): swapped
+`pybloom_live` for a self-contained Counting Bloom Filter (supports real
+deletion; classic Bloom filters structurally can't), wired `EAT.evict()`
+to actually call it, 9 new tests including one that would have failed
+loudly against the old stub. Side effect, not hidden: lookup latency vs.
+a plain dict got somewhat worse (~6.8-8.1× vs. the old ~4.7-4.9×, still
+inside the originally-cited "~5-14×" range) while insert throughput got
+~1.5-2× faster — issue #1's own open question (does Bloom belong in the
+hot path at all) is unaffected either way, still open. #1 and #2 remain
+open — see Sprint 4 below for today's re-measurement of #2's contention
+scenario against real (single-threaded) traffic, which found the
+originally-cited degradation figure doesn't reproduce at the same
+magnitude here.
 
 **Sprint 2 (Eketorp, ~85%):** `TierManager`/`EAT`'s NVMe→DDR4→VRAM
 pipeline is implemented and GPU-verified in isolation (Sprint 2). Until
@@ -327,7 +335,7 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) | Bloom filter ~5-14× slower than a plain dict | Undecided whether it belongs in the EAT hot path at all |
 | [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) | EAT `RLock` p99 degrades ~1360× under contention | M3 adds real concurrent traffic on top of this |
 | [#3](https://github.com/danielesalpietro/vMemoryFabric/issues/3) | `bench_tier.py` DDR4→VRAM p95/p99 skewed by CUDA cold-start | No warm-up iteration before timing |
-| [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) | `BloomFilter.remove_expert()` unimplemented | Evicted shards remain permanent false positives |
+| ~~[#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4)~~ | `BloomFilter.remove_expert()` unimplemented | **Closed 2026-08-12** — Counting Bloom Filter replaces `pybloom_live`, `EAT.evict()` now calls it for real; see Sprint 1 above |
 | [#5](https://github.com/danielesalpietro/vMemoryFabric/issues/5) | No CUDA stream pipelining in `GPUTransfer` | Deferred since Sprint 0, needs real compute to overlap with |
 | [#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6) | No `pyproject.toml`/`ruff.toml` | Pre-existing style debt across the whole codebase |
 | [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) | PMEM (EMH-2) integration | Blocked on hardware availability |
@@ -336,7 +344,7 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` used vLLM's `cpu_offload_gb` directly | **Partially resolved 2026-08-12**: wired for the AWQ ModuleList path, verified on real hardware (see Sprint 4 in the roadmap above). Still open: the Marlin path (what the published MMLU numbers use), promotion-latency measurement, and M1 debt (#1/#2/#4) re-analysis under the now-real EAT traffic — not closing this issue yet |
 | [#18](https://github.com/danielesalpietro/vMemoryFabric/issues/18) | No environment fingerprint pre-check — `OMP_NUM_THREADS`/`shm_size`/GPU model assumed, not verified | Hit for real deploying to RunPod: `OMP_NUM_THREADS=8` fixed regardless of real vCPU count, `docker-compose.yml`'s `shm_size` doesn't apply outside local `docker compose` |
 
-**Closed:** [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) (2026-08-11) — GCSG shadow-execution crash and the related batch-composition slowdown, both root-caused to WSL2/CUDA pageable-memory offload behavior (structural, upstream-confirmed, not a project bug). Full trail: `osx-poc/reports/gcsg_shadow_execution_report.md`.
+**Closed:** [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) (2026-08-11) — GCSG shadow-execution crash and the related batch-composition slowdown, both root-caused to WSL2/CUDA pageable-memory offload behavior (structural, upstream-confirmed, not a project bug). Full trail: `osx-poc/reports/gcsg_shadow_execution_report.md`. [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) (2026-08-12) — `BloomFilter.remove_expert()` implemented for real (Counting Bloom Filter, replaces `pybloom_live`) and wired into `EAT.evict()`, which never called it before. Full trail: `osx-poc/LOGBOOK.md`, 2026-08-12 "issue #4 actually fixed" entry.
 
 ---
 

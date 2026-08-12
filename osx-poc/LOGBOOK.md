@@ -5,6 +5,82 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: issue #4 actually fixed — `BloomFilter.remove_expert()` was never implemented AND never called; both are now real
+
+Continuing sub-goal 5. `remove_expert()` had been a `raise NotImplementedError`
+stub since Sprint 1 — checked before writing anything (`grep -rn
+remove_expert src/ tests/`) and found it was **never called from
+anywhere**, not even by `EAT.evict()`. So even a correct implementation
+would have changed nothing on its own — the real bug was two gaps, not
+one: no working deletion, and no caller wired to use it.
+
+### Fix: swapped `pybloom_live` for a custom Counting Bloom Filter
+
+A classic (non-counting) Bloom filter structurally can't support
+deletion — a single shared bit can't tell you whether it's safe to clear
+without breaking other elements that happen to hash into it. `pybloom_live.BloomFilter`
+is exactly that, so `remove_expert()` could never have been implemented
+against it as originally chosen. Replaced with a self-contained Counting
+Bloom Filter (`_CountingBloomFilter` in `src/eat/bloom.py`) — 8-bit
+counters instead of single bits, same standard `m`/`k` sizing math, double
+hashing via two independent `blake2b` digests (no new dependency —
+`hashlib` is stdlib). `pybloom-live==4.0.0` removed from `requirements.txt`
+— nothing else in the codebase used it (checked).
+
+`BloomFilter` gained `remove_shard(expert_id, shard_idx)` (new) alongside
+a now-real `remove_expert(expert_id)` (same signature as the original
+stub). `EAT.evict()` now calls both correctly: always clears the
+shard-level entry, but only clears the expert-level entry when it was
+the *last* remaining shard for that `expert_id` in the table — clearing
+it earlier would falsely make `may_contain_expert()` forget an expert
+that still has other valid shards, since that level's counters are
+shared across all of an expert's shards. Checked via a linear scan over
+the residual table (`evict()` isn't a per-token hot path like `lookup()`,
+so this is an acceptable cost, not the `access()`/`lookup()` fast path).
+
+### Verified the fix actually matters, not just "no longer raises"
+
+New test (`test_repeated_insert_evict_cycles_do_not_degrade_false_positive_rate`):
+20 cycles of insert-then-evict 500 entries each (10,000 cumulative
+"ghosts" if never actually removed — more than the filter's own
+declared capacity) — false-positive rate stays under 2%, same target as
+the original single-pass test. Against the *old* stub, every one of
+those 10,000 evictions would have stayed a permanent false positive
+(issue #4's literal description), driving the false-positive rate far
+past target — this test would have failed loudly on the old code, not
+just skipped/pending as `NotImplementedError` made it before. 9 new
+tests total (5 `BloomFilter`-level, 4 `EAT.evict()`-integration,
+including one confirming a shard eviction does NOT clear the expert-level
+entry while sibling shards remain). 103 passed / 18 skipped afterward (up
+from 94), zero failures.
+
+### Side effect on issue #1's numbers — not hidden
+
+Re-ran `bench_eat.py` 3× with the new implementation:
+
+| | old (`pybloom_live`) | new (Counting BF) |
+|---|---|---|
+| hit lookup p50 ratio vs. plain dict | ~4.7-4.9× | ~6.8-8.1× |
+| insert throughput | ~50,715 ops/sec | ~74,000-98,000 ops/sec |
+
+Lookups got a bit slower relative to a plain dict (still inside the
+issue's originally-cited "~5-14×" range, just toward the higher end);
+inserts got substantially faster (~1.5-2× the old pybloom_live-based
+throughput). Net effect on issue #1's own open question ("does the
+Bloom filter belong in the hot path at all") is a wash, not a win —
+recorded plainly rather than reported as an improvement it isn't.
+
+### Not yet done
+
+- Issue #1's actual design decision (keep Bloom fast-path vs. plain
+  dict) — still open, this session only re-measured it under the new
+  implementation, didn't decide it.
+- Issue #2 (contention) — unchanged from the entry above; the new
+  Counting Bloom Filter doesn't touch `EAT`'s `RLock` usage.
+- Sub-goal 6 (path 1 parity), sub-goal 7 (close-out).
+
+---
+
 ## 2026-08-12 — Tekniska, continued: sub-goal 5 started — re-ran `bench_eat.py` fresh, found real GCSGWorker traffic is single-threaded (issue #2's tested scenario doesn't apply yet), and today's contention numbers don't match the issue's cited figure
 
 Started sub-goal 5 (M1 debt re-analysis under real EAT traffic) — no GPU
