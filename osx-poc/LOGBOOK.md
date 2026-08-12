@@ -5,6 +5,72 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: sliced MMLU run complete — 72.28% vs. WSL2's 72.11%, plus a new latency-vs-shadow-activations correlation
+
+All 18 slices done, 570/570 questions.
+
+### Result: cross-hardware reproducibility holds
+
+**412/570 = 72.28%**, against the WSL2 baseline's 411/570 = 72.11%
+(2026-08-11 report numbers) — a ~+0.17pp difference, inside noise for a
+570-question sample, despite a different GPU (A5000 vs. 3090) and a
+different OS/virtualization stack (real Linux vs. WSL2). This had
+already looked likely from the interim 96/570 checkpoint two entries
+back, and holds at full completion: same pipeline, same behavior,
+independent of the underlying hardware. Last slice `[544,570)`: 20/26 =
+76.9%.
+
+### `shadow_activations` vs. accuracy: no correlation (r=0.04)
+
+Per-slice shadow-execution activation count does not predict per-slice
+accuracy. Contamination from shadow execution isn't selectively wrecking
+the slices where it fires most — supports the report's <2%
+quality-degradation target being a stable property, not a hidden
+tail-risk tied to activation rate.
+
+### New: `shadow_activations` vs. per-slice *time* — strong correlation (r=0.95), not yet in any doc
+
+Not something we'd measured before. The four slowest slices are exactly
+the four with the most shadow activations (3-4x the typical rate):
+
+| slice | shadow_activations | time |
+|---|---|---|
+| `[288,320)` | 78,068 | 159.5s |
+| `[192,224)` | 69,276 | 148.3s |
+| `[480,512)` | 49,054 | 142.8s |
+| `[64,96)` | 35,900 | 132.8s |
+| typical | ~20-28k | ~112-125s |
+
+Mechanistically this is expected, not a coincidence: every shadow
+activation is an extra forward pass through the INT4 verification
+expert, so it has a real, roughly proportional latency cost. The
+project's roadmap/README only ever framed shadow execution's cost in
+terms of quality (`<2%` degradation) — this is a separate, measurable
+*performance* cost nobody had explicitly quantified until this run.
+Worth a note in the GCSG report's limitations/future-work section, not
+just here.
+
+### Aside: burn-test false start, self-corrected
+
+The standalone pinning burn-test (distinct from this MMLU run) was
+launched without exporting `PYTHONPATH` first — died in seconds on
+`ModuleNotFoundError: No module named 'scheduler'`, before touching the
+model. Not a stall, not a regression — a launch-command mistake, caught
+immediately and relaunched correctly (PID confirmed alive). A stale
+monitor echo from the already-concluded slice orchestrator briefly
+looked like new information; it wasn't — same check re-firing on
+concluded state, no new signal.
+
+### Not yet done
+
+- Burn-test result (best case ~8 min, safety timeout at 30 min).
+- Fold the latency/shadow_activations finding into the GCSG report.
+- Everything already queued: Dockerfile unification, corrected-image
+  rebuild+publish, remaining `/etc/environment` var verification,
+  process-reuse-safety-on-real-Linux test.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: per-slice timing breakdown — ~80% of wall-clock is model reload, not inference
 
 Further into the same run, a finer-grained look at where the per-slice
@@ -35,6 +101,39 @@ reusing one process across slices would cut the ~80% reload overhead.
 Filed here rather than acted on, per the same discipline as the
 Dockerfile-unification and `/etc/environment`-verification items already
 queued below.
+
+### Clarification: what's actually GPU-resident vs. CPU-offloaded, and why the reload cost above isn't the whole picture
+
+Follow-up question during the run: does GCSG use GPU and CPU offload
+*simultaneously*, and does state really reset every slice? Checked
+against `osx-poc/src/scheduler/gcsg.py` directly rather than answering
+from memory:
+
+- **Two separate expert populations, not one.** The shadow pool
+  (`GCSGGuard.shadow_pool_size=2`, gcsg.py:162) is always GPU-resident by
+  design — this is the 2026-08-10 fix (issue #10/#16): `_load_shadow_pool()`
+  pins every module it hands to the shadow path via `_PinnedMarlinExperts`
+  (gcsg.py:474, :997-999), zero CPU round-trips. Every *other* expert in
+  the model stays under vLLM's native `cpu_offload_gb=4` and swaps
+  CPU↔GPU on every forward pass that routes to it — that's the traffic
+  this morning's pinning soak test validated as safe under load. This
+  offload path is vLLM-native and does **not** go through `TierManager`/EAT
+  — confirmed by grep, no `TierManager`/`eat` import anywhere in
+  `gcsg.py`. That's exactly the gap issue #17 describes: `TierManager`
+  exists and is verified in isolation, but isn't in `GCSGWorker`'s real
+  data path yet. Today's run exercises `GCSGWorker` as it stands now, not
+  a `TierManager`-integrated version.
+- **State really is fresh per slice, confirmed two ways.** In code:
+  `GCSGWorker.__init__` (gcsg.py:722-727) constructs
+  `self._shadow_pool: Dict[int, object] = {}` and
+  `self.guard = guard or GCSGGuard()` unconditionally, no persistence
+  hook — a new process means a fully zeroed worker. In the data: the
+  `shadow_activations_cumulative` field (written from
+  `guard_stats_now["shadow_activations"]` = `GCSGGuard._contamination_counter`,
+  `eval_mmlu_gcsg.py:315/349`, `gcsg.py:381`) is cumulative only within
+  the current process — observed non-monotonic across slices (e.g.
+  23670 → 25125 → 35900 → 28521), which could only happen if the counter
+  resets each slice. Mechanism and observation agree.
 
 ### Not yet done
 
