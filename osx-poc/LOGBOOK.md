@@ -33,6 +33,37 @@ entry) held up.
 Next: `ls /data/nvme/models/` (checkpoint presence), then the
 `pin_memory` test itself — still the actual point of this whole detour.
 
+### First real `pin_memory=True` outside WSL2 — real signal, not yet the full answer
+
+GPU on this pod: **RTX A5000**, confirmed via `nvidia-smi` — not the RTX
+3090 the original plan named, but not a deviation either: A5000 is
+GA102, CC 8.6, 24GB — the same architecture/VRAM class as the 3090, and
+was already the first choice among compatible cards for exactly this
+reason (see the 2026-08-11 pod-deployment entry). No second variable was
+introduced; a moment of confusion mid-session, corrected before acting on
+it rather than after redeploying a pod unnecessarily.
+
+`torch.zeros(1024).pin_memory(); t.is_pinned()` → **`True`**. First time
+this project has gotten a real `True` on a system where it matters,
+outside a diagnostic monkeypatch bypassing vLLM's own guard. Real signal
+that pinning is at least possible on this platform, where it structurally
+isn't under WSL2.
+
+**Not yet the full answer to the open question from the GCSG report's §9
+correction** — that question was specifically whether manual pinning is
+*safe and fast under sustained load*, not just whether a single
+allocation succeeds. This one call is the same class of evidence the
+project has explicitly flagged before as insufficient on its own (see the
+original pin_memory investigation, 2026-08-09/10: "a single small
+synthetic forward not crashing doesn't rule out silent corruption or
+instability under sustained load"). Next: a real soak test — repeated
+pinned allocations/transfers, not a one-shot check — before treating
+this as resolved rather than promising.
+
+Checkpoint (`casperhansen/mixtral-instruct-awq`) confirmed absent, as
+expected — `/data/nvme/models/` doesn't exist yet on this volume. Download
+starting next.
+
 ---
 
 ## 2026-08-11 — Tekniska, session close: pod terminated, resume point set
