@@ -196,7 +196,7 @@ def check_aiofiles() -> bool:
 
 
 def check_osx_src_importable() -> bool:
-    """Verifica che il package src/ sia importabile (PYTHONPATH=/workspace/src)."""
+    """Verifica che il package src/ sia importabile (PYTHONPATH=/workspace/osx-poc/src)."""
     try:
         from eat.types import Tier, EATEntry
         from eat.eat import ExpertAccessTable
