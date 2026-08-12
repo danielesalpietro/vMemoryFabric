@@ -5,6 +5,71 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: pinning soak test — sub-goal 2 closed, positively
+
+The actual point of the whole RunPod detour, answered: **1000/1000
+iterations, 0 byte-exact mismatches**, real pinned host memory, real
+256MB shards (same unit `TierManager`/`EAT` operate on), on the A5000 pod
+over `ssh`. No silent corruption under sustained repeated use — the
+specific risk flagged and left explicitly open in the GCSG report's §9
+correction and in this sprint's kickoff entry (2026-08-11).
+
+### The numbers, not just pass/fail
+
+- Total-cycle drift (first 10% of runs vs. last 10%): **-1%** — flat.
+- H2D+D2H transfer time drift: **-3%** — flat.
+- Pin-alloc-specific drift: **-31%**, i.e. pinning got *faster* after the
+  first several hundred cycles, not slower — consistent with the host-side
+  allocator warming up / page caching, not with the kind of
+  fragmentation-driven degradation this project already saw once for real
+  (the `_PinnedMarlinExperts`-for-all-32-layers hang, 2026-08-10) and knows
+  to watch for. No sign of it here.
+- 1000 cycles in 589s (~513ms/cycle average, including a fresh 256MB pin +
+  H2D + D2H + byte comparison each time — not a raw-transfer-only number).
+
+### Why this reads as a real answer, not another single call
+
+Contrast with the diagnostic monkeypatch used throughout the original
+crash investigation (`vllm.platforms.interface.in_wsl` forced to
+`False`): that approach bypassed vLLM's own WSL2 guard on top of memory
+WSL2 itself doesn't support cleanly — a small number of calls not
+crashing was explicitly *not* trusted as sufficient evidence back then
+(2026-08-09/10 entries), for exactly the reason this soak test now
+addresses directly: real pinning, real Linux, sustained load, byte-exact
+verification every cycle, not just "didn't crash."
+
+### Sub-goal 2 (Sprint 4 kickoff, 2026-08-11) — closed
+
+> Resolve the pinning-strategy question the GCSG report's §9 correction
+> left open... Decide, with evidence, whether `TierManager.GPUTransfer`
+> should attempt real pinning or keep GCSG's current "stay permanently
+> GPU-resident" approach.
+
+Decided, with evidence: real pinning is safe and stable under sustained
+load on real Linux (not under WSL2, where this was never tested because
+it structurally can't be — vLLM disables it there). `TierManager`
+attempting real pinned transfers, rather than only the
+permanently-GPU-resident approach GCSG's shadow pool currently uses, is
+now a defensible design choice for the Sprint 4 sub-goal 1 integration
+work — on this platform specifically, not as a general claim about
+WSL2.
+
+### Next
+
+Sub-goal 3 (re-run the MMLU-5shot evaluation on the integrated path) is
+next — longer, more moving parts (`GCSGWorker` + checkpoint + eventually
+`TierManager`), more risk surface. Proceeding directly on the current pod
+with the manual `PYTHONPATH=/workspace/osx-poc/src` override rather than
+pausing to rebuild the corrected image first — the override is proven
+working (`GCSGWorker`/`TierManager` already imported successfully with
+it) and this pod is already warmed up (checkpoint present, environment
+verified, soak test done); rebuilding now would cost real time for zero
+change to the actual eval work. The corrected image (`0b600f2`, not yet
+built/published) stays queued as a hygiene pass for a natural pause
+point, not a blocker.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: the image had no project code on it
 
 Pre-checks before the pinning soak test (checkpoint integrity, free GPU,
