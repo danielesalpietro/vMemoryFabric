@@ -5,6 +5,39 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: 4-test regression pass, round 2 — all green again, pod being retired
+
+Reran the same 4-test sequence a second time on this pod, back to back,
+while a replacement pod (RTX PRO 6000 + a dedicated 128GB disk for
+sub-goal 6's ~93GB unquantized checkpoint) gets provisioned. This pod and
+an earlier one are being shut down and destroyed once everything useful
+is confirmed off of them — this entry plus the recovered logs are that
+confirmation.
+
+- Test 1 (pytest): **112 passed, 3 skipped, 0 failed** (115 collected —
+  2 more than round 1's 113, the two new regression tests from the
+  Marlin pin-memory fix, `6727a04`, now included).
+- Test 2 (AWQ checklist): green, 5/5, identical to round 1.
+- Test 3 (Marlin checklist): green, 5/5, same 6 sentinel
+  (`expert_id=-1`) entries confirmed at `Tier.VRAM` as round 1's retry —
+  the fix holds on a second independent run, not a one-off.
+- Test 4 (`bench_eat.py`): `eat_vs_baseline_delta_us` hit_p50 0.019µs /
+  miss_p50 0.010µs — matches round 1 almost exactly (0.019/0.010 vs.
+  round 1's 0.019/0.010).
+
+No new findings — this round's value is confirming round 1 wasn't a
+fluke, on a pod that's about to stop existing. All 8 log files (4 from
+each round; round 1's failed Marlin attempt kept deliberately) are in
+`osx-poc/regression_20260812/`.
+
+### Before retiring this pod
+
+Confirmed clean before shutdown: `git status` on the pod's checkout was
+clean (no uncommitted work), all round-2 logs pulled from `/tmp` and
+committed here. Nothing else identified as needing rescue.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: 4-test regression pass on the pod, Marlin path (path 2) verified on real hardware for the first time — caught and fixed a real crash on the way
 
 Ran the 4-test sequence the other session laid out (`af6b51f`, then
