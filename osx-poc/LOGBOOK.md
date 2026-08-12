@@ -5,6 +5,58 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: burn-test result — single-shot 570-prompt run does NOT hang on real Linux, ~4.2x faster, identical accuracy
+
+Relaunched correctly (`PYTHONPATH` fix from the previous entry's false
+start) — one process, one `GCSGWorker`, one `generate()` call across all
+570 prompts at once. This is exactly the shape that hung reproducibly
+around request 27-31 on WSL2 (2026-08-10 entry) and was never
+root-caused; never re-tested outside WSL2 until now.
+
+### Result: no hang, and the numbers match the sliced run almost exactly
+
+- **570.3s total** (106.3s model load + 464.0s `generate()`) — no stall,
+  no watchdog trigger, completed cleanly well inside the 1800s safety
+  ceiling.
+- **412/570 = 72.3%** — the *exact same correct-answer count* as the
+  18-slice run (412/570 = 72.28%, previous entry). Confirms what was
+  expected going in: nothing in `GCSGGuard`/shadow-pool selection
+  carries state across requests that affects the actual generation math
+  (shadow-pool expert IDs are fixed round-robin, hooks are stateless
+  per-token) — slicing vs. single-shot changes wall-clock time, not
+  quality, and now that's measured, not just argued.
+- **~4.2x faster than the sliced run** (~9.5 min vs. ~38-40 min) — the
+  entire difference is the 17 avoided model reloads (§ previous entry:
+  ~96s/reload × 17 ≈ 27 min saved).
+
+### What this settles
+
+The fresh-process-per-slice design was a workaround for an unexplained
+WSL2 stall, adopted because it was "the only pattern ever found
+reliable" (2026-08-10 orchestrator script comment) — not because
+process-reuse/single-batch was known to be unsafe in general. Today's
+result is the first direct evidence that the stall was WSL2-specific,
+same shape as the CRLF false alarm and the SSH/CMD bug earlier this
+sprint: things that looked like structural project bugs turning out to
+be platform artifacts once tested on real Linux. `run_mmlu_in_slices.sh`
+stays as-is for now (proven, no reason to touch it mid-sprint), but the
+single-call path is now a validated faster option for future runs on
+non-WSL2 hardware, not just a hopeful theory.
+
+### Not a substitute for the sliced run as the baseline
+
+Same GPU (A5000, not 3090 — carried caveat from earlier this sprint),
+same checkpoint, same run. Recorded as a second, faster confirmation of
+the same result, not a replacement measurement.
+
+Session data (soak test log, both MMLU run logs+results, environment
+snapshot) archived locally under `LogBook_20260812_1344/` before pod
+shutdown, alongside this commit's `osx-poc/scripts/verify_pin_memory_soak.py`
+(the soak-test script itself, written same day, not yet committed until
+now).
+
+---
+
 ## 2026-08-12 — Tekniska, continued: sliced MMLU run complete — 72.28% vs. WSL2's 72.11%, plus a new latency-vs-shadow-activations correlation
 
 All 18 slices done, 570/570 questions.
