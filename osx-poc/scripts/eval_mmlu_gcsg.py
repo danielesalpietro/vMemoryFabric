@@ -194,11 +194,27 @@ def main() -> None:
              "baseline behavior unless passed): wires a real TierManager/EAT "
              "via GCSGWorker.configure_tier_manager() before LLM(...), same "
              "config as scripts/smoke_test_gcsg_tier_manager.py (issue #17 "
-             "sub-goal 1). Forces quantization=awq (NOT awq_marlin) — the "
-             "wiring only touches path 3 (AWQ ModuleList); awq_marlin would "
-             "silently exercise the untouched Marlin path instead. This is "
-             "sub-goal 3 (integrated-path MMLU rerun): the actual comparison "
-             "against the 72.28%/72.3% baseline runs through this flag.",
+             "sub-goal 1). This is sub-goal 3 (integrated-path MMLU rerun): "
+             "the actual comparison against the 72.28%/72.3% baseline runs "
+             "through this flag. Pair with --quantization to pick which "
+             "wired path to measure.",
+    )
+    parser.add_argument(
+        "--quantization", choices=["awq", "awq_marlin"], default=None,
+        help="Which shadow path to exercise. Default: awq_marlin normally, "
+             "awq when --wire-tier-manager is set. UPDATED 2026-08-12/13 "
+             "(issue #17): until today, --wire-tier-manager silently forced "
+             "quantization=awq no matter what, because the TierManager "
+             "wiring only touched the AWQ ModuleList path (path 3) at the "
+             "time this flag was written -- awq_marlin under that old "
+             "default would have silently exercised the untouched Marlin "
+             "path instead, giving a misleading result. Marlin (path 2) is "
+             "now wired and hardware-verified too (see LOGBOOK.md), so "
+             "--wire-tier-manager --quantization awq_marlin is now a valid, "
+             "meaningful combination -- pass it explicitly to measure the "
+             "one MMLU number this project doesn't have yet: Marlin's "
+             "quality on the TierManager-routed path (GCSG report §7/§9 "
+             "still call this open).",
     )
     parser.add_argument(
         "--results-file", type=str, default=None,
@@ -255,12 +271,14 @@ def main() -> None:
         tier_manager = _TierManager(eat=eat, nvme_path="/data/nvme", gpu_device=0)
         GCSGWorker.configure_tier_manager(tier_manager)
         _log("--wire-tier-manager: TierManager/EAT wired via "
-             "GCSGWorker.configure_tier_manager() — forcing quantization=awq "
-             "(path 3, the only one this wiring touches).")
+             "GCSGWorker.configure_tier_manager().")
 
-    quantization = "awq" if args.wire_tier_manager else "awq_marlin"
+    if args.quantization is not None:
+        quantization = args.quantization
+    else:
+        quantization = "awq" if args.wire_tier_manager else "awq_marlin"
     _log(f"Loading {MODEL_PATH} via GCSGWorker (shadow execution active — issues #10/#16), "
-         f"quantization={quantization}...")
+         f"quantization={quantization}, wire_tier_manager={args.wire_tier_manager}...")
     from vllm import LLM, SamplingParams
 
     llm = LLM(
@@ -341,6 +359,7 @@ def main() -> None:
                         "shadow_activations_cumulative": guard_stats_now["shadow_activations"],
                         "elapsed_s": time.monotonic() - START,
                         "tier_manager_wired": args.wire_tier_manager,
+                        "quantization": quantization,
                     }) + "\n")
                     results_fh.flush()
                     os.fsync(results_fh.fileno())
@@ -376,6 +395,7 @@ def main() -> None:
                 "shadow_activations_cumulative": guard_stats_now["shadow_activations"],
                 "elapsed_s": time.monotonic() - START,
                 "tier_manager_wired": args.wire_tier_manager,
+                "quantization": quantization,
             }) + "\n")
             fh.flush()
             os.fsync(fh.fileno())
