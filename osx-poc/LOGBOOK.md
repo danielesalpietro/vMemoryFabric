@@ -5,6 +5,71 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: sub-goal 5 started — re-ran `bench_eat.py` fresh, found real GCSGWorker traffic is single-threaded (issue #2's tested scenario doesn't apply yet), and today's contention numbers don't match the issue's cited figure
+
+Started sub-goal 5 (M1 debt re-analysis under real EAT traffic) — no GPU
+needed for this, ran directly here rather than waiting on the pod/Z8.
+
+### Real GCSGWorker traffic is single-threaded — issue #2 as filed doesn't (yet) describe production reality
+
+Checked before benchmarking anything: `GCSGWorker._evaluate_gcsg_for_rows()`
+(the method that calls `EAT.access()` on real traffic, added earlier
+today) runs synchronously inside vLLM's own forward-pass hook — one
+process, one thread, no concurrent callers. Issue #2's benchmark
+(`bench_eat.py::bench_contention`, 4 readers + 1 writer) models a
+multi-threaded access pattern that **nothing in this project's current
+real usage actually produces** — not the sliced MMLU runs (one process
+each), not the single-shot run (still one process), not the smoke tests.
+The scenario is a legitimate forward-looking test (a future multi-worker
+or async-server setup could produce real concurrent EAT access), but
+it's not exercised by anything running today. Worth stating plainly
+rather than assuming "real traffic now exists" (true for volume — 256/256
+entries touched, confirmed earlier today) automatically means "the
+concurrency issue #2 measured is now realistic" (not shown).
+
+### Fresh numbers, and they don't match issue #2's cited ~1360×
+
+Ran `benchmarks/bench_eat.py` 4 times in this environment (no GPU
+needed — pure Python/threading):
+
+| | run 1 | run 2 | run 3 | run 4 |
+|---|---|---|---|---|
+| EAT hit p50 (uncontended) | 3.16µs | 3.21µs | 3.67µs | 3.09µs |
+| EAT hit p99 (uncontended) | 33.7µs | 33.8µs | 33.7µs | 25.6µs |
+| Contended reader p99 | — | 2062µs | 2309µs | 2324µs |
+| **p99 degradation ratio** | — | **~61×** | **~68×** | **~91×** |
+
+Consistent across 4 runs (not the ~32% single-run noise this project's
+own M1 benchmark history has flagged before) — this is a real,
+reproducible measurement, and it's roughly **15-20× smaller** than
+issue #2's cited "~1360× p99 degradation under contention." Bloom-vs-dict
+delta (issue #1) is directionally consistent with the original finding —
+EAT hit lookups ran ~4-5× slower than a plain dict here, same order of
+magnitude as the "~5-14×" cited, well within run-to-run/environment
+variance.
+
+**Not chased further this session** — plausible causes, none confirmed:
+different machine/CPU/Python build than whatever produced the original
+1360× figure (this is a sandbox environment, not the Z8 or the pod);
+Python version or GIL-scheduling differences affecting `RLock` contention
+characteristics; or the original figure itself being a single noisy run
+never repeated (this project's own precedent — the ~32% variance note
+above — makes that plausible too). Recorded as a real discrepancy, not
+quietly overwriting issue #2's number or declaring it resolved either way.
+
+### Not yet done
+
+- Reconciling the ~1360× vs. ~61-91× gap — needs either the original
+  benchmark's exact environment or accepting today's numbers as the
+  current reference point.
+- A contention benchmark actually shaped like real (if still
+  single-threaded) GCSGWorker traffic, once a genuinely concurrent access
+  pattern exists to model.
+- Issue #4 (`BloomFilter.remove_expert()`) — not touched, still `NotImplementedError`.
+- Sub-goal 6 (path 1 parity), sub-goal 7 (close-out).
+
+---
+
 ## 2026-08-12 — Tekniska, continued: single-shot MMLU run is deterministic (byte-for-byte rerun), `bench_tier.py`'s `promote_live_tensor` section closes sub-goal 4 on real hardware
 
 ### Determinism check on the previous entry's 411/570 result
