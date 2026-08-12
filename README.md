@@ -445,8 +445,13 @@ Optane DCPMM requires bare-metal Linux with kernel ≥ 5.1. In dev, DDR4 acts as
 If you use OSX in your research, please cite:
 
 ```
-OSX Research Team, "OSX / vMemoryFabric: Operating System for Experts — PoC v0.4.0-dev (Oskarshamn)",
+Daniele Carmelo Salpietro, "OSX / vMemoryFabric: Operating System for Experts — PoC v0.4.0-dev (Oskarshamn)",
 Internal Research Report, August 2026.
 ```
 
-Target venues: OSDI 2027 / EuroSys 2027 / MLSys 2027.
+Target: arXiv preprint (self-archive), formatted in the style of a systems
+conference paper (ACM `sigconf`, EuroSys-style) — see
+[`osx-poc/reports/sprint5_berg_plan.md`](osx-poc/reports/sprint5_berg_plan.md)
+for the Sprint 5 plan, target end of August 2026.
+
+**Author:** Daniele Carmelo Salpietro — Principal Solutions Architect (independent) — [salpietro.it](https://www.salpietro.it) — daniele@salpietro.it

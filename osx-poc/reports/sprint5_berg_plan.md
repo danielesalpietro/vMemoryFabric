@@ -148,12 +148,10 @@ condizioni insieme, verificate non assunte:
     "meno accurata".
 - **Formato/taglio:** modellato su OSDI/EuroSys comunque, per scelta — cioè
   lunghezza e struttura da systems paper "vero" (~12–14 pagine + bibliografia,
-  due colonne), non un tech report libero. Template di riferimento: **USENIX
-  (il template OSDI)** — scelto come default perché più semplice da
-  impacchettare per arXiv (niente dipendenze `.sty` non standard); il
-  template ACM `sigconf` (EuroSys) resta un'alternativa equivalente se si
-  preferisce quello stile — da confermare in B4 quando si crea
-  `osx-poc/paper/`, non bloccante ora.
+  due colonne), non un tech report libero. Template scelto (2026-08-12):
+  **ACM `sigconf`** (stile EuroSys) — le sue dipendenze `.sty` sono standard
+  su TeX Live e compatibili con la build LaTeX di arXiv, nessun problema di
+  pacchettizzazione atteso.
 - **Deadline:** nessuna deadline formale esterna, ma target dichiarato
   **entro fine agosto 2026** (~19 giorni da oggi, 2026-08-12). Trattata come
   vincolo reale nel piano sotto, non come "quando capita".
@@ -213,9 +211,14 @@ accuratezza già pronti per la sezione Evaluation.
 
 ### B4. Infrastruttura di scrittura
 
-Creare `osx-poc/paper/` con template USENIX/OSDI (default, vedi B0) e file
+Creare `osx-poc/paper/` con template ACM `sigconf` (deciso in B0) e file
 `.bib`. Non esiste ancora nulla di questo tipo nel repo — verificato
 (`find -iname "*.tex"` vuoto).
+
+**Autore (deciso 2026-08-12):** Daniele Carmelo Salpietro — Principal
+Solutions Architect (indipendente) — [salpietro.it](https://www.salpietro.it) —
+daniele@salpietro.it. Riportato anche nel blocco Citation del README
+(sostituisce il precedente placeholder "OSX Research Team").
 
 Checklist specifica per arXiv (diversa da una submission a program
 committee, va verificata esplicitamente prima di considerare B4 chiusa):
@@ -227,11 +230,7 @@ committee, va verificata esplicitamente prima di considerare B4 chiusa):
 - categoria primaria arXiv da scegliere (candidate: `cs.DC` — Distributed,
   Parallel, and Cluster Computing, dato il taglio memory-hierarchy/serving
   system; eventuale cross-list `cs.LG`);
-- licenza di distribuzione (es. CC-BY 4.0) da dichiarare esplicitamente;
-- autori/affiliazioni reali per il frontespizio — il blocco Citation del
-  README oggi dice genericamente "OSX Research Team", da sostituire con
-  nomi reali prima dell'assemblaggio finale del PDF (non blocca la stesura,
-  blocca solo l'ultimo passo).
+- licenza di distribuzione (es. CC-BY 4.0) da dichiarare esplicitamente.
 
 ### B5. Revisione interna
 
@@ -275,6 +274,8 @@ paper — per questo è spostata in settimana 1 invece che in settimana 3.
    da avere lo stesso livello di tracciabilità degli sprint precedenti
    (pattern già in uso: issue → commit con `(closes #N)` → riga di
    CHANGELOG).
-4. Decidere autori/affiliazioni reali per il frontespizio del paper (B4) —
-   non urgente per iniziare a scrivere, ma necessario prima dell'assemblaggio
-   finale del PDF.
+4. ~~Decidere autori/affiliazioni reali per il frontespizio del paper
+   (B4)~~ — fatto 2026-08-12: Daniele Carmelo Salpietro, Principal Solutions
+   Architect (indipendente), salpietro.it, daniele@salpietro.it. Restano da
+   scegliere solo categoria arXiv e licenza (B4), non bloccanti per iniziare
+   a scrivere.
