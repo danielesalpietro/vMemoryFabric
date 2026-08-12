@@ -5,7 +5,129 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
-## 2026-08-12 — Tekniska, continued: `pin=True` confirmed on the pod — TierManager/EAT wiring checklist now 5/5 on real Linux, fetta0 result independently re-verified from source
+## 2026-08-12 — Tekniska, continued: full 570-question single-shot MMLU run, TierManager wired, on the pod — no hang, accuracy within noise, but NOT byte-identical to baseline (correcting an earlier overclaim)
+
+New pod (RunPod, different DC than the earlier EU-RO-1 one — Network
+Volume is datacenter-locked, this one's storage is ephemeral Container
+Disk, not persistent), GPU landed as RTX 3090 (CC 8.6, the matched
+architecture, confirmed via `nvidia-smi`). Environment came pre-installed
+with exactly the project's pinned versions (`torch==2.5.1+cu124`,
+`transformers==4.57.6`, `vllm==0.6.6.post1`, all of `requirements.txt`'s
+other deps) — not the project's own GHCR image (`/workspace` was empty),
+some other RunPod base template that happened to already match. Cloned
+`Sprint-4-Tekniska` fresh (`git clone`, no `.git` dir existed to `pull`
+into) rather than rely on any baked-in image code, landed at `f7d72ce`.
+Checkpoint (`casperhansen/mixtral-instruct-awq`, ~23GB) downloaded via
+`huggingface-cli download` in 88s — this DC's network is unusually fast.
+
+### `pin=True` end-to-end, then fetta1, then the real point of coming here
+
+`torch.zeros(1024).pin_memory().is_pinned()` → `True` (already logged in
+the entry above this one). `smoke_test_gcsg_tier_manager.py` green, 5/5,
+same as the Z8 run except this time with no `pin_memory=False` WSL
+warning and no fallback — the one item the Z8 run structurally couldn't
+close.
+
+Fetta1 (`[32:64]`, `--wire-tier-manager`, same pod) also came back an
+exact per-subject match against `mmlu_results_overnight_20260811.jsonl`'s
+same range (24/32 both ways, all four sub-scores identical:
+`business_ethics` 6/8, `clinical_knowledge` 7/10, `college_biology` 9/10,
+`college_chemistry` 2/4) — second slice in a row with zero divergence,
+this time under real `pin=True` rather than the Z8's forced `pin=False`.
+
+Then the actual reason for being on a real-Linux pod today: a full
+570-question single-shot run (`eval_mmlu_gcsg.py --wire-tier-manager`,
+no `--prompt-start`/`--max-prompts`, one process, one model load) — the
+pattern this project's own history says hangs under WSL2/Docker around
+request 27-31, and the sliced workaround exists specifically to route
+around. **Completed clean, no hang**: `generate()` took 774.1s (927.2s
+total including 153.1s load) for all 570 prompts, watchdog (3000s) never
+came close to firing.
+
+### Accuracy: 411/570 (72.1%) — same total as one baseline, but not the same answers
+
+Diffed `mmlu_tier_manager_pod_singleshot_20260812_195140.jsonl`'s
+per-subject breakdown against `mmlu_results_overnight_20260811.jsonl`
+(summed across its 18 slice entries — itself 411/570, 72.11%, the
+historical WSL2 baseline, not the 72.28%/72.3% real-Linux number from
+this project's other baseline runs, which don't have a full-570
+per-subject JSON on file to diff against directly):
+
+```
+college_mathematics:          baseline 5/10 vs today 4/10
+elementary_mathematics:       baseline 5/10 vs today 6/10
+high_school_european_history: baseline 9/10 vs today 8/10
+high_school_world_history:    baseline 8/10 vs today 9/10
+```
+
+**Correcting course on today's own earlier framing**: fetta0 and fetta1
+(64 questions total) were exact per-subject matches, and that got
+reported as "zero measurable difference." Over the full 570, that
+doesn't hold — 4 subjects differ by 1 question each, two in each
+direction, netting to zero at the aggregate level by coincidence, not
+identity. The honest statement is: **4/570 (0.7%) individual answers
+flipped, aggregate accuracy indistinguishable, well inside the README's
+<2% shadow-contamination target** — not "byte-identical," which is what
+the fetta0/fetta1-only evidence supported but the full run doesn't.
+Plausible cause, not verified: floating-point non-determinism between
+AWQ's plain dequant kernel and whatever kernel path the baseline used
+(unconfirmed which — the overnight file predates today's
+`--wire-tier-manager` flag, was almost certainly `awq_marlin`), on a
+handful of questions close enough to the A/B/C/D decision boundary for
+tiny logprob differences to flip the argmax. Not chased further — the
+accuracy-parity question this run exists to answer is answered either
+way.
+
+Worst-performing subjects this run: `abstract_algebra`,
+`college_mathematics`, `college_physics`, `electrical_engineering`,
+`formal_logic`, `high_school_mathematics` (all 40%) — the same six-ish
+subject pattern (math/formal-logic-heavy) flagged as weakest in every
+prior baseline run on this checkpoint, another point of consistency.
+
+### `shadow_activations`: 562,354 — consistent with prior runs across a different code path
+
+Within 0.01% of both numbers already on record for the Marlin-path
+burn-test (562,380 single-process, 562,403 sliced-sum, see the
+independent-verification entry two sessions back) — despite this run
+going through a structurally different path (AWQ ModuleList +
+TierManager-driven promotion, not Marlin + direct `.to(device)`).
+GCSGGuard's gating/activation logic producing near-identical counts
+regardless of the underlying promotion mechanism is a good consistency
+signal, not something this run specifically set out to test.
+
+### The same micro-slowdown zones as the Marlin burn-test, again
+
+The independent-verification entry flagged a small, self-resolving
+throughput dip around request ~211-221 (smaller one near ~302-320) in
+the Marlin single-shot burn-test log, noted then as "flagged, not
+investigated further." **Both zones reappear in this run's progress log
+almost exactly** (request ~211-221: `it/s` collapses from ~1.2/s to
+~0.18/s and recovers by ~229; a second, smaller dip ~302-320). Same
+request-index ranges, a completely different quantization/promotion
+path. This shifts the likely explanation away from anything
+Marlin-specific or GCSG-specific — toward something about the prompts
+themselves at those dataset positions (length, structure) or vLLM's own
+scheduling, common to both runs. Still not investigated further; now
+cross-validated as reproducible rather than a one-off.
+
+### Files brought back before the (non-persistent) pod goes away
+
+- `osx-poc/mmlu_tier_manager_pod_20260812_194757.jsonl` — fetta1 result
+- `osx-poc/mmlu_tier_manager_pod_singleshot_20260812_195140.jsonl` —
+  full 570-question result, per-subject breakdown
+- `osx-poc/mmlu_tier_manager_pod_singleshot_20260812_195140.log` — full
+  raw run log (timestamps, heartbeat, generate() progress, GCSGGuard
+  stats)
+
+### Not yet done
+
+- Root-causing the 4-subject divergence or the ~211-221/~302-320 dips —
+  both flagged, neither blocking.
+- Marlin path (path 2) TierManager wiring — still deliberately untouched.
+- Sub-goals 4 (promote/evict latency), 5 (issue #1/#2/#4 analysis under
+  real EAT traffic, now available from today's runs), 6 (path 1 parity).
+
+---
 
 Pod resumed (RTX 3090 this time, no A5000 substitution needed), and the
 one item the Z8 pass couldn't cover — `pin=True` — is now confirmed on
