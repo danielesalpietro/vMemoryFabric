@@ -5,6 +5,63 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: first real MMLU data point on the TierManager-wired path — exact per-subject match against the Marlin baseline, slice 1/18
+
+Sub-goal 3 (integrated-path MMLU rerun) had no script to do it with until
+now. Reported by the other session (Z8), not independently re-verified
+against raw result files here (none pushed yet — this entry records what
+was relayed, same as the smoke-test entry two above, not a from-source
+check).
+
+### What was added: `--wire-tier-manager` on `eval_mmlu_gcsg.py`
+
+Opt-in flag, default off — zero change to the existing baseline path.
+When set: builds a real `EAT`+`TierManager` with the same config as
+`smoke_test_gcsg_tier_manager.py`, wires it via
+`GCSGWorker.configure_tier_manager()`, and forces `quantization="awq"`
+(the only path this integration touches — see the 2026-08-12 "sub-goal 1"
+entries for why Marlin was deliberately left out). This is the missing
+piece sub-goal 3 needed; nothing in this repo could drive an MMLU run
+through the integrated path before this.
+
+### Result: slice `[0:32)`, byte-for-byte match against the historical baseline
+
+Compared directly against the same slice range in
+`mmlu_results_overnight_20260811.jsonl` (the run behind the published
+72.11%/72.28%/72.3% numbers, Marlin path):
+
+| Subject | Baseline (Marlin, 08-11) | Today (AWQ + TierManager) |
+|---|---|---|
+| abstract_algebra | 4/10 | 4/10 |
+| anatomy | 7/10 | 7/10 |
+| astronomy | 9/10 | 9/10 |
+| business_ethics | 1/2 | 1/2 |
+| **Total** | **21/32 (65.6%)** | **21/32 (65.6%)** |
+| shadow_activations | 23,659 | 23,683 (+0.1%) |
+
+Every per-subject sub-score matches exactly, not just the aggregate — a
+much stronger signal than the total alone would be (four independent
+32-vs-10-question ties would be a real coincidence; this isn't
+"statistically close," it's the same answers). With greedy decoding
+(`temperature=0.0`, `max_tokens=1`), this means switching from the
+validated Marlin path to AWQ-ModuleList-via-TierManager didn't change a
+single answer on these 32 questions. 65.6% looks low only because this
+slice is `abstract_algebra`-heavy, the historically weakest subject for
+this model (40% in every prior run too) — not a regression signal.
+
+### Not yet done
+
+- More slices — one slice (0-32, `abstract_algebra`-heavy) isn't a
+  representative sample across all 57 subjects; a broader spot-check
+  across subject areas is the natural next increment before treating this
+  as confirmed rather than "looks very good so far."
+- The full 18-slice (or single-shot) comparison against 72.28%/72.3% —
+  still the pod's job, per the plan already agreed (Z8 for fast
+  preliminary spot-checks, pod for the definitive full run, including the
+  still-untested `pin=True` branch).
+
+---
+
 ## 2026-08-12 — Tekniska, continued: `smoke_test_gcsg_tier_manager.py` green on the Z8/RTX 3090 — 4 of 5 checklist items confirmed, 1 partially (as predicted)
 
 Run on the Z8 (WSL2/Docker), not the pod — no rebuild/download needed
