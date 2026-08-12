@@ -4,7 +4,9 @@
 **Stato di partenza:** Sprint 4 (Tekniska) completo al 100%, tutti e 4 i target
 non funzionali del PoC già raggiunti e misurati su hardware reale (vedi
 README, sezione "Development roadmap"). Sprint 5 parte da ~5% → planning.
-**Durata prevista:** 4 settimane (Weeks 13–16 del roadmap originale).
+**Durata prevista:** ~2.5 settimane (2026-08-12 → target 2026-08-31, non una
+deadline formale ma il target dichiarato — vedi §3/B0), più stretta delle 4
+settimane originariamente stimate per "Weeks 13–16" del roadmap.
 **Audience della delivery:** stakeholder/reviewer esterni — non solo chiusura
 interna. Questo alza l'asticella su riproducibilità e pacchettizzazione
 rispetto a uno sprint puramente interno.
@@ -127,16 +129,39 @@ condizioni insieme, verificate non assunte:
 
 ---
 
-## 3. Filone B — Paper (systems paper, venue reale — OSDI/EuroSys/MLSys 2027)
+## 3. Filone B — Paper (target: arXiv, taglio/formato in stile OSDI/EuroSys)
 
-### B0. Decisione da prendere subito (bloccante per B4)
+### B0. Decisione presa (2026-08-12)
 
-La citation nel README indica genericamente "OSDI 2027 / EuroSys 2027 /
-MLSys 2027". Prima di investire in related work/figure serve **una** venue
-target con la sua deadline reale, perché cambia formato (template LaTeX),
-lunghezza (page limit), e taglio del paper (experience/systems paper vs.
-full research contribution). Non blocco il piano su questo, ma è il primo
-input mancante — lo marco come azione immediata in §5.
+- **Venue:** arXiv (self-archive) — non una submission a OSDI/EuroSys/MLSys
+  in senso stretto. Questo cambia alcune cose concretamente rispetto a una
+  submission a program committee:
+  - nessun page limit imposto da un CFP, nessun processo di peer review,
+    nessuna deadline hard di sottomissione a un sistema esterno (HotCRP e
+    simili);
+  - **niente anonimizzazione double-blind** — si scrive con nomi/affiliazioni
+    reali fin da subito, a differenza di una submission OSDI/EuroSys vera
+    (entrambe double-blind review);
+  - resta comunque una pubblicazione pubblica e citabile (DOI arXiv), quindi
+    va trattata con lo stesso rigore sulle claim quantitative di una vera
+    submission (§B5) — "non c'è un reviewer che la respinge" non vuol dire
+    "meno accurata".
+- **Formato/taglio:** modellato su OSDI/EuroSys comunque, per scelta — cioè
+  lunghezza e struttura da systems paper "vero" (~12–14 pagine + bibliografia,
+  due colonne), non un tech report libero. Template di riferimento: **USENIX
+  (il template OSDI)** — scelto come default perché più semplice da
+  impacchettare per arXiv (niente dipendenze `.sty` non standard); il
+  template ACM `sigconf` (EuroSys) resta un'alternativa equivalente se si
+  preferisce quello stile — da confermare in B4 quando si crea
+  `osx-poc/paper/`, non bloccante ora.
+- **Deadline:** nessuna deadline formale esterna, ma target dichiarato
+  **entro fine agosto 2026** (~19 giorni da oggi, 2026-08-12). Trattata come
+  vincolo reale nel piano sotto, non come "quando capita".
+
+Conseguenza pratica sul timeline (§4): niente ciclo di revisione da program
+committee da aspettare, ma il tempo resta comunque stretto — la voce a
+rischio più alto rimane la related-work survey (B3), unica parte non ancora
+iniziata e non comprimibile sotto una soglia minima di credibilità.
 
 ### B1. Materiale già pronto da riusare (non da riscrivere da zero)
 
@@ -188,9 +213,25 @@ accuratezza già pronti per la sezione Evaluation.
 
 ### B4. Infrastruttura di scrittura
 
-Creare `osx-poc/paper/` con template LaTeX della venue scelta in B0 e file
+Creare `osx-poc/paper/` con template USENIX/OSDI (default, vedi B0) e file
 `.bib`. Non esiste ancora nulla di questo tipo nel repo — verificato
 (`find -iname "*.tex"` vuoto).
+
+Checklist specifica per arXiv (diversa da una submission a program
+committee, va verificata esplicitamente prima di considerare B4 chiusa):
+
+- sorgente LaTeX autosufficiente (niente riferimenti a file esterni non
+  inclusi nel pacchetto caricato);
+- `.bbl` compilato incluso nel pacchetto, non solo il `.bib` — arXiv non
+  garantisce di rieseguire bibtex nell'ambiente esatto atteso;
+- categoria primaria arXiv da scegliere (candidate: `cs.DC` — Distributed,
+  Parallel, and Cluster Computing, dato il taglio memory-hierarchy/serving
+  system; eventuale cross-list `cs.LG`);
+- licenza di distribuzione (es. CC-BY 4.0) da dichiarare esplicitamente;
+- autori/affiliazioni reali per il frontespizio — il blocco Citation del
+  README oggi dice genericamente "OSX Research Team", da sostituire con
+  nomi reali prima dell'assemblaggio finale del PDF (non blocca la stesura,
+  blocca solo l'ultimo passo).
 
 ### B5. Revisione interna
 
@@ -201,27 +242,39 @@ trascritto a mano).
 
 ---
 
-## 4. Timeline proposta
+## 4. Timeline rivista (target 2026-08-31, ~2.5 settimane)
 
-| Settimana | Filone A | Filone B |
-|---|---|---|
-| 1 | A1 (triage + fix #12/#3/#6/#18) | B0 (decisione venue) |
-| 2 | A2 (PoC Final Report) | B1–B2 (riuso materiale + outline) |
-| 3 | A3 (riproducibilità) | B3 (related work + figure + dati) |
-| 4 | A4–A5 (release + gate) | B4–B5 (draft completo + revisione) |
+Compressa rispetto alla stima originale a 4 settimane, perché B0 ha fissato
+un target reale a fine agosto. Priorità: tutto ciò che alimenta il paper
+(B3 in particolare) parte súbito, non in settimana 3 come nella prima
+bozza; gli item del Filone A che non bloccano il testo del paper (A4/A5)
+possono chiudere a ridosso o appena dopo il 31/8 senza mettere a rischio la
+data del paper.
 
-Le due settimane finali hanno del buffer implicito: A3/A4 sono più leggeri
-di A1/A2, e possono assorbire slittamenti di B3 (la related-work survey è
-la voce a rischio maggiore di stima, essendo ricerca non ancora iniziata).
+| Settimana | Date | Filone A | Filone B |
+|---|---|---|---|
+| 1 | 12–18 ago | A1 (fix #12/#3/#6/#18 — priorità a #3, i suoi numeri finiscono nel paper) | B1 (riuso materiale) + B2 (outline) + **avvio B3** (related-work survey — la voce a rischio più alto, parte per prima non per ultima) |
+| 2 | 19–25 ago | A2 (PoC Final Report — sblocca i numeri definitivi per la sezione Evaluation) | B3 continua (figure/grafici dai dati grezzi) + assemblaggio draft completo |
+| 3 | 26–31 ago | A3–A4–A5 (repro, release, gate — possono scivolare di qualche giorno oltre il 31/8 senza toccare la data del paper) | B5 (revisione interna) + checklist arXiv (B4) + submission |
+
+Rischio principale resta lo stesso di prima ma ora è sul percorso critico:
+la related-work survey (B3) è l'unica voce non ancora iniziata e non
+comprimibile sotto una soglia minima senza abbassare la credibilità del
+paper — per questo è spostata in settimana 1 invece che in settimana 3.
 
 ---
 
 ## 5. Prossimi passi immediati
 
-1. Decidere la venue target reale (B0) — input necessario per non sprecare
-   lavoro su un template sbagliato.
-2. Partire da A1 (i 4 fix piccoli) in parallelo, indipendenti da B0.
+1. ~~Decidere la venue target reale (B0)~~ — fatto 2026-08-12: arXiv, stile
+   OSDI/EuroSys, target fine agosto 2026.
+2. Partire in parallelo su A1 (i 4 fix piccoli, priorità #3) e sull'avvio di
+   B3 (related-work survey) — sono i due percorsi a maggior rischio di
+   ritardo se lasciati per ultimi.
 3. Aprire issue GitHub per ciascun item di A1 non ancora tracciato in modo
    da avere lo stesso livello di tracciabilità degli sprint precedenti
    (pattern già in uso: issue → commit con `(closes #N)` → riga di
    CHANGELOG).
+4. Decidere autori/affiliazioni reali per il frontespizio del paper (B4) —
+   non urgente per iniziare a scrivere, ma necessario prima dell'assemblaggio
+   finale del PDF.
