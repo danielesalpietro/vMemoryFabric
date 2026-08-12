@@ -255,8 +255,7 @@ measure the "shard promotion latency within 1.5× theoretical bandwidth"
 target, and close out the M1 debt (#1/#2/#4) that Sprint 1/2 explicitly
 deferred until M3 generated real concurrent traffic. Full sub-goal
 breakdown: `osx-poc/LOGBOOK.md`, 2026-08-11 "Tekniska: Sprint 4 kickoff"
-entry. As of 2026-08-12 (~95%, 6 of 7 sub-goals done or closed, 1
-remaining — close-out itself):
+entry. **Complete as of 2026-08-12 — all 7 sub-goals done or closed:**
 
 - **Done — wiring (sub-goal 1).** `GCSGWorker(tier_manager=...)` (opt-in,
   default `None`, zero behavior change unless wired — see
@@ -348,10 +347,11 @@ remaining — close-out itself):
   `osx-poc/reports/gcsg_shadow_execution_report.md` §7/§9 for the full
   writeup. Mechanics/correctness only — no MMLU number on this path, no
   production-viability claim for this offload configuration.
-- **Remaining: close-out (sub-goal 7).** This table plus the GCSG report
-  are being kept in sync as each sub-goal closes; the one thing left is
-  regenerating the `.docx` (EN/IT) exports of the GCSG report to match
-  its markdown source.
+- **Done — close-out (sub-goal 7).** This table and the GCSG report were
+  kept in sync as each sub-goal closed; the last item, regenerating the
+  report's `.docx` (EN/IT) exports to match its markdown source, is done
+  — both pass full OOXML schema validation. **Sprint 4 (Tekniska) is
+  complete.**
 
 Sprint 6 (Stockholm) is a new leg, added without reordering or reweighting
 Sprints 0–5 above — those stay exactly as planned. Named deliberately:
@@ -406,7 +406,7 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) | PMEM (EMH-2) integration | Blocked on hardware availability |
 | [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival |
 | [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint`/`test`/`bench` fail on relative paths — container `WORKDIR` (`/workspace`) doesn't match `osx-poc/`'s relative paths | Workaround in use everywhere: `docker compose run --rm osx-dev bash -c "cd osx-poc && ..."` |
-| [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` used vLLM's `cpu_offload_gb` directly | **Nearly resolved 2026-08-12**: all three shadow-pool paths (AWQ, Marlin, path 1) now wired/exercised and verified on real hardware (see Sprint 4 in the roadmap above) — AWQ end-to-end including a TierManager-routed MMLU rerun, Marlin's transfer mechanically verified (a real bug found and fixed en route), path 1 verified under real offload at production model scale (another real bug found and fixed). Promotion-latency measurement is done (sub-goal 4). Issue #2 (RLock contention) decided — left open, deliberately, tracked separately (see #2 above), not a blocker for this issue. Still open before closing this issue: close-out (sub-goal 7) |
+| [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` used vLLM's `cpu_offload_gb` directly | **Wiring resolved 2026-08-12**: all three shadow-pool paths (AWQ, Marlin, path 1) now wired/exercised and verified on real hardware (Sprint 4, complete — see roadmap above) — AWQ end-to-end including a TierManager-routed MMLU rerun, Marlin's transfer mechanically verified (a real bug found and fixed en route), path 1 verified under real offload at production model scale (another real bug found and fixed). Promotion-latency measurement done. Issue #2 (RLock contention) decided, tracked separately, not a blocker. **Remaining before this issue itself is closed**: an MMLU quality rerun on the Marlin path specifically routed through TierManager (only mechanically verified so far, see GCSG report §7/§9) — left open deliberately, not urgent, since AWQ already carries that validation for the wiring mechanism itself |
 | [#18](https://github.com/danielesalpietro/vMemoryFabric/issues/18) | No environment fingerprint pre-check — `OMP_NUM_THREADS`/`shm_size`/GPU model assumed, not verified | Hit for real deploying to RunPod: `OMP_NUM_THREADS=8` fixed regardless of real vCPU count, `docker-compose.yml`'s `shm_size` doesn't apply outside local `docker compose` |
 
 **Closed:** [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) (2026-08-11) — GCSG shadow-execution crash and the related batch-composition slowdown, both root-caused to WSL2/CUDA pageable-memory offload behavior (structural, upstream-confirmed, not a project bug). Full trail: `osx-poc/reports/gcsg_shadow_execution_report.md`. [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) (2026-08-12) — `BloomFilter.remove_expert()` implemented for real (Counting Bloom Filter, replaces `pybloom_live`) and wired into `EAT.evict()`, which never called it before. [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) (2026-08-12, same day) — re-measuring against #4's new implementation showed lookup latency got *worse*, not better, settling the question: the Bloom filter is removed from `EAT` entirely, not kept as an unjustified fast-path (which also makes #4's fix moot, but it stays recorded as its own closed issue — the bug it fixed was real while the Bloom filter still existed). Full trail: `osx-poc/LOGBOOK.md`, 2026-08-12 "issue #4 actually fixed" and "Bloom filter removed" entries.

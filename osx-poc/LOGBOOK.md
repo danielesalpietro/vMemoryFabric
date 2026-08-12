@@ -5,6 +5,72 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12/13 — Tekniska, continued: sub-goal 7 (close-out) done — Sprint 4 (Tekniska) complete, all 7 sub-goals closed
+
+Last item: regenerate the GCSG report's `.docx` (EN/IT) exports, which had
+gone stale relative to `gcsg_shadow_execution_report.md` (kept current all
+session — Marlin wiring/bug, path 1 real-offload results).
+
+Regenerated both via `pandoc ... --reference-doc=<existing docx>` (the
+existing files as the style template, so fonts/table styles stay
+consistent with prior versions), then hand-fixed several **generic
+pandoc-template OOXML ordering bugs** that the reference-doc merge
+reintroduces on every run, unrelated to this document's actual content:
+`nsid` hex values under 8 characters in `numbering.xml` (padded with
+leading zeros), `pStyle` appearing after `numPr` inside `pPr` instead of
+before it (schema requires `pStyle` first), `jc` appearing after
+`tblLook` inside `tblPr` instead of before it, and `doNotTrackMoves`/
+`footnotePr` landing in the wrong relative position in `settings.xml`'s
+long, strictly-ordered `CT_Settings` sequence — for `settings.xml`
+specifically, simplest fix was swapping in the already-valid settings.xml
+from the prior docx rather than chasing the ordering by hand (it's global
+document settings, no content). Both final files pass full XSD schema
+validation (`scripts/office/validate.py`, bundled with the `docx` skill)
+with zero errors, and heading styles (`Heading1`/`2`/`3`, 19 total,
+matching the markdown's 19 `#` headings) were confirmed present directly
+in the XML.
+
+**Note for future sessions:** `soffice`/LibreOffice is broken in this
+sandbox for visual PDF-render verification — fails with "source file
+could not be loaded" (exit 81) on *any* input, including a trivial `.txt`
+file, so it's not specific to docx or to this content. Root cause (via
+`strace`): the conversion process connects to its own freshly-created
+`SingleOfficeIPC` Unix socket and then exits without ever loading the
+document — looks like a LibreOffice headless bootstrap defect in this
+specific container image, not something fixable by profile/environment
+flags. Used XSD schema validation instead (doesn't need `soffice`) plus a
+`pandoc`-based round-trip (docx → markdown) to confirm content survived
+intact. If a future session needs an actual visual render, this will need
+investigating properly (or a different container/environment) rather than
+retried the same way.
+
+IT is a full translation of the current EN content (not a stale prior
+version) — both reports now describe the same, current state of Sprint 4.
+
+### Sprint 4 (Tekniska) — final status: complete, 7/7 sub-goals
+
+1. Wiring (AWQ + Marlin through TierManager/EAT) — done, both verified on
+   real hardware.
+2. Pinning strategy — done, soak-tested safe on real Linux.
+3. Integrated-path MMLU rerun — done for AWQ (TierManager-routed, matches
+   baseline); Marlin's TierManager-routed path has mechanical verification
+   only, no MMLU number yet (tracked in issue #17, not blocking sprint
+   close).
+4. Promotion latency — done, measured on real hardware, meets the 1.5×
+   criterion on P50.
+5. M1 debt re-analysis — done: #1 closed (Bloom filter removed), #4 moot
+   (same removal), #2 decided (left open deliberately, no real contention
+   to fix yet).
+6. Path 1 parity under real offload — done, real bug found and fixed,
+   verified at production model scale.
+7. Close-out — done (this entry).
+
+README and the GCSG report were kept in sync with each sub-goal's real
+result throughout, not just at the end — cross-checked against raw logs
+before each doc update, per this project's established discipline.
+
+---
+
 ## 2026-08-12/13 — Tekniska, continued: issue #2 (RLock contention) decided — left open, deliberately, not redesigned; Sprint 4 sub-goal 5 now closed
 
 Decision requested and given explicitly by the project owner after the
