@@ -348,7 +348,28 @@ were exactly the four with 3-4× the typical activation count, consistent
 with each shadow activation being an extra forward pass through the INT4
 verification expert. This is a real, previously-unmeasured *performance*
 cost of shadow execution, distinct from the quality-cost figures this
-report otherwise focuses on — see §9.
+report otherwise focuses on — see §9. **Refinement, independently
+verified against the raw archived logs:** r=0.95 used each slice's total
+elapsed time, which bundles in the ~99s near-constant model-load cost.
+Isolating just `generate()` duration per slice (from `orchestrator.log`)
+against `shadow_activations` tightens this to **r=0.993** — expected,
+since model load (91.6-106.8s, low variance) is essentially independent
+of content while `generate()` duration (11.0-60.7s) is the part the
+extra shadow forward passes actually drive. Also cross-validated: total
+`shadow_activations` differs by only 23 out of 562K (~0.004%) between the
+sliced run's 18-process sum (562,403) and the single-process run's own
+`GCSGGuard` count (562,380) — same workload, two different process
+topologies, near-identical activation count, further evidence the
+behavior is deterministic rather than an artifact of either run.
+
+**Minor open observation, not investigated further:** the single-process
+run's per-request throughput briefly drops around request ~211-221 (to
+~0.29 it/s) and again, smaller, near ~302-320, both self-recovering
+within ~10-15s with nothing logged by vLLM at this log level. Far milder
+than §5's WSL2 stall (which never self-resolved), and it didn't threaten
+the run, but it's a real, measurable pattern in similar territory to the
+historical trigger zone (request ~27-31) that hasn't been explained.
+Flagged for follow-up if it recurs or grows on a larger run.
 
 ---
 

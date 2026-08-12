@@ -5,6 +5,55 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: independent verification of the archived Sprint 4 data — correlation refines to r=0.993, plus a new micro-slowdown observation
+
+Cross-checked every headline number in `LogBook_20260812_1344/` against the
+raw archived files directly (not the `SUMMARY.md`), since that's the
+discipline this project has used throughout — pasted/summarized numbers
+get re-derived from source before being trusted.
+
+### Confirmed, exactly
+
+- Sliced run: Σcorrect/Σtotal from `mmlu_sliced_run/mmlu_results.jsonl`
+  = 412/570 = 72.28%.
+- Single-shot: `mmlu_burn_singleshot/burn_singleshot.log` itself prints
+  `Accuratezza complessiva: 72.3% (412/570)` and
+  `[T+ 570.3s] generate() completed.` — matches exactly.
+- `shadow_activations`: sliced run's 18-process sum = 562,403; the
+  single-shot run's own `GCSGGuard` stats report 562,380 — a 23-count
+  difference on 562K (~0.004%) across two entirely different process
+  topologies, same prompts/thresholds. Extra evidence the shadow-execution
+  behavior is deterministic and independent of process boundaries, not
+  just the final accuracy.
+
+### Refinement: the latency correlation is tighter than first measured
+
+The r=0.95 figure (previous entry) used each slice's total elapsed time,
+which bundles in the ~99s near-constant model-load cost. Isolating just
+the `generate()` duration per slice from `mmlu_sliced_run/orchestrator.log`
+(`[T+ Xs] Running generate()` → `[T+ Ys] generate() completed`, Y−X) and
+correlating that against `shadow_activations_cumulative`:
+**r=0.993** — tighter, and it should be: model load averages 99.0s with
+low variance (91.6-106.8s) regardless of content, while `generate()`
+duration (11.0-60.7s range) is the part actually driven by the extra
+forward passes shadow activations cause. Confirms, doesn't change, the
+mechanism already recorded.
+
+### New: a much smaller echo of the old stall pattern, self-resolving
+
+`burn_singleshot.log`'s per-request throughput briefly drops around
+request ~211-221 (down to ~0.29 it/s / 3.5s per item) and again, smaller,
+near ~302-320 — both recover within ~10-15s on their own, no
+preemption/warning logged by vLLM at this log level. Nowhere near the
+severity of the old WSL2 stall (that one never self-resolved, needed a
+kill) and didn't threaten this run, but it's a real, measurable
+micro-pattern worth watching — same general territory (the historical
+trigger zone was request ~27-31) as a milder, later-onset echo. Not
+investigated further today; flagged for if it recurs or grows on a larger
+run.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: burn-test result — single-shot 570-prompt run does NOT hang on real Linux, ~4.2x faster, identical accuracy
 
 Relaunched correctly (`PYTHONPATH` fix from the previous entry's false
