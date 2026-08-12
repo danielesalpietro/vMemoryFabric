@@ -5,6 +5,78 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: false alarm on a "parallel session", full MMLU run launched
+
+### A "second session on a separate pod" report, checked before acting on it
+
+Mid-session, a report arrived that a different session appeared to be
+working on a separate RunPod pod, having just closed the same pinning
+soak-test sub-goal at nearly the same time — raised as a real risk of
+duplicating the upcoming MMLU eval too. Checked independently before
+treating it as real: `git log HEAD..origin/Sprint-4-Tekniska` (empty —
+local and remote identical), every remote branch's most recent activity
+(`git for-each-ref --sort=-committerdate`, nothing newer than this
+session's own last push). No second branch, no unfamiliar commit,
+nothing to suggest a real parallel actor. Likely explanation: every
+commit in this sprint is authored as the same generic `Claude
+<noreply@anthropic.com>` identity regardless of which session made it, so
+a run of closely-spaced commits from this session alone can read as "two
+different sessions" at a glance. Not confirmed with certainty, but no
+contradicting evidence found either — proceeded on that basis rather than
+stalling.
+
+### The CRLF bug again — same class as yesterday, not a new one
+
+Transferring the repo to `/data/nvme` a second time hit the identical
+`bad interpreter` failure from the SSH/`sshd` fix session — this time in
+`run_mmlu_in_slices.sh`. Root cause confirmed, not assumed: the transfer
+(`git archive`) ran *before* fetching `165fe77` (the `.gitattributes`
+LF-normalization commit from earlier today), so the archived tree still
+had CRLF line endings. Re-transferred after fetching current `HEAD` —
+resolved. Not a regression in the fix itself, a timing issue in when the
+transfer happened relative to the fetch.
+
+### A real design improvement: `/workspace` symlinked to the persistent volume
+
+`/workspace` now points at `/data/nvme/vMemoryFabric` (on the Network
+Volume) instead of living on the ephemeral Container Disk — the repo
+checkout survives a pod restart, and every path that still expects
+`/workspace` (the image's own `WORKDIR`, `PYTHONPATH`, scripts) keeps
+working unchanged. Directly addresses what cost real time at the end of
+the 2026-08-11 session: terminating a pod there meant starting over from
+a fresh checkout next time. Worth carrying into the Dockerfile/template
+as the default going forward, not just this pod's own manual fix — noted
+for the deferred "unify Docker/RunPod" pass below.
+
+### Full 570-question MMLU run launched
+
+Orchestrator running for real against the checkpoint on `/data/nvme`,
+output to `/data/nvme/runs/` (persistent, survives a pod restart same as
+the code now does). Sanity slice ran ~135s including model load — full
+570-question run estimated at "a few dozen minutes," far under the
+WSL2-era overnight run this project has had to work around before
+(`LOGBOOK.md`, 2026-08-11 "the stall was never a deadlock" entry).
+
+### Deferred, deliberately: unifying the Dockerfile for local dev + RunPod
+
+Today's fixes (SSH/`sshd`, source `COPY`, `PYTHONPATH`, now the
+`/workspace` persistence pattern) have accumulated as separate patches
+rather than one coherent "this image works the same way whether it's
+`docker compose run` locally or a RunPod Pod" design pass. Good next
+step, explicitly not now — mid-eval is the wrong time, the run in
+progress is not to be disturbed. Revisit once results land.
+
+### Not yet done
+
+- Wait for the 570-question run to complete and report real numbers.
+- The deferred Dockerfile unification pass above.
+- Still outstanding from earlier today: build + publish the corrected
+  image (`0b600f2`) as a fresh tag; verify `CUDA_VISIBLE_DEVICES`/
+  `TOKENIZERS_PARALLELISM`/`OMP_NUM_THREADS` reach an SSH session, not
+  just `PYTHONPATH`.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: pinning soak test — sub-goal 2 closed, positively
 
 The actual point of the whole RunPod detour, answered: **1000/1000
