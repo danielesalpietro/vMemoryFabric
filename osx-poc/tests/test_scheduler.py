@@ -13,6 +13,8 @@ from unittest.mock import MagicMock
 from scheduler import PTPEPClassifier, DomainLabel, GCSGGuard, AERManager
 from scheduler.ptpep import PTPEPPrediction
 from scheduler.gcsg import GatingContext, ShadowExecutionResult, GCSGWorker
+from eat import ExpertAccessTable, Tier
+from tier import TierManager
 
 _FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 _MODEL_PATH   = Path(__file__).resolve().parent.parent / "models" / "ptpep_tfidf_v1.joblib"
@@ -402,6 +404,216 @@ class TestGCSG:
 
     def test_contamination_flag_propagated_to_kvcache(self):
         pytest.skip("TODO Sprint 3 — richiede PagedAttention patch")
+
+
+# ── GCSGWorker ↔ TierManager/EAT wiring (2026-08-12, issue #17) ────────────────
+#
+# Copre la logica pura Python (selezione, seeding, hook di hotness reale,
+# refresh) con lo stesso principio di TestGCSG sopra: GCSGWorker.__new__() +
+# attributi assegnati a mano, bypassando __init__() (import vllm reale). A
+# differenza di TestGCSG, qui il TierManager è REALE (non un fake) — la sua
+# costruzione richiede solo torch importabile, non CUDA vera (stesso motivo
+# per cui TestTierManager, non-gpu-marked, già costruisce TierManager reali
+# in CI cpu-tests). Quello che resta NON testabile qui è la parte
+# effettivamente CUDA-touching: _promote_module_via_tier_manager() (il
+# .to('cuda')/pin_memory() reale dentro TierManager.promote_live_tensor(),
+# via GPUTransfer) — quella richiede hardware reale, vedi il pod.
+
+class TestGCSGTierManagerWiring:
+
+    @staticmethod
+    def _real_tier_manager(tmp_path):
+        eat = ExpertAccessTable(capacity=1000, n_slots=4)
+        return TierManager(eat=eat, nvme_path=str(tmp_path), gpu_device=0)
+
+    @staticmethod
+    def _make_worker(tier_manager=None, shadow_pool_size=2):
+        worker = GCSGWorker.__new__(GCSGWorker)
+        worker.guard = GCSGGuard(shadow_pool_size=shadow_pool_size, check_vram=False)
+        worker._tier_manager = tier_manager
+        worker._n_experts_cached = None
+        worker._shadow_pool = {}
+        return worker
+
+    # ── _select_shadow_expert_ids ──────────────────────────────────────────
+
+    def test_select_without_tier_manager_is_round_robin(self):
+        worker = self._make_worker(tier_manager=None, shadow_pool_size=2)
+        assert worker._select_shadow_expert_ids(n_experts=8) == [0, 1]
+
+    def test_select_with_tier_manager_no_traffic_yet_matches_round_robin(self, tmp_path):
+        """Cold start onesto: EAT seeded ma access_count=0 ovunque -> stesso
+        risultato del round-robin, non per caso ma perché sorted() è
+        stabile e range(n_experts) è l'ordine di input — vedi il commento
+        in _select_shadow_expert_ids sul perché NON si usa last_access_ts
+        come tie-break (avrebbe rotto esattamente questa proprietà)."""
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(8):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        assert worker._select_shadow_expert_ids(n_experts=8) == [0, 1]
+
+    def test_select_with_tier_manager_prefers_hottest(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(8):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        for _ in range(5):
+            mgr.eat.access(expert_id=6, shard_idx=0)
+        mgr.eat.access(expert_id=3, shard_idx=0)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        assert worker._select_shadow_expert_ids(n_experts=8) == [6, 3]
+
+    def test_select_with_tier_manager_aggregates_across_layers(self, tmp_path):
+        """Un expert con hotness sparsa su più layer deve battere uno con
+        tutta la hotness concentrata su un solo layer, se il totale è
+        maggiore — vedi la somma per expert_id in _select_shadow_expert_ids."""
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(4):
+            for layer_id in range(3):
+                mgr.eat.insert(expert_id, shard_idx=layer_id, tier=Tier.DDR4)
+        for layer_id in range(3):
+            mgr.eat.access(expert_id=1, shard_idx=layer_id)   # expert 1: 3 totali, sparsi
+        mgr.eat.access(expert_id=2, shard_idx=0)
+        mgr.eat.access(expert_id=2, shard_idx=0)               # expert 2: 2 totali, concentrati
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=1)
+        assert worker._select_shadow_expert_ids(n_experts=4) == [1]
+
+    def test_select_with_tier_manager_no_seed_falls_back(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)   # EAT vuota, nessun seed
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        assert worker._select_shadow_expert_ids(n_experts=8) == [0, 1]
+
+    # ── _seed_eat_entries ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _fake_layers(num_layers, num_experts):
+        return TestGCSG._fake_awq_moduleslist_layers(
+            num_layers=num_layers, num_experts=num_experts, to_succeeds=True,
+        )
+
+    def test_seed_eat_entries_creates_one_per_expert_per_layer(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=self._fake_layers(3, 4))),
+            ),
+        )
+        worker._seed_eat_entries()
+        entries = mgr.eat.get_tier(Tier.DDR4)
+        assert len(entries) == 3 * 4
+        assert all(e.tier == Tier.DDR4 for e in entries)
+
+    def test_seed_eat_entries_idempotent_preserves_existing_traffic(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=self._fake_layers(2, 2))),
+            ),
+        )
+        mgr.eat.insert(expert_id=0, shard_idx=0, tier=Tier.DDR4)
+        mgr.eat.access(expert_id=0, shard_idx=0)   # traffico reale pre-esistente
+
+        worker._seed_eat_entries()
+
+        entry = mgr.eat.lookup(0, 0)
+        assert entry.access_count == 1   # non azzerata/sovrascritta dal seed
+        assert len(mgr.eat.get_tier(Tier.DDR4)) == 2 * 2   # le altre 3 combinazioni seeded
+
+    # ── traffico EAT reale nell'hook .gate ──────────────────────────────────
+
+    def test_evaluate_gcsg_for_rows_feeds_eat_with_real_routing(self, tmp_path):
+        import torch
+        mgr = self._real_tier_manager(tmp_path)
+        mgr.eat.insert(expert_id=0, shard_idx=5, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=0)
+        worker._current_row_request_ids = ["req-0"]
+
+        router_logits = torch.tensor([[10.0, -10.0, -10.0]])   # top-1 = expert 0
+        hidden_states = torch.randn(1, 4096)
+
+        worker._evaluate_gcsg_for_rows(router_logits, hidden_states, layer_id=5)
+
+        assert mgr.eat.lookup(0, 5).access_count == 1
+
+    def test_evaluate_gcsg_for_rows_tracks_real_top1_not_shadow_activation(self, tmp_path):
+        """Il traffico EAT riflette il routing REALE (top-1 del router),
+        indipendentemente da should_activate_shadow()/run_shadow() — deve
+        continuare a fluire anche quando le soglie GCSG non scattano
+        affatto (theta_gate impossibile da superare qui)."""
+        import torch
+        mgr = self._real_tier_manager(tmp_path)
+        mgr.eat.insert(expert_id=1, shard_idx=0, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=0)
+        worker.guard = GCSGGuard(theta_gate=0.999, check_vram=False)
+        worker._current_row_request_ids = ["req-0"]
+
+        router_logits = torch.tensor([[-10.0, 10.0, -10.0]])   # top-1 = expert 1
+        hidden_states = torch.randn(1, 4096)
+
+        worker._evaluate_gcsg_for_rows(router_logits, hidden_states, layer_id=0)
+
+        assert mgr.eat.lookup(1, 0).access_count == 1
+
+    def test_evaluate_gcsg_for_rows_without_tier_manager_untouched(self):
+        """tier_manager=None: nessuna chiamata EAT (non c'è nulla da
+        chiamare), nessuna eccezione — path di default invariato."""
+        import torch
+        worker = self._make_worker(tier_manager=None, shadow_pool_size=0)
+        worker._current_row_request_ids = ["req-0"]
+        router_logits = torch.tensor([[10.0, -10.0, -10.0]])
+        hidden_states = torch.randn(1, 4096)
+        worker._evaluate_gcsg_for_rows(router_logits, hidden_states, layer_id=0)   # non deve sollevare
+
+    # ── refresh_shadow_pool_selection ──────────────────────────────────────
+
+    def test_refresh_without_tier_manager_is_noop(self, caplog):
+        worker = self._make_worker(tier_manager=None)
+        with caplog.at_level(logging.WARNING):
+            worker.refresh_shadow_pool_selection()
+        assert "no-op" in caplog.text
+
+    def test_refresh_before_first_load_is_noop(self, tmp_path, caplog):
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr)
+        assert worker._n_experts_cached is None
+        with caplog.at_level(logging.WARNING):
+            worker.refresh_shadow_pool_selection()
+        assert "prima di _load_shadow_pool" in caplog.text
+
+    def test_refresh_reloads_when_selection_changes(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(4):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        worker._n_experts_cached = 4
+        worker._shadow_pool = {0: object(), 1: object()}   # selezione "corrente" simulata
+
+        calls = []
+        worker._load_shadow_pool = lambda: calls.append(1)
+
+        for _ in range(3):
+            mgr.eat.access(expert_id=3, shard_idx=0)   # rende 3 il più caldo — selezione cambia
+
+        worker.refresh_shadow_pool_selection()
+
+        assert calls == [1]
+
+    def test_refresh_noop_when_selection_unchanged(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(4):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        worker._n_experts_cached = 4
+        worker._shadow_pool = {0: object(), 1: object()}
+
+        calls = []
+        worker._load_shadow_pool = lambda: calls.append(1)
+
+        worker.refresh_shadow_pool_selection()   # nessun traffico -> selezione invariata [0,1]
+
+        assert calls == []
 
 
 # ── AERManager ────────────────────────────────────────────────────────────────

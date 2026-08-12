@@ -132,6 +132,28 @@ class ExpertAccessTable:
             candidates.sort(key=lambda e: e.last_access_ts)
             return candidates[:n]
 
+    def hottest_candidates(self, tier: Tier, n: int) -> list[EATEntry]:
+        """Top-n entry più "calde" nel tier dato — complemento di
+        eviction_candidates() (2026-08-12, issue #17).
+
+        eviction_candidates() ordina per last_access_ts crescente (più
+        vecchio prima → chi merita di essere evictato). Questo ordina per
+        (access_count, last_access_ts) decrescente (più acceduto, e tra
+        pari il più recente, prima → chi merita di essere promosso/tenuto).
+        Nessun peso SEE/semantico qui — quello vive nella policy del Tier
+        Manager; questo è il segnale grezzo recency+frequency di EAT su
+        cui una policy più sofisticata può costruire, stesso livello di
+        "primitiva" di eviction_candidates().
+
+        Usata da GCSGWorker (M3) per selezionare quali expert entrano
+        nello shadow pool quando è wired a un TierManager, al posto del
+        placeholder round-robin — vedi scheduler.gcsg._select_shadow_expert_ids.
+        """
+        with self._lock:
+            candidates = [e for e in self._table.values() if e.tier == tier]
+            candidates.sort(key=lambda e: (e.access_count, e.last_access_ts), reverse=True)
+            return candidates[:n]
+
     # ── lifecycle ──────────────────────────────────────────────────────────────
 
     def initialize(self) -> None:

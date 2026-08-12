@@ -59,6 +59,16 @@ class TierManager:
         # anche a thread singolo, non un edge case teorico.
         self._locks: Dict[_Key, asyncio.Lock] = {}
 
+    @property
+    def eat(self) -> ExpertAccessTable:
+        """Expert Access Table sottostante — esposta per chi (es.
+        scheduler.gcsg.GCSGWorker, M3) deve leggere/scrivere hotness reale
+        al di fuori del solo ciclo promote()/evict() (2026-08-12, issue
+        #17). Stesso pattern di ExpertAccessTable.slab, esposto per lo
+        stesso motivo: proprietà del componente sottostante, non una
+        copia scollegata."""
+        return self._eat
+
     def _lock_for(self, key: _Key) -> asyncio.Lock:
         """Lock asyncio per-key, creato lazy alla prima transizione su quella key."""
         lock = self._locks.get(key)
@@ -150,6 +160,73 @@ class TierManager:
         del self._slots[key]
         self._eat.update_tier(expert_id, shard_idx, Tier.VRAM)
         return time.monotonic() - t0
+
+    # ── live-tensor promotion (M3 shadow pool, issue #17) ─────────────────────
+
+    async def promote_live_tensor(
+        self, expert_id: ExpertID, shard_idx: ShardID,
+        cpu_data, pin: bool = False,
+    ) -> "torch.Tensor":
+        """Promuove in VRAM un tensore CPU già in memoria di processo — non
+        uno shard su file NVMe (2026-08-12, issue #17).
+
+        Diverso da promote(): quello porta uno shard attraverso l'intera
+        catena NVMe→DDR4→VRAM leggendo da AsyncNVMeIO. Questo serve asset
+        che vivono già lato host per costruzione — es. GCSGWorker (M3), i
+        cui shadow expert sono slice/parametri del modello vLLM già
+        caricato (residenti in GPU o offloaded su CPU da vLLM stesso), mai
+        file separati sul volume NVMe. La entry EAT viene comunque creata
+        (a Tier.DDR4, se assente — quella è la tier di partenza onesta per
+        questi shard) e aggiornata a Tier.VRAM dopo il transfer, così
+        EAT/TierManager restano la fonte di verità sul tier reale anche
+        per questi asset, bypassando solo l'I/O NVMe che non serve qui.
+
+        Idempotente: se lo shard è già in VRAM, ritorna il tensore
+        esistente senza ripetere il transfer.
+
+        Args:
+            expert_id: ID expert (vedi convenzione GCSG: un "expert" è
+                       l'FFN con quell'indice su un layer specifico —
+                       shard_idx qui è tipicamente il layer_id, non un
+                       chunk-in-byte come nel flusso NVMe).
+            shard_idx: Indice shard/layer.
+            cpu_data:  numpy.ndarray o torch.Tensor CPU-resident.
+            pin:       Passato a GPUTransfer.to_vram() — vedi la sua
+                       docstring per lo stato di verifica.
+
+        Returns:
+            torch.Tensor su GPU.
+
+        Raises:
+            ValueError: entry EAT esistente ma non in DDR4/VRAM (stato
+                        inatteso per un asset live — non gestito qui).
+        """
+        key = (expert_id, shard_idx)
+        async with self._lock_for(key):
+            entry = self._eat.lookup(expert_id, shard_idx)
+            if entry is not None and entry.tier == Tier.VRAM:
+                return self._vram[key]
+
+            if entry is None:
+                nbytes = getattr(cpu_data, "nbytes", None)
+                if nbytes is None:   # torch.Tensor non ha sempre .nbytes su versioni vecchie
+                    nbytes = cpu_data.element_size() * cpu_data.nelement()
+                self._eat.insert(expert_id, shard_idx, tier=Tier.DDR4, size_bytes=nbytes)
+            elif entry.tier != Tier.DDR4:
+                raise ValueError(
+                    f"promote_live_tensor: {key} è in tier {entry.tier.name}, "
+                    "atteso DDR4 o assente."
+                )
+
+            t0 = time.monotonic()
+            tensor = self._gpu.to_vram(cpu_data, pin=pin)
+            self._vram[key] = tensor
+            self._eat.update_tier(expert_id, shard_idx, Tier.VRAM)
+            log.debug(
+                "TierManager: promote_live_tensor %s -> VRAM in %.1f ms (pin=%s)",
+                key, (time.monotonic() - t0) * 1000, pin,
+            )
+            return tensor
 
     # ── evictions ──────────────────────────────────────────────────────────────
 

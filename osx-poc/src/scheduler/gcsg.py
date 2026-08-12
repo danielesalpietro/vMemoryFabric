@@ -102,6 +102,14 @@ import pynvml   # provided by the `nvidia-ml-py` package (requirements.txt) —
                 # the standalone `pynvml` PyPI package is deprecated, this
                 # is the same import name from NVIDIA's maintained bindings
 
+# M1/M2 — pure-Python project packages, no vLLM/CUDA hard dependency at
+# import time (tier/gpu.py's GPUTransfer only requires torch at
+# *construction*, and CI cpu-tests already imports both packages directly —
+# see tests/test_tier.py, tests/test_eat.py). Safe at module scope, unlike
+# the local vllm imports below (see docstring above).
+from eat import Tier
+from tier import TierManager
+
 log = logging.getLogger(__name__)
 
 
@@ -712,6 +720,49 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
     L'import di vllm è locale ai metodi (non al modulo) apposta: gcsg.py deve
     restare importabile — e GCSGGuard testabile — anche in ambienti senza
     vLLM installato (es. CI cpu-tests, che non installa requirements-vllm.txt).
+
+    M1/M2 wiring (2026-08-12, issue #17) — opt-in via tier_manager=,
+    default None (comportamento invariato, byte per byte identico a prima
+    di questa integrazione — zero rischio per il path Marlin già validato
+    dal report GCSG, 72.28%/72.3% su Linux reale, Sprint 4). Con un
+    TierManager passato al costruttore:
+
+        - EAT viene seeded a load_model() con una entry (expert_id,
+          layer_id) per ogni combinazione reale del modello, a Tier.DDR4
+          (_seed_eat_entries()).
+        - La selezione di QUALI expert entrano nello shadow pool diventa
+          EAT-driven (hotness aggregata per expert_id) invece del
+          round-robin placeholder — _select_shadow_expert_ids(). Al primo
+          load, senza traffico reale ancora accumulato, degrada
+          onestamente a un ordine equivalente al round-robin (proprietà
+          di un cold start, non un difetto nascosto).
+        - Ogni token instradato alimenta EAT con traffico reale
+          (EAT.access() sul top-1 expert per (token, layer),
+          indipendentemente da should_activate_shadow) —
+          _evaluate_gcsg_for_rows(). Questa è la "traffico concorrente
+          reale" di cui M1 (issue #1/#2/#4) ha bisogno per essere
+          misurato, non più solo unit test sintetici.
+        - Il transfer GPU del path AWQ ModuleList (path 3) passa da
+          TierManager.promote_live_tensor() invece di un .to('cuda')
+          diretto — _promote_module_via_tier_manager(). Il path Marlin
+          (path 2, quello effettivamente usato dal checkpoint reale del
+          report GCSG) resta DELIBERATAMENTE non toccato in questa
+          integrazione — vedi la nota nel punto di chiamata in
+          _load_shadow_pool() per il perché.
+        - refresh_shadow_pool_selection() ricalcola/ricarica il pool da
+          hotness aggiornata, ma non è agganciata a nessun trigger
+          automatico — richiede prima il profiling di
+          promote()/evict() su hardware reale (Sprint 4 sotto-obiettivo 4).
+
+    Stato di verifica, dichiarato esplicitamente per lo stesso motivo di
+    ogni altra claim in questo file: la logica pura Python (selezione,
+    seeding, aggregazione hotness) è la stessa testabile via CPU unit test
+    di sempre. Il bridging asyncio.run() dentro load_model() e il transfer
+    GPU reale via TierManager NON sono stati eseguiti su hardware reale in
+    questa sessione (nessuna GPU disponibile qui) — scritti secondo la
+    stessa logica già verificata per .to('cuda')/GPUTransfer.to_vram(),
+    ma da confermare end-to-end sul pod prima di fidarsene per un run
+    MMLU comparabile ai precedenti.
     """
 
     # Tetto per captured_router_logits (osservabilità smoke-test) — vedi il
@@ -719,10 +770,22 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
     # del bug di crescita illimitata trovato 2026-08-10.
     _MAX_CAPTURED_ROUTER_LOGITS = 1000
 
-    def __init__(self, *args, guard: Optional[GCSGGuard] = None, **kwargs) -> None:
+    def __init__(
+        self, *args, guard: Optional[GCSGGuard] = None,
+        tier_manager: Optional[TierManager] = None, **kwargs,
+    ) -> None:
         from vllm.worker.worker import Worker   # import locale, vedi docstring classe
         self._base = Worker(*args, **kwargs)
         self.guard = guard or GCSGGuard()
+        # M2/M1 wiring (2026-08-12, issue #17) — opt-in, default None:
+        # con tier_manager=None (default) il comportamento è BYTE PER BYTE
+        # identico a prima di questa integrazione (round-robin +
+        # .to('cuda') diretto) — zero rischio per il path Marlin già
+        # validato (report GCSG, 72.28%/72.3% su Linux reale). Vedi
+        # _load_shadow_pool()/_select_shadow_expert_ids() per dove diverge
+        # quando presente, e la classe docstring per lo stato di verifica.
+        self._tier_manager = tier_manager
+        self._n_experts_cached: Optional[int] = None
         self._shadow_pool: Dict[int, object] = {}
         self._gate_hook_handles: List[object] = []
 
@@ -761,7 +824,23 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         self._current_row_request_ids: List[str] = []
 
     def __getattr__(self, name):
-        # Delega tutto ciò che non sovrascriviamo esplicitamente al Worker reale
+        # Delega tutto ciò che non sovrascriviamo esplicitamente al Worker
+        # reale. Guardia esplicita su "_base" (2026-08-12, trovato scrivendo
+        # i test per il wiring TierManager/EAT): __getattr__ scatta solo
+        # quando l'attributo normale NON è stato trovato — su un
+        # GCSGWorker costruito via __new__() nei test, senza _base mai
+        # assegnato, self._base qui sopra ricadrebbe di nuovo in
+        # __getattr__('_base'), che tenta di nuovo self._base, all'infinito
+        # -> RecursionError invece di un pulito AttributeError. Non solo un
+        # problema di test: qualunque accesso ad attributo mancante su un
+        # worker incompletamente costruito avrebbe lo stesso destino.
+        # __dict__ bypassa __getattr__ per il check stesso.
+        if "_base" not in self.__dict__:
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute {name!r} "
+                f"(né '_base' è stato impostato — worker costruito senza "
+                f"passare da __init__?)"
+            )
         return getattr(self._base, name)
 
     def init_device(self) -> None:
@@ -784,6 +863,16 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         """
         self._base.load_model()
         self._register_gate_hooks()
+        if self._tier_manager is not None:
+            try:
+                self._seed_eat_entries()
+            except Exception as e:
+                log.warning(
+                    "GCSG: seed EAT fallito (%s) — hotness tracking disattivato "
+                    "per questa sessione; con tier_manager wired ma EAT non "
+                    "seeded, _select_shadow_expert_ids() degrada comunque a "
+                    "round-robin (stesso fallback del caso tier_manager=None).", e,
+                )
         try:
             self._load_shadow_pool()
         except Exception as e:
@@ -843,11 +932,12 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         ≈1.16-1.24 GiB nella config di validazione. Tema noto, non
         risolto qui: vedi max_num_seqs nei entrypoint di validazione.
 
-        Selezione expert: placeholder round-robin (range(shadow_pool_size)),
-        non guidato da carico reale — quali expert cachare in base
-        all'hotness è integrazione EAT/Tier Manager (M1/M2), non disponibile
-        qui. Questo metodo implementa l'estrazione/wiring, non la policy di
-        scelta di QUALI expert.
+        Selezione expert: placeholder round-robin (range(shadow_pool_size))
+        quando self._tier_manager è None (default, comportamento invariato).
+        Con TierManager wired, selezione reale via EAT hotness — vedi
+        _select_shadow_expert_ids() (2026-08-12, issue #17) — questo
+        metodo resta responsabile solo dell'estrazione/wiring, non della
+        policy di scelta.
         """
         model = self._base.model_runner.model
         layers = model.model.layers
@@ -856,9 +946,25 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         is_marlin_packed = is_fused and hasattr(first_experts, "w13_qweight")
 
         n_experts = first_experts.num_experts if is_fused else len(first_experts)
-        expert_ids = list(range(min(self.guard.shadow_pool_size, n_experts)))
+        self._n_experts_cached = n_experts
+        expert_ids = self._select_shadow_expert_ids(n_experts)
 
         if is_marlin_packed:
+            # NOTA (2026-08-12, issue #17): il pinning GPU di questo path
+            # NON è stato instradato attraverso TierManager in questa
+            # integrazione, a differenza del path AWQ ModuleList sotto
+            # (_pin_awq_expert_to_gpu). Deliberato, non dimenticato: questo
+            # è il path effettivamente usato dal checkpoint reale del
+            # report GCSG (casperhansen/mixtral-instruct-awq, Marlin), il
+            # meccanismo di pinning più delicato del file (vedi ATTENZIONE
+            # nella docstring di _PinnedMarlinExperts — un hang reale da
+            # allocatore CUDA frammentato, 2026-08-10), e non verificabile
+            # qui senza GPU. Selezione expert_ids sopra (via
+            # _select_shadow_expert_ids) è comunque già EAT-driven quando
+            # tier_manager è wired — solo il transfer GPU di QUESTO path
+            # resta il .to(device) diretto pre-esistente. Prossimo
+            # incremento naturale una volta che il path AWQ è verificato
+            # su hardware reale.
             marlin_pool = self._build_marlin_shadow_pool(layers, expert_ids)
             self._shadow_pool.update(marlin_pool)
             missing = [e for e in expert_ids if e not in marlin_pool]
@@ -920,9 +1026,212 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                     len(loaded), loaded, len(layers),
                 )
 
-    @staticmethod
+    # ── M1/M2 wiring (2026-08-12, issue #17) ────────────────────────────────────
+
+    def _seed_eat_entries(self) -> None:
+        """Inserisce in EAT una entry (expert_id, layer_id) per OGNI
+        combinazione reale del modello caricato, a Tier.DDR4.
+
+        DDR4, non NVME: questi pesi vivono già sull'host per costruzione
+        (residenti in GPU o offloaded su CPU da vLLM stesso), mai su un
+        file NVMe separato — DDR4 è la tier di partenza onesta, non un
+        placeholder scelto per comodità.
+
+        TUTTI gli expert, non solo i shadow_pool_size attualmente in pool:
+        senza, EAT.hottest_candidates()/get_tier() non potrebbe mai
+        scoprire un expert diverso da quello già in pool, e la selezione
+        sarebbe round-robin travestita da hotness-driven — vedi
+        _select_shadow_expert_ids().
+
+        Idempotente (eat.lookup() prima di ogni insert()): sicuro da
+        richiamare più volte nello stesso processo.
+        """
+        model = self._base.model_runner.model
+        layers = model.model.layers
+        first_experts = layers[0].block_sparse_moe.experts
+        is_fused = hasattr(first_experts, "num_experts")
+        n_experts = first_experts.num_experts if is_fused else len(first_experts)
+        n_layers = len(layers)
+
+        eat = self._tier_manager.eat
+        seeded = 0
+        for expert_id in range(n_experts):
+            for layer_id in range(n_layers):
+                if eat.lookup(expert_id, layer_id) is None:
+                    eat.insert(expert_id, layer_id, tier=Tier.DDR4, size_bytes=0)
+                    seeded += 1
+        log.info(
+            "GCSG: EAT seeded — %d entry (%d expert x %d layer) a Tier.DDR4.",
+            seeded, n_experts, n_layers,
+        )
+
+    def _select_shadow_expert_ids(self, n_experts: int) -> List[int]:
+        """Seleziona quali expert_id popolano lo shadow pool.
+
+        Senza TierManager (default): round-robin placeholder invariato
+        (range(...)) — comportamento identico a prima di questa
+        integrazione.
+
+        Con TierManager: aggrega EAT.get_tier(Tier.DDR4) per expert_id
+        (somma access_count su tutti i layer di quell'expert) e prende i
+        primi shadow_pool_size per punteggio decrescente. Tie-break
+        DELIBERATAMENTE sul solo ordine di iterazione (range(n_experts),
+        ascendente), non su last_access_ts: quest'ultimo sembrava
+        un'opzione più "intelligente" ma è un falso segnale a freddo — a
+        entry appena seeded da _seed_eat_entries() (stesso access_count
+        globale, zero traffico reale), last_access_ts riflette solo
+        l'ordine di inserimento nel loop di seeding, non hotness reale, e
+        avrebbe silenziosamente favorito l'ultimo expert_id seeded invece
+        di comportarsi da round-robin (bug trovato scrivendo i test di
+        questa stessa funzione, prima che arrivasse su hardware reale).
+        sorted(..., reverse=True) è stabile in Python (garantito dalla
+        documentazione — reverse non rompe la stabilità), quindi a parità
+        di punteggio (incluso il caso AL PRIMO LOAD, tutte le entry a
+        access_count=0) l'ordine di input range(n_experts) sopravvive
+        intatto: equivalente esatto al round-robin — proprietà onesta di
+        un cold start, non un difetto nascosto: non esiste segnale di
+        hotness prima che un solo token sia stato instradato. Il valore
+        reale di questo path emerge chiamando refresh_shadow_pool_selection()
+        dopo che EAT ha accumulato traffico reale da
+        _evaluate_gcsg_for_rows() — vedi la sua docstring per perché non è
+        (ancora) agganciata a un trigger automatico.
+        """
+        pool_size = min(self.guard.shadow_pool_size, n_experts)
+        # getattr difensivo, non self._tier_manager diretto: un GCSGWorker
+        # costruito via __new__() nei test (bypassando __init__(), stesso
+        # pattern usato altrove in questo file/nei test) non ha _base né
+        # _tier_manager finché non assegnati a mano — un accesso diretto
+        # cadrebbe in __getattr__, che delega a self._base, anch'esso
+        # assente in quel caso -> RecursionError, non un AttributeError
+        # pulito. Stesso motivo per cui _current_row_request_ids sotto usa
+        # già getattr(..., None).
+        tier_manager = getattr(self, "_tier_manager", None)
+        if tier_manager is None:
+            return list(range(pool_size))
+
+        entries = tier_manager.eat.get_tier(Tier.DDR4)
+        if not entries:
+            # EAT non seeded (es. _seed_eat_entries fallita in load_model,
+            # già loggato lì) — stesso fallback del caso senza TierManager.
+            return list(range(pool_size))
+
+        scores: Dict[int, int] = {}
+        for entry in entries:
+            scores[entry.expert_id] = scores.get(entry.expert_id, 0) + entry.access_count
+        ranked = sorted(range(n_experts), key=lambda e: scores.get(e, 0), reverse=True)
+        return ranked[:pool_size]
+
+    def refresh_shadow_pool_selection(self) -> None:
+        """Ricalcola la selezione dello shadow pool da EAT hotness reale e
+        ricarica il pool se cambia.
+
+        Pensato per essere chiamato periodicamente (es. ogni N richieste)
+        una volta che il costo reale di promote()/evict() è stato
+        misurato su hardware vero — sotto-obiettivo 4 dello Sprint 4
+        ("shard promotion latency"). Deliberatamente NON agganciato a
+        nessun trigger automatico in questa integrazione: farlo prima di
+        avere quel dato rischierebbe di introdurre uno storm di
+        promote/evict a ogni chiamata, esattamente il costo che quel
+        sotto-obiettivo deve prima quantificare, non assumere trascurabile.
+        No-op silenzioso se non wired a un TierManager, o se la selezione
+        non cambia.
+        """
+        if getattr(self, "_tier_manager", None) is None:
+            log.warning(
+                "GCSG: refresh_shadow_pool_selection() no-op — nessun "
+                "TierManager wired (shadow pool round-robin, nulla da "
+                "aggiornare)."
+            )
+            return
+        if getattr(self, "_n_experts_cached", None) is None:
+            log.warning(
+                "GCSG: refresh_shadow_pool_selection() chiamato prima di "
+                "_load_shadow_pool() — no-op."
+            )
+            return
+
+        new_ids = self._select_shadow_expert_ids(self._n_experts_cached)
+        if sorted(new_ids) == sorted(self._shadow_pool.keys()):
+            return
+        log.info(
+            "GCSG: refresh_shadow_pool_selection — nuova selezione %s (era "
+            "%s), ricarico lo shadow pool.",
+            new_ids, sorted(self._shadow_pool.keys()),
+        )
+        self._shadow_pool.clear()
+        self._load_shadow_pool()
+
+    def _should_pin_transfers(self) -> bool:
+        """True su Linux reale (dove il soak test 2026-08-12 ha verificato
+        pinning sicuro sotto carico sostenuto — vedi LOGBOOK.md e GCSG
+        report §9), False sotto WSL2 (mai validato sotto carico sostenuto
+        lì). Stessa funzione in_wsl() già usata altrove nel progetto per
+        questa identica decisione. Conservativo (False) se non
+        determinabile — es. vllm non importabile in questo processo, non
+        dovrebbe succedere qui ma non è un'assunzione su cui vale la pena
+        fallire rumorosamente.
+        """
+        try:
+            from vllm.platforms.interface import in_wsl
+            return not in_wsl()
+        except Exception:
+            return False
+
+    def _promote_module_via_tier_manager(self, module: Any, expert_id: int, layer_id: int) -> None:
+        """Promuove i Parameter CPU-resident di `module` in VRAM via
+        TierManager, sostituendoli in-place (stesso effetto finale di
+        expert.to('cuda'), che questo sostituisce nel path AWQ
+        ModuleList quando self._tier_manager è wired).
+
+        Granularità: UN solo Parameter per (expert_id, layer_id) viene
+        tracciato in EAT/TierManager — quello con più elementi (dominante
+        per peso in un modulo AWQ-packed, tipicamente qweight) — non ogni
+        singolo tensore del modulo. Gli altri Parameter (es.
+        qzeros/scales, ordini di grandezza più piccoli) vengono comunque
+        spostati realmente su GPU con la stessa decisione di pinning, ma
+        via una copia diretta non tracciata singolarmente in EAT:
+        SHARD_SIZE_MB=256 e tutta la contabilità EAT sono pensati per
+        asset a grana di peso principale (vedi memory math nel docstring
+        di modulo), non per array di scale/zero-point — tracciarli uno
+        per uno moltiplicherebbe le entry EAT senza segnale utile in più.
+
+        NON verificato su hardware reale (nessuna GPU in questo ambiente):
+        il transfer stesso è verificato a livello di GPUTransfer.to_vram()
+        (TestGPUTransfer, self-hosted runner) e TierManager.promote_live_tensor()
+        è pura logica Python + quella stessa chiamata — ma il bridging
+        asyncio.run() dentro load_model() (chiamato sync dal worker vLLM,
+        un processo dedicato senza event loop già attivo per quanto
+        verificato nella sequenza di avvio in
+        vllm.executor.gpu_executor.GPUExecutor — stessa fonte già usata
+        per l'ordine init_device/load_model, non però per QUESTO specifico
+        bridging) va confermato sul pod. Primo item da controllare.
+        """
+        import asyncio
+
+        pin = self._should_pin_transfers()
+        cpu_named = [
+            (name, p) for name, p in module.named_parameters()
+            if p.device.type != "cuda"
+        ]
+        if not cpu_named:
+            return
+
+        dominant_name, dominant_param = max(cpu_named, key=lambda np_: np_[1].numel())
+        vram_tensor = asyncio.run(
+            self._tier_manager.promote_live_tensor(
+                expert_id, layer_id, dominant_param.data, pin=pin,
+            )
+        )
+        dominant_param.data = vram_tensor
+
+        for name, param in cpu_named:
+            if name == dominant_name:
+                continue
+            cpu_tensor = param.data.pin_memory() if pin else param.data
+            param.data = cpu_tensor.to("cuda", non_blocking=pin)
+
     def _pin_awq_expert_to_gpu(
-        layers: List[Any], expert_id: int,
+        self, layers: List[Any], expert_id: int,
     ) -> Optional[List[Any]]:
         """Assicura che expert_id sia residente in GPU su TUTTE le layer,
         spostandolo esplicitamente se offloaded — copia sincrona reale
@@ -932,6 +1241,14 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         expert.forward non è mai wrappato da vLLM (verificato,
         scripts/map_offload_state.py): nessun forward da "ripristinare",
         basta che i suoi Parameter siano su GPU prima della prima chiamata.
+
+        Con self._tier_manager wired (2026-08-12, issue #17): il transfer
+        passa da _promote_module_via_tier_manager() invece di un
+        .to('cuda') diretto — stessa destinazione fisica finale, ma ora
+        tracciato in EAT (tier VRAM) attraverso il punto di controllo di
+        M2 invece di un side-channel separato. self._tier_manager is None
+        (default): comportamento invariato, .to('cuda') diretto come
+        prima di questa integrazione.
 
         Ritorna la lista dei moduli (uno per layer) se il pinning riesce su
         TUTTE le layer, None se anche una sola fallisce — l'expert_id intero
@@ -943,7 +1260,10 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
             expert = layer.block_sparse_moe.experts[expert_id]
             try:
                 if next(expert.parameters()).device.type != "cuda":
-                    expert.to("cuda")
+                    if getattr(self, "_tier_manager", None) is not None:
+                        self._promote_module_via_tier_manager(expert, expert_id, layer_id)
+                    else:
+                        expert.to("cuda")
             except Exception as e:
                 log.warning(
                     "GCSG: impossibile pinnare l'expert AWQ %d (layer %d) in "
@@ -1078,14 +1398,34 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         # logic below, just two syncs total per hook call instead of 2xN.
         gating_scores_batch = probs.tolist()
         entropy_batch = entropy.tolist()
+        # getattr difensivo (non self._tier_manager diretto): vedi il
+        # commento gemello in _select_shadow_expert_ids sul perché — un
+        # GCSGWorker costruito via __new__() senza _base impostato
+        # ricadrebbe in RecursionError altrimenti. Hoisted fuori dal loop
+        # per riga: un solo lookup per hook call, non uno per token.
+        tier_manager = getattr(self, "_tier_manager", None)
 
         for row_idx, request_id in enumerate(row_request_ids):
+            row_scores = gating_scores_batch[row_idx]
             ctx = GatingContext(
                 token_id=row_idx,
                 request_id=request_id,
-                gating_scores=gating_scores_batch[row_idx],
+                gating_scores=row_scores,
                 token_entropy=entropy_batch[row_idx],
             )
+            if tier_manager is not None:
+                # Traffico EAT reale (2026-08-12, issue #17): il top-1 qui
+                # è la VERA decisione di routing MoE per questo token/layer
+                # — indipendente da should_activate_shadow()/run_shadow()
+                # sotto, che decidono solo se GCSG interviene. Senza questo,
+                # EAT non vedrebbe mai traffico reale (solo il conteggio di
+                # attivazioni shadow, un sottoinsieme molto più piccolo e
+                # distorto verso i token ad alta confidenza — vedi
+                # GCSGGuard.should_activate_shadow) — è esattamente la
+                # "traffico concorrente reale" che issue #1/#2/#4 (M1,
+                # sotto-obiettivo 5) hanno bisogno di misurare.
+                top1_expert_id = max(range(len(row_scores)), key=row_scores.__getitem__)
+                tier_manager.eat.access(top1_expert_id, layer_id)
             should, _ = self.guard.should_activate_shadow(ctx)
             if should:
                 # hidden_states[row_idx:row_idx+1], NON hidden_states[row_idx]

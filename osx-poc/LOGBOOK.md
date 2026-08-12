@@ -5,6 +5,175 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska: sub-goal 1 (TierManager/EAT wiring, issue #17) — implemented, unit-tested, NOT yet run on real hardware
+
+Pod is paused; wrote this against the local checkout, to be pulled and
+run for real on the pod by the other session rather than requiring a
+fresh image rebuild+publish. First real code (not just infra/environment
+work) on Sprint 4's actual core goal — everything since kickoff had been
+sub-goals 2/3 (pinning, re-running MMLU on the existing path).
+
+### Scope, decided deliberately narrower than "wire everything"
+
+Read `TierManager`/`EAT`'s real code before writing anything (`tier/manager.py`,
+`tier/gpu.py`, `eat/eat.py`) rather than assuming the API shape. Two
+structural findings shaped the scope:
+
+- `TierManager.promote()`'s NVMe→DDR4→VRAM chain expects shard *files* on
+  the NVMe volume (`AsyncNVMeIO.read_shard()`). GCSG's shadow experts are
+  not separate files — they're slices/parameters of the model vLLM
+  already loaded, live in process memory (GPU-resident or CPU-offloaded
+  by vLLM itself). Forcing them through the file-based NVMe hop would
+  mean writing an offline shard-export pipeline first — a bigger, riskier
+  piece I did not start this pass.
+- `SlabAllocator`'s DDR4 pool defaults to 4 slots — too few for
+  `shadow_pool_size × 32 layers` shards. Another sign GCSG's live-tensor
+  assets don't fit M2's file-shard abstraction as-is.
+
+Given that, implemented a **live-tensor promotion bridge** instead of
+forcing the existing file-based pipeline: `TierManager.promote_live_tensor()`,
+a new method that takes an already-in-memory CPU tensor, registers/updates
+it in EAT (seeded at `Tier.DDR4` — the honest starting tier for something
+that's never been on NVMe), and moves it to VRAM via `GPUTransfer`,
+skipping only the NVMe I/O that doesn't apply here. Real M2/M1 bookkeeping
+(EAT tier is the source of truth), not a NVMe-shard-file simulation.
+
+### What's wired now
+
+- **`EAT.hottest_candidates(tier, n)`** — new, mirrors `eviction_candidates()`
+  (which is LRU/coldest-first, for eviction) with (access_count,
+  last_access_ts) descending — the complementary "what to promote" primitive.
+- **`GPUTransfer.to_vram()`** — now accepts `pin: bool` (default `False`,
+  zero behavior change) and a `torch.Tensor` input in addition to numpy,
+  so it can serve GCSG's real tensors, not just NVMe-sourced byte buffers.
+  This is also the concrete follow-through on Sprint 4 sub-goal 2's literal
+  wording ("should `TierManager.GPUTransfer` attempt real pinning") — the
+  soak test closed *whether pinning is safe*; this closes *whether
+  `GPUTransfer` actually uses it*, now opt-in via `pin=True`.
+- **`TierManager.promote_live_tensor()`** — the bridge described above.
+  Idempotent (returns the existing VRAM tensor if already promoted).
+- **`GCSGWorker(tier_manager=...)`** — new optional constructor arg,
+  default `None` (byte-for-byte unchanged behavior when omitted — the
+  just-validated 72.28%/72.3% Marlin-path results are at zero risk from
+  this change unless explicitly opted in):
+  - `_seed_eat_entries()` — seeds one EAT entry per (expert_id, layer_id)
+    at `Tier.DDR4` at `load_model()` time, for *all* experts, not just
+    the ones currently in the shadow pool (otherwise hotness could never
+    discover a new candidate).
+  - `_select_shadow_expert_ids()` — replaces the round-robin
+    `range(shadow_pool_size)` placeholder with EAT-hotness-driven
+    selection when a `TierManager` is wired. At cold start (no tokens
+    routed yet), this is provably equivalent to round-robin — not
+    hand-waved: `sorted(..., reverse=True)` is stable in Python, and with
+    every `access_count` at 0 the `range(n_experts)` input order survives
+    intact. (First draft used `last_access_ts` as a tie-break, which
+    seemed like a reasonable "prefer fresher" signal — turned out to
+    silently bias toward whichever expert `_seed_eat_entries()` happened
+    to insert *last*, an artifact of insertion order, not real hotness.
+    Caught writing the unit test for the cold-start case, not on
+    hardware — dropped the tie-break entirely rather than patch around it.)
+  - Real EAT traffic: `_evaluate_gcsg_for_rows()` now calls `EAT.access()`
+    on the actual top-1 routed expert for every token/layer, independent
+    of whether GCSG's shadow path activates — this is the real concurrent
+    traffic issues #1/#2/#4 (M1 debt, sub-goal 5) need to even be
+    measurable; until now only synthetic unit-test traffic existed.
+  - `_pin_awq_expert_to_gpu()` (path 3, AWQ ModuleList) routes its
+    GPU-residency transfer through `TierManager.promote_live_tensor()`
+    instead of a direct `.to('cuda')` when wired — the literal ask in
+    issue #17 for this one path. One dominant parameter per
+    (expert_id, layer_id) is EAT-tracked (the largest, e.g. `qweight`);
+    smaller auxiliary tensors (`qzeros`/`scales`) move with the same
+    pin decision but aren't tracked individually — `SHARD_SIZE_MB=256`
+    and EAT's whole design target chunky weight tensors, not
+    scale/zero-point arrays.
+  - `refresh_shadow_pool_selection()` — recomputes selection from
+    current EAT hotness and reloads the pool if it changed. Deliberately
+    **not** wired to any automatic trigger: doing that without knowing
+    real `promote()`/`evict()` latency (sub-goal 4, unmeasured) risks a
+    promote/evict storm on every call — exactly the cost that sub-goal
+    is supposed to quantify first, not assume away.
+
+### Deliberately NOT touched: the Marlin path (path 2)
+
+`_build_marlin_shadow_pool()`/`_PinnedMarlinExperts` — the path the
+*actual* validated checkpoint uses (`casperhansen/mixtral-instruct-awq`,
+Marlin-packed) — still does its direct `.to(device)` pinning, unchanged.
+Two reasons: it's the most fragile mechanism in this file (a real CUDA
+allocator fragmentation hang was found and fixed there on 2026-08-10, see
+that entry — not a place to introduce unverified new code paths without
+hardware to test against), and it's the path the already-published
+72.28%/72.3% results depend on — zero appetite to risk that number on
+code nobody's run yet. Expert *selection* upstream of it is still
+EAT-driven when wired; only this path's own GPU transfer stays as-is.
+Natural next increment once the AWQ path is confirmed working on the pod.
+
+### Verification split, stated the same way every other claim in this
+### project has been
+
+**Real, run, passing (91 passed / 18 skipped, zero failures/errors,
+`PYTHONPATH=src python3 -m pytest tests/`):**
+- `EAT.hottest_candidates()` — 4 new tests (ranking, tie-break by
+  recency, tier isolation, empty tier).
+- `TierManager.promote_live_tensor()` — 5 new tests
+  (`@pytest.mark.gpu`, skip cleanly here with no CUDA, same as all
+  existing GPU-marked tests; will run for real on the pod).
+- `TierManager.eat` property — 1 new test.
+- `GCSGWorker` M1/M2 wiring logic — 13 new tests, all CPU-only (real
+  `TierManager`/`EAT` instances — constructing `TierManager` only needs
+  torch *importable*, not CUDA, same reason the pre-existing non-gpu-marked
+  `TestTierManager` class already does this in CI): selection
+  round-robin/hotness/cold-start/aggregation-across-layers/no-seed-fallback,
+  seeding idempotency, real per-token EAT traffic (including
+  independent-of-shadow-activation), `refresh_shadow_pool_selection()`'s
+  three branches.
+- Along the way, found and fixed a **real pre-existing latent bug**,
+  unrelated to this feature except that it's what exposed it:
+  `GCSGWorker.__getattr__` delegates unknown attributes to `self._base`
+  unconditionally — on a worker built via `GCSGWorker.__new__()` (the
+  established test pattern in this file, bypassing `__init__()`'s vLLM
+  import) with `_base` itself never set, any missing-attribute access
+  recursed into `RecursionError` instead of a clean `AttributeError`.
+  Existing tests never happened to trigger it; the new `_tier_manager`
+  read in `_evaluate_gcsg_for_rows()` did. Fixed with an explicit `_base`
+  presence check via `__dict__` (bypasses `__getattr__` for the check
+  itself) before delegating — genuine robustness fix, not just a
+  workaround for my own test.
+
+**NOT run on real hardware (no GPU in this environment) — first things
+to check on the pod, in rough priority order:**
+1. `asyncio.run()` inside `_promote_module_via_tier_manager()`, called
+   from `load_model()` (sync, inside a real vLLM worker process) — should
+   be safe (no event loop already running there, per the same
+   `GPUExecutor` init_device/load_model sequencing already verified for
+   this file, 2026-08-09), but that's inference from a related fact, not
+   a direct check of *this* bridging.
+2. The real `.to('cuda')`/`pin_memory()` transfer end-to-end through
+   `TierManager.promote_live_tensor()` on the AWQ path against the real
+   checkpoint (only unit-tested with fakes/CPU tensors here).
+3. Whether a real per-layer AWQ expert's dominant parameter actually fits
+   under `SHARD_SIZE_BYTES` (256MB) — `EAT.insert()` raises `ValueError`
+   if not; `_pin_awq_expert_to_gpu()` already catches and excludes that
+   expert_id per its pre-existing degrade-safely contract, so a failure
+   here is informative, not a crash, but the actual byte size on the real
+   checkpoint is unknown until measured.
+4. A real MMLU comparison run with `tier_manager` wired, once 1-3 hold,
+   against today's 72.28%/72.3% baseline — same discipline as every other
+   number in this project, not claimed until measured.
+
+### Not yet done
+
+- Sub-goals 3 (integrated-path MMLU rerun), 4 (promote/evict latency
+  measurement — needed before `refresh_shadow_pool_selection()` can be
+  wired to fire automatically), 5 (issue #1/#2/#4 depend on real EAT
+  traffic existing under load, which this now provides but hasn't yet
+  been exercised that way), 6 (path 1 parity) — all still open.
+- Marlin path (path 2) TierManager wiring — deferred, see above.
+- Everything already queued from prior entries (Dockerfile unification,
+  corrected-image GHCR publish — now lower priority per today's
+  clarification that the other session updates code directly on the pod).
+
+---
+
 ## 2026-08-12 — Tekniska, continued: independent verification of the archived Sprint 4 data — correlation refines to r=0.993, plus a new micro-slowdown observation
 
 Cross-checked every headline number in `LogBook_20260812_1344/` against the

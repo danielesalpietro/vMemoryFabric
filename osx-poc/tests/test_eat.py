@@ -167,6 +167,39 @@ class TestEAT:
         candidates = eat.eviction_candidates(Tier.DDR4, n=2)
         assert [c.expert_id for c in candidates] == [0, 2]
 
+    def test_hottest_candidates_by_access_count(self, eat):
+        eat.insert(expert_id=0, shard_idx=0, tier=Tier.DDR4)
+        eat.insert(expert_id=1, shard_idx=0, tier=Tier.DDR4)
+        eat.insert(expert_id=2, shard_idx=0, tier=Tier.DDR4)
+
+        eat.access(expert_id=1, shard_idx=0)
+        eat.access(expert_id=1, shard_idx=0)
+        eat.access(expert_id=2, shard_idx=0)
+
+        candidates = eat.hottest_candidates(Tier.DDR4, n=2)
+        assert [c.expert_id for c in candidates] == [1, 2]
+
+    def test_hottest_candidates_tie_break_by_recency(self, eat):
+        eat.insert(expert_id=0, shard_idx=0, tier=Tier.DDR4)
+        eat.insert(expert_id=1, shard_idx=0, tier=Tier.DDR4)
+
+        eat.access(expert_id=0, shard_idx=0)   # stesso access_count (1) per entrambi...
+        eat.access(expert_id=1, shard_idx=0)   # ...ma expert 1 acceduto più di recente
+
+        candidates = eat.hottest_candidates(Tier.DDR4, n=2)
+        assert [c.expert_id for c in candidates] == [1, 0]
+
+    def test_hottest_candidates_ignores_other_tiers(self, eat):
+        eat.insert(expert_id=0, shard_idx=0, tier=Tier.VRAM)
+        eat.insert(expert_id=1, shard_idx=0, tier=Tier.DDR4)
+        eat.access(expert_id=0, shard_idx=0)
+
+        candidates = eat.hottest_candidates(Tier.DDR4, n=5)
+        assert [c.expert_id for c in candidates] == [1]
+
+    def test_hottest_candidates_empty_tier(self, eat):
+        assert eat.hottest_candidates(Tier.VRAM, n=5) == []
+
     def test_len_empty(self, eat):
         assert len(eat) == 0   # dict vuoto
 

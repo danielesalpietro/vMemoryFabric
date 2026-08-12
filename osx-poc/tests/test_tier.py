@@ -217,6 +217,12 @@ class TestTierManager:
             await manager.prefetch([(0, 0), (0, 1)])  # nessuno presente in EAT
         assert caplog.text.count("prefetch fallito") == 2
 
+    def test_eat_property_exposes_underlying_instance(self, manager):
+        """eat (2026-08-12, issue #17) espone la stessa istanza passata al
+        costruttore, non una copia — stesso pattern/contratto di
+        ExpertAccessTable.slab."""
+        assert manager.eat is manager._eat
+
 
 @pytest.mark.gpu
 class TestTierManagerGPU:
@@ -289,6 +295,53 @@ class TestTierManagerGPU:
         evicted = await manager.evict_to_free_vram(target_free_bytes=target)
         assert len(evicted) >= 1
         assert manager._eat.lookup(3, 0).tier == Tier.DDR4
+
+    # ── promote_live_tensor (2026-08-12, issue #17) ──────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_promote_live_tensor_seeds_eat_and_promotes(self, manager):
+        data = np.arange(256, dtype=np.uint8)
+        tensor = await manager.promote_live_tensor(expert_id=5, shard_idx=0, cpu_data=data)
+        assert tensor.is_cuda
+        entry = manager._eat.lookup(5, 0)
+        assert entry is not None
+        assert entry.tier == Tier.VRAM
+        np.testing.assert_array_equal(manager._gpu.to_ddr4(tensor), data)
+
+    @pytest.mark.asyncio
+    async def test_promote_live_tensor_idempotent(self, manager):
+        data = np.arange(128, dtype=np.uint8)
+        first = await manager.promote_live_tensor(expert_id=6, shard_idx=0, cpu_data=data)
+        second = await manager.promote_live_tensor(expert_id=6, shard_idx=0, cpu_data=data)
+        assert first is second   # no ri-transfer, stesso tensore ritornato
+
+    @pytest.mark.asyncio
+    async def test_promote_live_tensor_accepts_cpu_torch_tensor(self, manager):
+        import torch
+        data = torch.arange(64, dtype=torch.uint8)
+        tensor = await manager.promote_live_tensor(expert_id=7, shard_idx=0, cpu_data=data)
+        assert tensor.is_cuda
+        assert tensor.shape == data.shape
+
+    @pytest.mark.asyncio
+    async def test_promote_live_tensor_wrong_existing_tier_raises(self, manager):
+        manager._eat.insert(expert_id=8, shard_idx=0, tier=Tier.NVME)
+        with pytest.raises(ValueError):
+            await manager.promote_live_tensor(
+                expert_id=8, shard_idx=0, cpu_data=np.zeros(8, dtype=np.uint8),
+            )
+
+    @pytest.mark.asyncio
+    async def test_promote_live_tensor_with_pin_true(self, manager):
+        """pin=True — verificato sicuro dal soak test 2026-08-12 (LOGBOOK.md),
+        qui solo che il flag non rompa il transfer e produca lo stesso
+        risultato numerico di pin=False."""
+        data = np.arange(256, dtype=np.uint8)
+        tensor = await manager.promote_live_tensor(
+            expert_id=9, shard_idx=0, cpu_data=data, pin=True,
+        )
+        assert tensor.is_cuda
+        np.testing.assert_array_equal(manager._gpu.to_ddr4(tensor), data)
 
 
 # ── Integration: EAT ↔ Tier Manager ──────────────────────────────────────────
