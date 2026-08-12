@@ -1,0 +1,63 @@
+[T+   0.0s] Loading cais/mmlu (all subjects, dev + test splits)...
+Downloading readme: 0.00B [00:00, ?B/s]Downloading readme: 53.2kB [00:00, 80.5MB/s]
+Downloading metadata: 0.00B [00:00, ?B/s]Downloading metadata: 138kB [00:00, 105MB/s]
+Downloading data:   0%|          | 0.00/3.50M [00:00<?, ?B/s]Downloading data: 100%|██████████| 3.50M/3.50M [00:00<00:00, 5.94MB/s]Downloading data: 100%|██████████| 3.50M/3.50M [00:00<00:00, 5.91MB/s]
+Downloading data:   0%|          | 0.00/408k [00:00<?, ?B/s]Downloading data: 100%|██████████| 408k/408k [00:00<00:00, 1.08MB/s]Downloading data: 100%|██████████| 408k/408k [00:00<00:00, 1.07MB/s]
+Downloading data:   0%|          | 0.00/76.5k [00:00<?, ?B/s]Downloading data: 100%|██████████| 76.5k/76.5k [00:00<00:00, 207kB/s]Downloading data: 100%|██████████| 76.5k/76.5k [00:00<00:00, 206kB/s]
+Downloading data:   0%|          | 0.00/47.5M [00:00<?, ?B/s]Downloading data:  22%|██▏       | 10.5M/47.5M [00:01<00:03, 9.29MB/s]Downloading data:  44%|████▍     | 21.0M/47.5M [00:02<00:03, 8.25MB/s]Downloading data:  66%|██████▌   | 31.5M/47.5M [00:04<00:02, 7.51MB/s]Downloading data:  88%|████████▊ | 41.9M/47.5M [00:05<00:00, 6.94MB/s]Downloading data: 100%|██████████| 47.5M/47.5M [00:05<00:00, 8.28MB/s]Downloading data: 100%|██████████| 47.5M/47.5M [00:05<00:00, 7.95MB/s]
+Generating test split:   0%|          | 0/14042 [00:00<?, ? examples/s]Generating test split: 100%|██████████| 14042/14042 [00:00<00:00, 488005.57 examples/s]
+Generating validation split:   0%|          | 0/1531 [00:00<?, ? examples/s]Generating validation split: 100%|██████████| 1531/1531 [00:00<00:00, 385720.77 examples/s]
+Generating dev split:   0%|          | 0/285 [00:00<?, ? examples/s]Generating dev split: 100%|██████████| 285/285 [00:00<00:00, 161428.31 examples/s]
+Generating auxiliary_train split:   0%|          | 0/99842 [00:00<?, ? examples/s]Generating auxiliary_train split:  20%|██        | 20000/99842 [00:00<00:00, 189016.48 examples/s]Generating auxiliary_train split:  46%|████▌     | 46000/99842 [00:00<00:00, 224051.98 examples/s]Generating auxiliary_train split:  77%|███████▋  | 77000/99842 [00:00<00:00, 244584.35 examples/s]Generating auxiliary_train split: 100%|██████████| 99842/99842 [00:00<00:00, 263178.28 examples/s]
+[T+  10.6s] Built 570 prompts across 57 subjects (10/subject cap).
+[T+  10.6s] Fetta [32:64] — 32 prompt (--prompt-start/--max-prompts).
+[T+  10.6s] --wire-tier-manager: TierManager/EAT wired via GCSGWorker.configure_tier_manager().
+[T+  10.6s] Loading /data/nvme/models/mixtral-instruct-awq via GCSGWorker (shadow execution active — issues #10/#16), quantization=awq_marlin, wire_tier_manager=True...
+INFO 08-12 22:49:23 config.py:280] Overriding HF config with {'head_dim': 128}
+`torch_dtype` is deprecated! Use `dtype` instead!
+INFO 08-12 22:49:31 config.py:510] This model supports multiple tasks: {'reward', 'embed', 'classify', 'generate', 'score'}. Defaulting to 'generate'.
+INFO 08-12 22:49:32 awq_marlin.py:109] The model is convertible to awq_marlin during runtime. Using awq_marlin kernel.
+WARNING 08-12 22:49:32 cuda.py:98] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+WARNING 08-12 22:49:32 config.py:642] Async output processing is not supported on the current platform type cuda.
+INFO 08-12 22:49:32 llm_engine.py:234] Initializing an LLM engine (v0.6.6.post1) with config: model='/data/nvme/models/mixtral-instruct-awq', speculative_config=None, tokenizer='/data/nvme/models/mixtral-instruct-awq', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=3328, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=awq_marlin, enforce_eager=True, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=/data/nvme/models/mixtral-instruct-awq, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=False, chunked_prefill_enabled=False, use_async_output_proc=False, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"candidate_compile_sizes":[],"compile_sizes":[],"capture_sizes":[],"max_capture_size":0}, use_cached_outputs=False, 
+INFO 08-12 22:49:32 selector.py:120] Using Flash Attention backend.
+INFO 08-12 22:49:33 model_runner.py:1094] Starting to load model /data/nvme/models/mixtral-instruct-awq...
+Loading safetensors checkpoint shards:   0% Completed | 0/3 [00:00<?, ?it/s]
+[T+  30.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+Loading safetensors checkpoint shards:  33% Completed | 1/3 [00:14<00:28, 14.20s/it]
+[T+  60.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+Loading safetensors checkpoint shards:  67% Completed | 2/3 [00:47<00:25, 25.23s/it]
+[T+  90.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [01:29<00:00, 33.04s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [01:29<00:00, 29.83s/it]
+
+[T+ 120.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+INFO 08-12 22:51:10 model_runner.py:1099] Loading model weights took 18.8251 GB
+WARNING 08-12 22:51:11 fused_moe.py:374] Using default MoE config. Performance might be sub-optimal! Config file not found at /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/configs/E=8,N=8192,device_name=NVIDIA_GeForce_RTX_3090.json
+INFO 08-12 22:51:14 worker.py:241] Memory profiling takes 2.52 seconds
+INFO 08-12 22:51:14 worker.py:241] the current vLLM instance can use total_gpu_memory (23.56GiB) x gpu_memory_utilization (0.95) = 22.38GiB
+INFO 08-12 22:51:14 worker.py:241] model weights take 18.83GiB; non_torch_memory takes 1.28GiB; PyTorch activation peak memory takes 1.55GiB; the rest of the memory reserved for KV Cache is 0.72GiB.
+INFO 08-12 22:51:14 gpu_executor.py:76] # GPU blocks: 369, # CPU blocks: 2048
+INFO 08-12 22:51:14 gpu_executor.py:80] Maximum concurrency for 3328 tokens per request: 1.77x
+INFO 08-12 22:51:17 llm_engine.py:431] init engine (profile, create kv cache, warmup model) took 6.17 seconds
+[T+ 128.4s] LLM ready.
+[T+ 128.4s] Answer-letter token ids: {'A': 330, 'B': 365, 'C': 334, 'D': 384}
+[T+ 128.4s] Running generate() on all prompts (max_tokens=1, logprobs=20)...
+Processed prompts:   0%|          | 0/32 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]WARNING 08-12 22:51:17 fused_moe.py:374] Using default MoE config. Performance might be sub-optimal! Config file not found at /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/configs/E=2,N=8192,device_name=NVIDIA_GeForce_RTX_3090.json
+Processed prompts:   3%|▎         | 1/32 [00:03<02:01,  3.91s/it, est. speed input: 153.33 toks/s, output: 0.26 toks/s]Processed prompts:  19%|█▉        | 6/32 [00:07<00:30,  1.16s/it, est. speed input: 484.00 toks/s, output: 0.77 toks/s]Processed prompts:  38%|███▊      | 12/32 [00:11<00:16,  1.22it/s, est. speed input: 600.70 toks/s, output: 1.06 toks/s]Processed prompts:  56%|█████▋    | 18/32 [00:15<00:10,  1.36it/s, est. speed input: 640.99 toks/s, output: 1.18 toks/s]Processed prompts:  75%|███████▌  | 24/32 [00:19<00:05,  1.43it/s, est. speed input: 676.38 toks/s, output: 1.26 toks/s]Processed prompts:  94%|█████████▍| 30/32 [00:21<00:01,  1.70it/s, est. speed input: 754.78 toks/s, output: 1.40 toks/s]Processed prompts: 100%|██████████| 32/32 [00:21<00:00,  1.49it/s, est. speed input: 811.72 toks/s, output: 1.49 toks/s]
+[T+ 149.9s] generate() completed.
+
+--- MMLU 5-shot risultati (GCSGWorker, shadow execution attiva, 32 domande) ---
+Accuratezza complessiva: 75.0% (24/32)
+Non risolte (nessuna delle 4 lettere nei top-20 logprob): 0
+
+Per soggetto (peggiori 10):
+  college_chemistry: 50.0% (4 domande)
+  clinical_knowledge: 70.0% (10 domande)
+  business_ethics: 75.0% (8 domande)
+  college_biology: 90.0% (10 domande)
+
+GCSGGuard stats: {'total_tokens_evaluated': 556480, 'shadow_activations': 25111, 'activation_rate': 0.045124712478435886, 'contamination_rate_aggregate': 0.045124712478435886, 'tracked_requests': 32, 'shadow_pool_size': 2, 'thresholds': {'theta_gate': 0.85, 'theta_entropy': 0.7, 'theta_contamination': 0.05}}
+
+Shadow execution DAVVERO attiva (25111 attivazioni, activation_rate=4.5%) — issues #10/#16 chiuse per questo path. Confronto contro la baseline hook-only (72.3%, 412/570, LOGBOOK 2026-08-09 — stesso identico protocollo ma su un subset diverso se total != 570, il confronto valido richiede lo stesso n): questa run=75.0%.
+[rank0]:[W812 22:51:39.235321100 ProcessGroupNCCL.cpp:1250] Warning: WARNING: process group has NOT been destroyed before we destruct ProcessGroupNCCL. On normal program exit, the application should call destroy_process_group to ensure that any pending NCCL operations have finished in this process. In rare cases this process can exit before this point and block the progress of another member of the process group. This constraint has always been present,  but this warning has only been added since PyTorch 2.4 (function operator())

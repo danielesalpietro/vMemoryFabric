@@ -5,6 +5,69 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-13 — Tekniska, continued: Marlin path MMLU rerun on the 3090, exact aggregate match — and a correction to the "it's the AWQ/awq_marlin kernel switch" hypothesis
+
+Back on RTX 3090-class hardware (`eu-cz-1` MooseFS backend — same volume as
+the original pod, checkpoint already cached, no download needed) for the
+one remaining real-data question: does the Marlin path (path 2), now
+wired through TierManager (`b9871cf`/`6727a04`), hold accuracy when
+actually run against MMLU, not just the mechanical smoke-test checklist.
+
+### Step 1 — fetta1 `[32:64)`: exact per-subject match
+
+`--wire-tier-manager --quantization awq_marlin`: **24/32 (75.0%)**,
+identical per-subject breakdown to the earlier AWQ+TierManager run on
+this same slice (`business_ethics` 6/8, `clinical_knowledge` 7/10,
+`college_biology` 9/10, `college_chemistry` 2/4). `shadow_activations`
+25,111 vs. AWQ's 25,108 — 0.01% apart.
+
+### Step 2 — full 570-question single-shot: exact aggregate match, small per-subject divergence
+
+**412/570 (72.3%)** — matches the historical single-shot Marlin baseline
+number exactly. `shadow_activations` 562,350, within the same tight band
+as every other recorded run today (562,338/562,354/562,380/562,403, all
+inside 0.02% of each other).
+
+Diffed per-subject against the closer real-Linux baseline
+(`LogBook_20260812_1344/mmlu_sliced_run/mmlu_results.jsonl`, 412/570,
+72.28%) anyway, on principle, rather than stopping at the aggregate
+match:
+
+```
+college_physics:              baseline 5/10 vs today 4/10
+electrical_engineering:       baseline 3/10 vs today 4/10
+high_school_macroeconomics:   baseline 8/10 vs today 7/10
+machine_learning:             baseline 5/10 vs today 6/10
+```
+
+**Correcting the prior entry's hypothesis.** The 2026-08-12 single-shot
+AWQ+TierManager entry found a similar 4-5-subject, ~0.7%, net-near-zero
+divergence against baseline and guessed the cause was the
+`awq`-vs-`awq_marlin` kernel switch (forced by `--wire-tier-manager` on
+that path). **This run uses the identical `awq_marlin` kernel as the
+baseline it's compared against, and shows the same class of divergence
+anyway** — same magnitude (4 subjects, 1 question each, net ~0), same
+overall accuracy match. That rules out the kernel-switch hypothesis as
+the (sole) explanation. More likely: run-topology (single continuous
+process vs. 18 separate sliced processes) or ordinary floating-point
+non-determinism at this scale, independent of quantization choice. Not
+root-caused further — the accuracy-parity question both runs exist to
+answer is answered either way (aggregate matches, divergence is small
+and consistent in magnitude across both quantization paths).
+
+### Files brought back (`osx-poc/marlin_mmlu_20260812/`)
+
+`mmlu_marlin_fetta1_...jsonl`, `mmlu_marlin_singleshot_...jsonl`, and
+both raw run logs.
+
+### Sprint 4 status
+
+Sub-goals 1, 3, 4, 6 done and hardware-verified (both AWQ and Marlin
+paths now have real MMLU numbers, not just mechanical checklists). Still
+open: sub-goal 5 (EAT contention analysis under real traffic).
+
+---
+
 ## 2026-08-12/13 — Tekniska, continued: sub-goal 7 (close-out) done — Sprint 4 (Tekniska) complete, all 7 sub-goals closed
 
 Last item: regenerate the GCSG report's `.docx` (EN/IT) exports, which had
