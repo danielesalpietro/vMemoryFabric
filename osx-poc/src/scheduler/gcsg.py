@@ -1069,6 +1069,23 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                     experts_module = layer.block_sparse_moe.experts
                     w13 = experts_module.w13_weight.data[expert_id]   # (2*intermediate, hidden)
                     w2 = experts_module.w2_weight.data[expert_id]     # (hidden, intermediate)
+                    # Bug reale trovato 2026-08-12 (issue #17, sub-goal 6, prima
+                    # esecuzione mai fatta sotto vero offload): a differenza dei
+                    # path 2/3, questo loop non pinnava mai esplicitamente in GPU
+                    # — path 1 era finora sempre stato verificato solo sul modello
+                    # tiny non offloaded, dove w13/w2 erano già CUDA-resident per
+                    # costruzione. Sotto cpu_offload_gb reale queste slice restano
+                    # CPU-resident se la layer è offloaded, _quantize_int4() le
+                    # quantizza sul posto (int8 su CPU) e _ShadowExpertINT4 crasha
+                    # al primo generate() reale: "Expected all tensors to be on
+                    # the same device, cuda:0 and cpu" nel matmul hidden_states @
+                    # w13.T. Stesso pattern di device-check-poi-.to('cuda') già
+                    # usato da _pin_awq_expert_to_gpu()/_build_marlin_shadow_pool()
+                    # per i path 2/3 quando self._tier_manager è None.
+                    if w13.device.type != "cuda":
+                        w13 = w13.to("cuda")
+                    if w2.device.type != "cuda":
+                        w2 = w2.to("cuda")
                     per_layer_w13.append(_quantize_int4(w13))
                     per_layer_w2.append(_quantize_int4(w2))
                 self._shadow_pool[expert_id] = _ShadowExpertINT4(per_layer_w13, per_layer_w2)

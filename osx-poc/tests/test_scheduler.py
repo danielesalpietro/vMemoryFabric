@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 from scheduler import PTPEPClassifier, DomainLabel, GCSGGuard, AERManager
 from scheduler.ptpep import PTPEPPrediction
+from scheduler import gcsg as gcsg_module
 from scheduler.gcsg import GatingContext, ShadowExecutionResult, GCSGWorker
 from eat import ExpertAccessTable, Tier
 from tier import TierManager
@@ -345,6 +346,61 @@ class TestGCSG:
         worker._load_shadow_pool()   # non deve sollevare
 
         assert worker._shadow_pool == {}
+
+    def test_load_shadow_pool_moves_offloaded_fused_weights_to_gpu_before_quantizing(
+        self, monkeypatch,
+    ):
+        """Bug reale 2026-08-12 (issue #17, sub-goal 6, prima esecuzione mai
+        fatta sotto vero offload — A100, cpu_offload_gb=28): a differenza dei
+        path 2/3, il loop path 1 (FusedMoE fp16 grezzo, non Marlin/AWQ) non
+        pinnava mai esplicitamente w13/w2 in GPU prima di _quantize_int4() —
+        path 1 era sempre stato verificato solo sul modello tiny non
+        offloaded, dove le slice erano già CUDA-resident per costruzione.
+        Sotto offload reale restavano CPU-resident, quantizzate sul posto, e
+        _ShadowExpertINT4 crashava al primo generate() reale: "Expected all
+        tensors to be on the same device, cuda:0 and cpu" nel matmul
+        hidden_states @ w13.T. Verifica solo la decisione di device (.to
+        ('cuda') quando non già CUDA) prima della quantizzazione — la
+        correttezza numerica di _quantize_int4 stessa è verificata altrove."""
+        seen_devices = []
+
+        def _fake_quantize(weight):
+            seen_devices.append(weight.device.type)
+            return weight, 1.0
+
+        monkeypatch.setattr(gcsg_module, "_quantize_int4", _fake_quantize)
+
+        class _FakeOffloadedTensor:
+            def __init__(self, device_type):
+                self.device = SimpleNamespace(type=device_type)
+
+            def to(self, device):
+                assert device == "cuda"
+                return _FakeOffloadedTensor("cuda")
+
+        class _FakeWeightData:
+            def __getitem__(self, expert_id):
+                return _FakeOffloadedTensor("cpu")   # offloaded, come sul checkpoint reale
+
+        class _FakeFusedExperts:
+            num_experts = 8   # hasattr(..., "num_experts") -> is_fused = True
+
+            def __init__(self):
+                self.w13_weight = SimpleNamespace(data=_FakeWeightData())
+                self.w2_weight = SimpleNamespace(data=_FakeWeightData())
+            # niente w13_qweight -> is_marlin_packed = False, dispatch a path 1
+
+        layers = [
+            SimpleNamespace(block_sparse_moe=SimpleNamespace(experts=_FakeFusedExperts()))
+            for _ in range(2)
+        ]
+        worker = self._make_worker(layers, shadow_pool_size=2)
+
+        worker._load_shadow_pool()
+
+        assert set(worker._shadow_pool.keys()) == {0, 1}
+        assert seen_devices, "_quantize_int4 non è mai stato chiamato"
+        assert all(d == "cuda" for d in seen_devices), seen_devices
 
     def test_evaluate_gcsg_for_rows_passes_2d_hidden_states_slice(self):
         """Bug reale 2026-08-10, trovato dal primo run MMLU con shadow
