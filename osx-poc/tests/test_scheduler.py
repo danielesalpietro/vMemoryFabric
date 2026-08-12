@@ -642,6 +642,44 @@ class TestGCSGTierManagerWiring:
         assert calls == []
 
 
+# ── Marlin path TierManager wiring (2026-08-12, issue #17) ────────────────────
+#
+# Solo _marlin_pool_shard_key() è pura logica testabile qui — il resto
+# (_build_marlin_tensor_promoter()'s actual transfer, _PinnedMarlinExperts
+# con tensor_promoter reale) richiede torch CUDA vero (GPUTransfer.to_vram()
+# dentro TierManager.promote_live_tensor()), stesso motivo per cui
+# _promote_module_via_tier_manager() del path AWQ non ha un test diretto
+# sopra — verificato su hardware reale (checklist), non qui.
+
+class TestMarlinPoolShardKey:
+
+    def test_deterministic(self):
+        k1 = GCSGWorker._marlin_pool_shard_key(5, [0, 1])
+        k2 = GCSGWorker._marlin_pool_shard_key(5, [0, 1])
+        assert k1 == k2
+
+    def test_order_independent(self):
+        """La composizione del pool conta, non l'ordine in cui è passata
+        — sorted() dentro la funzione."""
+        k1 = GCSGWorker._marlin_pool_shard_key(5, [0, 1])
+        k2 = GCSGWorker._marlin_pool_shard_key(5, [1, 0])
+        assert k1 == k2
+
+    def test_differs_by_layer(self):
+        k1 = GCSGWorker._marlin_pool_shard_key(5, [0, 1])
+        k2 = GCSGWorker._marlin_pool_shard_key(6, [0, 1])
+        assert k1 != k2
+
+    def test_differs_by_pool_composition(self):
+        """Il motivo per cui questa funzione esiste: una composizione
+        diversa allo stesso layer non deve produrre la stessa chiave —
+        vedi la docstring del metodo sul bug di staleness (VRAM di una
+        composizione precedente riusata per errore) che questo evita."""
+        k1 = GCSGWorker._marlin_pool_shard_key(5, [0, 1])
+        k2 = GCSGWorker._marlin_pool_shard_key(5, [2, 6])
+        assert k1 != k2
+
+
 # ── AERManager ────────────────────────────────────────────────────────────────
 
 class TestAER:

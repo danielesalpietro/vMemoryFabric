@@ -5,6 +5,97 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: Marlin path (path 2) wired through TierManager — implemented, unit-tested, NOT yet run on real hardware
+
+Second decision agreed with the user in the same batch as issue #1
+("Marlin path — wire ora"): now that the AWQ path has passed the full
+hardware checklist twice with perfect determinism, wire the path every
+published MMLU number actually uses.
+
+### The structural problem this path has that AWQ doesn't
+
+`_PinnedMarlinExperts` builds ONE proxy per layer shared by the WHOLE
+shadow pool (all `expert_ids` together) — not one per expert, explicitly
+to avoid doubling VRAM cost (see its own docstring). That means there's
+no single real `expert_id` to key an EAT entry on without either
+fabricating false per-expert semantics for pooled data, or doubling the
+proxy count (undoing the exact optimization that avoided the 2026-08-10
+CUDA-allocator-fragmentation hang this class is named for in its own
+`ATTENZIONE` docstring — not a path to touch carelessly).
+
+### Fix: sentinel key + composition-aware shard_idx
+
+- **`_PinnedMarlinExperts.__init__`** gained an optional `tensor_promoter`
+  callable — `None` (default) is byte-identical to the pre-existing
+  `.to(device)` behavior, zero risk to the already-validated path.
+- **`GCSGWorker._build_marlin_tensor_promoter(layer_id, expert_ids)`**
+  builds that callable when `self._tier_manager` is wired: routes ONE
+  dominant tensor per layer (`w13_qweight`) through
+  `TierManager.promote_live_tensor()`, the other five
+  (`w2_qweight`/`w13_scales`/`w2_scales`/`w13_qzeros`/`w2_qzeros`) move
+  with the same pinning decision but aren't tracked individually in EAT
+  — same "dominant tensor only" pattern already used for the AWQ path,
+  same reasoning (`SHARD_SIZE_MB`/EAT's whole design targets chunky
+  weight tensors, not scale/zero-point arrays).
+- **EAT key**: `expert_id=-1` (sentinel — never a real expert_id, always
+  ≥0), `shard_idx` = `_marlin_pool_shard_key(layer_id, expert_ids)` —
+  encodes BOTH `layer_id` and the pool's composition
+  (`hash(tuple(sorted(expert_ids)))`), not just `layer_id`. Caught this
+  before writing it, not after: `promote_live_tensor()` is idempotent by
+  key (correct for AWQ's real per-expert keys, where a given expert_id
+  always owns the same data) — a key that varied only by `layer_id`
+  would let a future `refresh_shadow_pool_selection()` call that changes
+  the pool's composition silently reuse a *stale* VRAM tensor from the
+  previous composition at the same layer, since the same key would now
+  represent physically different data. `refresh_shadow_pool_selection()`
+  isn't auto-triggered yet (sub-goal 4 still pending on that), so this
+  wouldn't have bitten today's testing — but it would have on the very
+  first real use of that method with Marlin wired, silently, without an
+  error. Fixed the key design instead of documenting the gap and moving
+  on.
+
+### Verified here (unit tests, no GPU needed)
+
+4 new tests for `_marlin_pool_shard_key()` — deterministic, order-independent
+(pool composition, not list order, is what should matter — `sorted()`
+inside the function), differs by layer, differs by pool composition (the
+actual property the whole design exists for). 95 passed / 18 skipped
+total (up from 91 after the Bloom filter removal above — 4 net new).
+
+**Deliberately not unit-tested**: `_build_marlin_tensor_promoter()`'s
+actual transfer behavior — same reason `_promote_module_via_tier_manager()`
+(AWQ path) never got one either: it needs real `torch.Tensor.pin_memory()`/
+`.to('cuda')` through `GPUTransfer.to_vram()`, not fakeable without CUDA.
+Hardware verification is the checklist script's job, extended for this.
+
+### `scripts/smoke_test_gcsg_tier_manager.py` extended for Marlin too
+
+Added `--quantization {awq,awq_marlin}` (was AWQ-only, hardcoded).
+Fixed a real bug in the checklist itself before it could produce a false
+failure: item 2's VRAM-promotion check only looked up EAT entries by
+real `shadow_expert_ids` — which is correct for AWQ but would find
+*nothing* for Marlin, since Marlin's promoted entries live under the
+`expert_id=-1` sentinel, not real expert IDs. Added a second check for
+sentinel entries so the same script script correctly validates either
+path instead of reporting AWQ-shaped success criteria as a failure on
+Marlin. Caught this reading the script against the new code before
+running anything, not after a false-negative on the pod.
+
+### Not yet done
+
+- Running `smoke_test_gcsg_tier_manager.py --quantization awq_marlin` on
+  real hardware — nothing in this entry has touched a GPU. This is now
+  the priority item for the next pod/Z8 session before trusting Marlin's
+  transfer the way AWQ's is trusted.
+- A real MMLU comparison on the Marlin+TierManager path — the existing
+  72.28%/72.3%/411-570 numbers are all either pre-TierManager Marlin or
+  post-TierManager AWQ, never both integration and the Marlin path at
+  once.
+- Sub-goal 6 (path 1 parity, design-only so far), issue #2 (contention,
+  still genuinely open), sub-goal 7 close-out.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: issue #1 decided and closed — Bloom filter removed from EAT entirely
 
 Discussed with the user rather than decided unilaterally: given #4's

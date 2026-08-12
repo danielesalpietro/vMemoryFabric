@@ -94,7 +94,7 @@ Hook vLLM — verificato contro il sorgente reale di vllm==0.6.6.post1
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import logging
 import time
 
@@ -527,9 +527,29 @@ class _PinnedMarlinExperts:
     osservato direttamente (nvidia-smi, log fermo). Questa classe resta
     corretta di per sé (verificata numericamente) — il bug era nel chiamarla
     per layer che non ne avevano bisogno.
+
+    Wiring TierManager (2026-08-12, issue #17): il `.to(device)` diretto
+    sopra descritto resta il default (`tensor_promoter=None`) — questa
+    classe non è stata riscritta, solo estesa con un hook opzionale
+    (vedi `__init__`) che GCSGWorker._build_marlin_shadow_pool() usa
+    quando `self._tier_manager` è wired. Deliberatamente conservativo
+    proprio per la storia di fragilità sopra: il path di default
+    (nessun tier_manager) è BYTE PER BYTE identico a prima di questa
+    estensione.
     """
 
-    def __init__(self, source_fused: Any, expert_ids: List[int]) -> None:
+    def __init__(
+        self, source_fused: Any, expert_ids: List[int],
+        tensor_promoter: Optional[Callable[[str, Any], Any]] = None,
+    ) -> None:
+        """tensor_promoter (2026-08-12, issue #17): se fornito, sostituisce
+        il `.to(device)` diretto per instradare il transfer attraverso
+        TierManager quando il GCSGWorker chiamante ha `_tier_manager`
+        wired — vedi GCSGWorker._build_marlin_tensor_promoter(). Firma
+        `(tensor_name, sliced_cpu_tensor) -> tensore GPU`. None
+        (default): comportamento invariato, `.to(device)` diretto come
+        prima di questa integrazione — zero rischio per il path già
+        validato dal report GCSG."""
         import torch
 
         device = torch.device("cuda")
@@ -547,7 +567,11 @@ class _PinnedMarlinExperts:
         for name in ("w13_qweight", "w2_qweight", "w13_scales",
                      "w2_scales", "w13_qzeros", "w2_qzeros"):
             source_tensor = getattr(source_fused, name).data
-            self.__dict__[name] = source_tensor[expert_ids].to(device)
+            sliced = source_tensor[expert_ids]
+            self.__dict__[name] = (
+                tensor_promoter(name, sliced) if tensor_promoter is not None
+                else sliced.to(device)
+            )
 
 
 class _MarlinFusedShadowExpert:
@@ -751,13 +775,16 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
           _evaluate_gcsg_for_rows(). Questa è la "traffico concorrente
           reale" di cui M1 (issue #1/#2/#4) ha bisogno per essere
           misurato, non più solo unit test sintetici.
-        - Il transfer GPU del path AWQ ModuleList (path 3) passa da
-          TierManager.promote_live_tensor() invece di un .to('cuda')
-          diretto — _promote_module_via_tier_manager(). Il path Marlin
-          (path 2, quello effettivamente usato dal checkpoint reale del
-          report GCSG) resta DELIBERATAMENTE non toccato in questa
-          integrazione — vedi la nota nel punto di chiamata in
-          _load_shadow_pool() per il perché.
+        - Il transfer GPU sia del path AWQ ModuleList (path 3,
+          _promote_module_via_tier_manager()) sia del path Marlin (path
+          2, quello effettivamente usato dal checkpoint reale del report
+          GCSG — _build_marlin_tensor_promoter()) passa da
+          TierManager.promote_live_tensor() invece di un .to(device)
+          diretto. Il path Marlin è stato wired più tardi, deliberatamente
+          dopo che il path AWQ era già stato verificato due volte su
+          hardware reale con determinismo perfetto — vedi la nota nel
+          punto di chiamata in _load_shadow_pool() e la docstring di
+          _build_marlin_shadow_pool() per la sequenza.
         - refresh_shadow_pool_selection() ricalcola/ricarica il pool da
           hotness aggiornata, ma non è agganciata a nessun trigger
           automatico — richiede prima il profiling di
@@ -1002,20 +1029,19 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
 
         if is_marlin_packed:
             # NOTA (2026-08-12, issue #17): il pinning GPU di questo path
-            # NON è stato instradato attraverso TierManager in questa
-            # integrazione, a differenza del path AWQ ModuleList sotto
-            # (_pin_awq_expert_to_gpu). Deliberato, non dimenticato: questo
-            # è il path effettivamente usato dal checkpoint reale del
-            # report GCSG (casperhansen/mixtral-instruct-awq, Marlin), il
-            # meccanismo di pinning più delicato del file (vedi ATTENZIONE
-            # nella docstring di _PinnedMarlinExperts — un hang reale da
-            # allocatore CUDA frammentato, 2026-08-10), e non verificabile
-            # qui senza GPU. Selezione expert_ids sopra (via
-            # _select_shadow_expert_ids) è comunque già EAT-driven quando
-            # tier_manager è wired — solo il transfer GPU di QUESTO path
-            # resta il .to(device) diretto pre-esistente. Prossimo
-            # incremento naturale una volta che il path AWQ è verificato
-            # su hardware reale.
+            # è stato lasciato .to(device) diretto per la maggior parte
+            # della giornata — il meccanismo di pinning più delicato del
+            # file (vedi ATTENZIONE nella docstring di _PinnedMarlinExperts
+            # — un hang reale da allocatore CUDA frammentato, 2026-08-10),
+            # e il path effettivamente usato dal checkpoint reale del
+            # report GCSG (casperhansen/mixtral-instruct-awq). Wired anche
+            # questo attraverso TierManager più tardi lo stesso giorno,
+            # deciso con l'utente solo DOPO che il path AWQ era stato
+            # verificato due volte su hardware reale con determinismo
+            # perfetto (411/570 identico byte-per-byte su due run) — vedi
+            # _build_marlin_shadow_pool()/_build_marlin_tensor_promoter()
+            # per il come. self._tier_manager is None (default):
+            # comportamento invariato, .to(device) diretto come sempre.
             marlin_pool = self._build_marlin_shadow_pool(layers, expert_ids)
             self._shadow_pool.update(marlin_pool)
             missing = [e for e in expert_ids if e not in marlin_pool]
@@ -1349,6 +1375,21 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         condivisi tra tutti gli expert_ids del pool — un fallimento
         parziale lascerebbe alcuni _MarlinFusedShadowExpert con layer
         mancanti in modo silenzioso).
+
+        Wiring TierManager (2026-08-12, issue #17 — deciso con l'utente
+        di procedere una volta che il path AWQ fosse stato verificato due
+        volte su hardware reale con determinismo perfetto): quando
+        self._tier_manager è wired, ogni _PinnedMarlinExperts costruito
+        qui riceve un tensor_promoter (vedi _build_marlin_tensor_promoter())
+        che instrada UN tensore dominante per layer (w13_qweight)
+        attraverso TierManager.promote_live_tensor() invece di un
+        .to(device) diretto — gli altri cinque tensori per layer si
+        muovono con la stessa decisione di pinning ma non tracciati
+        singolarmente in EAT, stesso principio già usato per il path AWQ
+        (_promote_module_via_tier_manager). self._tier_manager is None
+        (default): comportamento invariato, .to(device) diretto come
+        prima di questa integrazione — zero rischio per il path già
+        validato.
         """
         # entries_per_expert[expert_id][layer_id] = (fused, expert_id_in_fused, num_experts_in_fused)
         entries_per_expert: Dict[int, List[Optional[Tuple[Any, int, int]]]] = {
@@ -1367,7 +1408,11 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                 continue
 
             try:
-                proxy = _PinnedMarlinExperts(experts, expert_ids)
+                promoter = (
+                    self._build_marlin_tensor_promoter(layer_id, expert_ids)
+                    if getattr(self, "_tier_manager", None) is not None else None
+                )
+                proxy = _PinnedMarlinExperts(experts, expert_ids, tensor_promoter=promoter)
             except Exception as e:
                 log.warning(
                     "GCSG: impossibile pinnare gli expert Marlin %s (layer %d, "
@@ -1382,6 +1427,75 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
             expert_id: _MarlinFusedShadowExpert(entries)
             for expert_id, entries in entries_per_expert.items()
         }
+
+    def _build_marlin_tensor_promoter(
+        self, layer_id: int, expert_ids: List[int],
+    ) -> Callable[[str, Any], Any]:
+        """Costruisce la funzione di transfer che _PinnedMarlinExperts usa
+        al posto di `.to(device)` diretto quando self._tier_manager è
+        wired (2026-08-12, issue #17).
+
+        UN tensore dominante per layer (w13_qweight — il più grande, per
+        analogia con la scelta già fatta per il path AWQ) passa da
+        TierManager.promote_live_tensor(); gli altri cinque
+        (w2_qweight/w13_scales/w2_scales/w13_qzeros/w2_qzeros) si
+        muovono con la stessa decisione di pinning ma senza tracciamento
+        EAT individuale — stesso principio di
+        _promote_module_via_tier_manager() per il path AWQ, vedi la sua
+        docstring per il perché (SHARD_SIZE_MB e tutta la contabilità EAT
+        sono pensati per asset a grana di peso principale, non per array
+        di scale/zero-point).
+
+        Chiave EAT: expert_id=-1 (sentinella — mai un ID expert reale),
+        shard_idx = _marlin_pool_shard_key(layer_id, expert_ids), NON
+        solo layer_id — vedi la sua docstring per il perché quella
+        distinzione è necessaria qui e non lo è per il path AWQ (dove la
+        chiave è già per-singolo-expert, non condivisa da un pool).
+        """
+        import asyncio
+
+        pin = self._should_pin_transfers()
+        shard_idx = self._marlin_pool_shard_key(layer_id, expert_ids)
+        dominant_name = "w13_qweight"
+
+        def _promoter(name: str, cpu_slice: Any) -> Any:
+            if name == dominant_name:
+                return asyncio.run(
+                    self._tier_manager.promote_live_tensor(
+                        expert_id=-1, shard_idx=shard_idx, cpu_data=cpu_slice, pin=pin,
+                    )
+                )
+            return cpu_slice.pin_memory().to("cuda", non_blocking=True) if pin else cpu_slice.to("cuda")
+
+        return _promoter
+
+    @staticmethod
+    def _marlin_pool_shard_key(layer_id: int, expert_ids: List[int]) -> int:
+        """Chiave shard_idx sentinella per la entry EAT del proxy Marlin
+        condiviso di un layer (2026-08-12, issue #17).
+
+        Dipende SIA da layer_id SIA dalla composizione del pool
+        (`hash(tuple(sorted(expert_ids)))`), non solo da layer_id: questo
+        proxy è condiviso da TUTTI gli expert_ids del pool insieme (mai
+        un proxy per singolo expert_id — raddoppierebbe il costo VRAM per
+        nulla, vedi _PinnedMarlinExperts). Se la chiave dipendesse solo
+        da layer_id, un refresh_shadow_pool_selection() che cambiasse la
+        composizione del pool per lo stesso layer riutilizzerebbe per
+        errore il tensore VRAM della composizione precedente —
+        promote_live_tensor() è idempotente per chiave by design (corretto
+        per il caso normale per-expert del path AWQ, dove ogni expert_id
+        ha sempre e solo i propri dati), pericoloso qui senza questo
+        accorgimento perché la STESSA chiave altrimenti rappresenterebbe
+        dati fisicamente diversi a seconda di quali expert_ids sono nel
+        pool in quel momento.
+
+        hash() su una tupla di int è deterministico entro lo stesso
+        processo — non soggetto a PYTHONHASHSEED, che randomizza solo
+        l'hashing di str/bytes, non di tuple di interi piccoli. Non serve
+        stabilità cross-processo: ogni processo GCSGWorker ha il proprio
+        TierManager/EAT, mai condivisi tra processi.
+        """
+        return layer_id * 1_000_000_007 + (hash(tuple(sorted(expert_ids))) % 1_000_000_007)
 
     def _register_gate_hooks(self) -> None:
         """Forward hook su ogni layer_i.block_sparse_moe.gate — cattura

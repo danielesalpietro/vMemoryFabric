@@ -260,19 +260,32 @@ entry. As of 2026-08-12 (~40%, 3 of 7 sub-goals done or closed):
 - **Done — wiring (sub-goal 1).** `GCSGWorker(tier_manager=...)` (opt-in,
   default `None`, zero behavior change unless wired — see
   `GCSGWorker.configure_tier_manager()`, needed because vLLM constructs
-  the worker itself, no direct kwarg path exists) routes the AWQ
-  ModuleList path's GPU promotion through a new
-  `TierManager.promote_live_tensor()` bridge, seeds EAT with one entry
-  per (expert, layer), and feeds it real per-token routing traffic
-  independent of shadow activation — closing the "no real concurrent
-  EAT traffic" precondition Sprint 1/2 were waiting on. 94 unit tests
-  (pure logic, no GPU needed) plus a 5-item hardware checklist
-  (`scripts/smoke_test_gcsg_tier_manager.py`) verified 4/5 on a real RTX
-  3090 (WSL2 — `pin=True` correctly disabled there by design) and 5/5 on
-  a second real GPU (real Linux, `pin=True` confirmed end-to-end). The
-  Marlin path (path 2, the one every published MMLU number so far has
-  used) is deliberately untouched — most fragile mechanism in the file,
-  next increment once AWQ is fully trusted.
+  the worker itself, no direct kwarg path exists) routes GPU promotion
+  through a new `TierManager.promote_live_tensor()` bridge, seeds EAT
+  with one entry per (expert, layer), and feeds it real per-token
+  routing traffic independent of shadow activation — closing the "no
+  real concurrent EAT traffic" precondition Sprint 1/2 were waiting on.
+  Landed in two stages, deliberately: the AWQ ModuleList path (path 3)
+  first, verified 4/5 on a real RTX 3090 (WSL2 — `pin=True` correctly
+  disabled there by design) and 5/5 on a second real GPU (real Linux,
+  `pin=True` confirmed end-to-end), plus two full MMLU reruns matching
+  the historical baseline (one byte-identical per-subject on two
+  32-question slices, one full 570-question run landing at 411/570 with
+  only 4 individual answers flipped and perfect run-to-run determinism).
+  Only *then* — the most fragile mechanism in the file (see
+  `_PinnedMarlinExperts`' docstring on a real CUDA-allocator
+  fragmentation hang found 2026-08-10) — was the **Marlin path (path 2,
+  the one every published MMLU number so far has used) also wired**,
+  via a shared per-layer proxy tracked under a sentinel EAT key (a
+  single proxy serves the whole shadow pool per layer by design, not one
+  per expert — see `GCSGWorker._marlin_pool_shard_key()` for why a real
+  `expert_id` key would risk a stale-VRAM-reuse bug across
+  `refresh_shadow_pool_selection()` calls). 95 unit tests passing as of
+  this wiring (down from a peak of 103 earlier the same day — the Bloom
+  filter removal below removed more tests than this added); the
+  Marlin-path transfer itself still needs its own hardware pass
+  (`scripts/smoke_test_gcsg_tier_manager.py --quantization awq_marlin`,
+  extended for this — not yet run).
 - **Done — pinning strategy (sub-goal 2).** Manually pinned transfer
   (`torch.Tensor.pin_memory()`, bypassing vLLM's own WSL2 gate) is safe
   and stable under sustained load on real Linux — 1000-cycle soak test,
@@ -347,7 +360,7 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) | PMEM (EMH-2) integration | Blocked on hardware availability |
 | [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival |
 | [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint`/`test`/`bench` fail on relative paths — container `WORKDIR` (`/workspace`) doesn't match `osx-poc/`'s relative paths | Workaround in use everywhere: `docker compose run --rm osx-dev bash -c "cd osx-poc && ..."` |
-| [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` used vLLM's `cpu_offload_gb` directly | **Partially resolved 2026-08-12**: wired for the AWQ ModuleList path, verified on real hardware (see Sprint 4 in the roadmap above). Still open: the Marlin path (what the published MMLU numbers use), promotion-latency measurement, and M1 debt (#1/#2/#4) re-analysis under the now-real EAT traffic — not closing this issue yet |
+| [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` used vLLM's `cpu_offload_gb` directly | **Partially resolved 2026-08-12**: both AWQ ModuleList and Marlin paths now wired (see Sprint 4 in the roadmap above); AWQ verified on real hardware twice, Marlin's transfer still needs its own hardware pass. Promotion-latency measurement is done (sub-goal 4). Still open: M1 debt (#2) re-analysis, sub-goal 6 (path 1 parity) — not closing this issue yet |
 | [#18](https://github.com/danielesalpietro/vMemoryFabric/issues/18) | No environment fingerprint pre-check — `OMP_NUM_THREADS`/`shm_size`/GPU model assumed, not verified | Hit for real deploying to RunPod: `OMP_NUM_THREADS=8` fixed regardless of real vCPU count, `docker-compose.yml`'s `shm_size` doesn't apply outside local `docker compose` |
 
 **Closed:** [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) (2026-08-11) — GCSG shadow-execution crash and the related batch-composition slowdown, both root-caused to WSL2/CUDA pageable-memory offload behavior (structural, upstream-confirmed, not a project bug). Full trail: `osx-poc/reports/gcsg_shadow_execution_report.md`. [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) (2026-08-12) — `BloomFilter.remove_expert()` implemented for real (Counting Bloom Filter, replaces `pybloom_live`) and wired into `EAT.evict()`, which never called it before. [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) (2026-08-12, same day) — re-measuring against #4's new implementation showed lookup latency got *worse*, not better, settling the question: the Bloom filter is removed from `EAT` entirely, not kept as an unjustified fast-path (which also makes #4's fix moot, but it stays recorded as its own closed issue — the bug it fixed was real while the Bloom filter still existed). Full trail: `osx-poc/LOGBOOK.md`, 2026-08-12 "issue #4 actually fixed" and "Bloom filter removed" entries.

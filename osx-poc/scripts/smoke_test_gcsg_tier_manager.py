@@ -11,20 +11,22 @@ checks was only unit-tested with fakes/CPU tensors (91 passed / 18
 skipped, PYTHONPATH=src python -m pytest tests/, see LOGBOOK.md
 2026-08-12) before this.
 
-WHY quantization="awq", not "awq_marlin": the TierManager wiring only
-touches path 3 (_pin_awq_expert_to_gpu, plain AWQ ModuleList) —
-DELIBERATELY, see the note at that call site in gcsg.py and the LOGBOOK
-entry for why the Marlin path (path 2, what
-scripts/smoke_test_gcsg_mixtral8x7b.py and every MMLU run so far actually
-used) was left untouched. Loading the SAME checkpoint
+--quantization: both "awq" (path 3, AWQ ModuleList — default) and
+"awq_marlin" (path 2, Marlin-packed FusedMoE) are wired through
+TierManager as of 2026-08-12. AWQ was wired and verified first
+(deliberately — Marlin is the more fragile mechanism in gcsg.py, see
+_PinnedMarlinExperts' ATTENZIONE docstring on a real CUDA-allocator
+fragmentation hang found 2026-08-10); Marlin was wired later the same
+day, after AWQ passed this exact checklist twice on real hardware with
+perfect determinism. Loading the SAME checkpoint
 (casperhansen/mixtral-instruct-awq) with plain "awq" instead of
 "awq_marlin" forces vLLM through vllm.model_executor.models.mixtral_quant
 .MixtralMoE (ModuleList of MixtralMLP, one module per expert) instead of
-FusedMoE+Marlin-packed tensors — the only way to exercise the new code
-against real weights without a from-scratch tiny AWQ model (none
-verified to exist for this checkpoint format; not worth guessing at a
-HF Hub name here). Expect this to be SLOWER than the Marlin path (no
-Marlin kernel) — that's expected, not a regression to chase.
+FusedMoE+Marlin-packed tensors — "awq" is slower (no Marlin kernel),
+that's expected, not a regression to chase. Run this script with BOTH
+values — they exercise different code paths
+(_promote_module_via_tier_manager vs. _build_marlin_tensor_promoter) and
+neither result substitutes for the other.
 
 Checklist mechanized here, in the same priority order as LOGBOOK.md's
 "NOT run on real hardware" list for this feature:
@@ -55,10 +57,12 @@ against the existing 72.28%/72.3% baseline with tier_manager wired —
 LOGBOOK.md's priority item 4. Do that only after this script is green.
 
 Usage:
-    PYTHONPATH=src python scripts/smoke_test_gcsg_tier_manager.py
+    PYTHONPATH=src python scripts/smoke_test_gcsg_tier_manager.py  # path 3, AWQ
+    PYTHONPATH=src python scripts/smoke_test_gcsg_tier_manager.py --quantization awq_marlin  # path 2
 """
 from __future__ import annotations
 
+import argparse
 import os
 import signal
 import sys
@@ -115,6 +119,11 @@ def _fail(msg: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--quantization", choices=["awq", "awq_marlin"], default="awq",
+                         help="path 3 (AWQ ModuleList) or path 2 (Marlin) — see module docstring")
+    args = parser.parse_args()
+
     threading.Thread(target=_watchdog, args=(1200.0,), daemon=True).start()
     threading.Thread(target=_heartbeat, args=(30.0,), daemon=True).start()
 
@@ -127,11 +136,11 @@ def main() -> None:
          "docstring on configure_tier_manager()/_pending_tier_manager in gcsg.py).")
 
     _log(f"Loading {MODEL_PATH} via EngineArgs(worker_cls=GCSGWorker), "
-         f"quantization=awq (NOT awq_marlin — see module docstring), cpu_offload_gb=4 ...")
+         f"quantization={args.quantization}, cpu_offload_gb=4 ...")
     llm = LLM(
         model=MODEL_PATH,
         worker_cls="scheduler.gcsg.GCSGWorker",
-        quantization="awq",
+        quantization=args.quantization,
         cpu_offload_gb=4,
         gpu_memory_utilization=0.95,
         max_num_seqs=16,
@@ -176,18 +185,30 @@ def main() -> None:
         )
 
     n_layers = len(worker.model_runner.model.model.layers)
+    # AWQ path (path 3): promotion is tracked per real expert_id.
+    # Marlin path (path 2): the proxy is shared by the whole pool per
+    # layer, tracked under a sentinel expert_id=-1 (see
+    # GCSGWorker._marlin_pool_shard_key() for why a real expert_id
+    # can't be used there) — check both, whichever the loaded
+    # quantization actually populated.
     vram_promoted = [
         (e, layer_id) for e in shadow_expert_ids
         for layer_id in range(n_layers)
         if (entry := eat.lookup(e, layer_id)) is not None and entry.tier == Tier.VRAM
     ]
-    if not vram_promoted:
+    vram_promoted_marlin_sentinel = [
+        entry for entry in eat.get_tier(Tier.VRAM) if entry.expert_id == -1
+    ]
+    if not vram_promoted and not vram_promoted_marlin_sentinel:
         _fail(
-            "None of the shadow pool's expert_ids have ANY layer at Tier.VRAM in EAT — "
+            "Neither real-expert-id nor sentinel(-1) entries reached Tier.VRAM in EAT — "
             "the real .to('cuda')/pin_memory() transfer via TierManager.promote_live_tensor() "
             "either didn't run or didn't update EAT's tier. This is checklist item 2's real "
             "check — 'load_model() didn't crash' alone (above) is not enough evidence."
         )
+    if vram_promoted_marlin_sentinel:
+        print(f"Marlin-path sentinel entries (expert_id=-1) reached Tier.VRAM: "
+              f"{len(vram_promoted_marlin_sentinel)} confirmed.")
     print(f"At least one (expert_id, layer_id) pair reached Tier.VRAM via TierManager: "
           f"{len(vram_promoted)} confirmed promotions. [checklist item 2 OK — real transfer verified]")
 
