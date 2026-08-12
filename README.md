@@ -255,8 +255,8 @@ measure the "shard promotion latency within 1.5× theoretical bandwidth"
 target, and close out the M1 debt (#1/#2/#4) that Sprint 1/2 explicitly
 deferred until M3 generated real concurrent traffic. Full sub-goal
 breakdown: `osx-poc/LOGBOOK.md`, 2026-08-11 "Tekniska: Sprint 4 kickoff"
-entry. As of 2026-08-12 (~85%, 5 of 7 sub-goals done or closed, 1 partially
-closed, 1 remaining):
+entry. As of 2026-08-12 (~95%, 6 of 7 sub-goals done or closed, 1
+remaining — close-out itself):
 
 - **Done — wiring (sub-goal 1).** `GCSGWorker(tier_manager=...)` (opt-in,
   default `None`, zero behavior change unless wired — see
@@ -321,16 +321,21 @@ closed, 1 remaining):
   asks for (P50); P95/P99 went the other way on `pin=True` but at n=20
   synthetic 4MB shards that tail isn't a statistically meaningful
   measurement, not investigated further.
-- **Partially closed — M1 debt re-analysis (sub-goal 5).** Issue #1
-  (Bloom filter ~5–14× slower than a plain dict on this workload) is
-  **closed**: removed from EAT's hot path entirely rather than tuned.
-  Issue #4 (`BloomFilter.remove_expert()`) is now moot — same removal.
-  **Issue #2 (RLock contention) remains open** — today's re-measurement
-  under real EAT traffic didn't match the issue's originally cited
-  ~1360× p99 degradation figure (today: ~61-91×), and reconciling that
-  gap needs either the original benchmark's exact environment or
-  accepting today's numbers as the new reference point. Decision
-  deferred.
+- **Done — M1 debt re-analysis (sub-goal 5).** Issue #1 (Bloom filter
+  ~5–14× slower than a plain dict on this workload) is **closed**:
+  removed from EAT's hot path entirely rather than tuned. Issue #4
+  (`BloomFilter.remove_expert()`) is now moot — same removal. **Issue #2
+  (RLock contention): decided 2026-08-12, left deliberately open, not
+  redesigned.** Today's re-measurement under real EAT traffic didn't
+  match the issue's originally cited ~1360× p99 degradation figure
+  (today: ~61-91×, both numbers recorded, the gap unexplained) — but
+  more importantly, real `GCSGWorker` traffic today is single-threaded,
+  so the contention scenario issue #2 measures isn't produced by
+  anything running in this project yet. Redesigning the `RLock` now
+  would be speculative work against a scenario that doesn't exist;
+  re-scoped from "in progress" to blocked on real concurrent EAT access
+  actually existing (a future multi-worker/async-server setup) —
+  revisit if/when that traffic shape becomes real, not before.
 - **Done — path 1 parity under real offload (sub-goal 6).** Exercised
   `_ShadowExpertINT4` for the first time against real
   Mixtral-8x7B-Instruct-v0.1 (unquantized, ~93.4GB) under real offload
@@ -344,9 +349,9 @@ closed, 1 remaining):
   writeup. Mechanics/correctness only — no MMLU number on this path, no
   production-viability claim for this offload configuration.
 - **Remaining: close-out (sub-goal 7).** This table plus the GCSG report
-  are being kept in sync as each sub-goal closes; still open: a final
-  decision on issue #2 (above), and regenerating the `.docx` (EN/IT)
-  exports of the GCSG report to match its markdown source.
+  are being kept in sync as each sub-goal closes; the one thing left is
+  regenerating the `.docx` (EN/IT) exports of the GCSG report to match
+  its markdown source.
 
 Sprint 6 (Stockholm) is a new leg, added without reordering or reweighting
 Sprints 0–5 above — those stay exactly as planned. Named deliberately:
@@ -393,7 +398,7 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | # | Issue | Why it matters |
 |---|-------|-----------------|
 | ~~[#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1)~~ | Bloom filter slower than a plain dict | **Closed 2026-08-12** — re-measured worse under the new Counting Bloom Filter (issue #4's fix), settling the question: removed from `EAT` entirely rather than kept as an unjustified fast-path; see Sprint 1 above |
-| [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) | EAT `RLock` p99 degrades under contention | Re-measured 2026-08-12: real `GCSGWorker` traffic today is single-threaded, so this scenario isn't exercised by production yet; the originally-cited ~1360× figure didn't reproduce at that magnitude (~61-91× measured instead) — open discrepancy, not resolved either way |
+| [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) | EAT `RLock` p99 degrades under contention | Re-measured 2026-08-12: real `GCSGWorker` traffic today is single-threaded, so this scenario isn't exercised by production yet; the originally-cited ~1360× figure didn't reproduce at that magnitude (~61-91× measured instead, both recorded — the gap itself is unexplained). **Decision 2026-08-12**: left open, deliberately, not redesigned — there is no real production contention to fix yet, redesigning the `RLock` now would be speculative work against a scenario that doesn't exist. Re-scoped from "in progress" to blocked on real concurrent EAT access actually existing (a future multi-worker/async-server setup); revisit if/when that traffic shape becomes real |
 | [#3](https://github.com/danielesalpietro/vMemoryFabric/issues/3) | `bench_tier.py` DDR4→VRAM p95/p99 skewed by CUDA cold-start | No warm-up iteration before timing |
 | ~~[#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4)~~ | `BloomFilter.remove_expert()` unimplemented | **Closed 2026-08-12** — fixed with a Counting Bloom Filter, then superseded hours later when #1's re-measurement led to removing the Bloom filter entirely; see Sprint 1 above |
 | [#5](https://github.com/danielesalpietro/vMemoryFabric/issues/5) | No CUDA stream pipelining in `GPUTransfer` | Deferred since Sprint 0, needs real compute to overlap with |
@@ -401,7 +406,7 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) | PMEM (EMH-2) integration | Blocked on hardware availability |
 | [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival |
 | [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint`/`test`/`bench` fail on relative paths — container `WORKDIR` (`/workspace`) doesn't match `osx-poc/`'s relative paths | Workaround in use everywhere: `docker compose run --rm osx-dev bash -c "cd osx-poc && ..."` |
-| [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` used vLLM's `cpu_offload_gb` directly | **Nearly resolved 2026-08-12**: all three shadow-pool paths (AWQ, Marlin, path 1) now wired/exercised and verified on real hardware (see Sprint 4 in the roadmap above) — AWQ end-to-end including a TierManager-routed MMLU rerun, Marlin's transfer mechanically verified (a real bug found and fixed en route), path 1 verified under real offload at production model scale (another real bug found and fixed). Promotion-latency measurement is done (sub-goal 4). Still open before closing this issue: issue #2 (RLock contention) re-analysis decision (sub-goal 5), close-out (sub-goal 7) |
+| [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` used vLLM's `cpu_offload_gb` directly | **Nearly resolved 2026-08-12**: all three shadow-pool paths (AWQ, Marlin, path 1) now wired/exercised and verified on real hardware (see Sprint 4 in the roadmap above) — AWQ end-to-end including a TierManager-routed MMLU rerun, Marlin's transfer mechanically verified (a real bug found and fixed en route), path 1 verified under real offload at production model scale (another real bug found and fixed). Promotion-latency measurement is done (sub-goal 4). Issue #2 (RLock contention) decided — left open, deliberately, tracked separately (see #2 above), not a blocker for this issue. Still open before closing this issue: close-out (sub-goal 7) |
 | [#18](https://github.com/danielesalpietro/vMemoryFabric/issues/18) | No environment fingerprint pre-check — `OMP_NUM_THREADS`/`shm_size`/GPU model assumed, not verified | Hit for real deploying to RunPod: `OMP_NUM_THREADS=8` fixed regardless of real vCPU count, `docker-compose.yml`'s `shm_size` doesn't apply outside local `docker compose` |
 
 **Closed:** [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) (2026-08-11) — GCSG shadow-execution crash and the related batch-composition slowdown, both root-caused to WSL2/CUDA pageable-memory offload behavior (structural, upstream-confirmed, not a project bug). Full trail: `osx-poc/reports/gcsg_shadow_execution_report.md`. [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) (2026-08-12) — `BloomFilter.remove_expert()` implemented for real (Counting Bloom Filter, replaces `pybloom_live`) and wired into `EAT.evict()`, which never called it before. [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) (2026-08-12, same day) — re-measuring against #4's new implementation showed lookup latency got *worse*, not better, settling the question: the Bloom filter is removed from `EAT` entirely, not kept as an unjustified fast-path (which also makes #4's fix moot, but it stays recorded as its own closed issue — the bug it fixed was real while the Bloom filter still existed). Full trail: `osx-poc/LOGBOOK.md`, 2026-08-12 "issue #4 actually fixed" and "Bloom filter removed" entries.

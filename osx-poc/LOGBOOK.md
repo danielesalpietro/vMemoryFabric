@@ -5,6 +5,43 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12/13 — Tekniska, continued: issue #2 (RLock contention) decided — left open, deliberately, not redesigned; Sprint 4 sub-goal 5 now closed
+
+Decision requested and given explicitly by the project owner after the
+re-measurement in the entry below ("sub-goal 5 started"): what to do with
+issue #2 now that (a) today's numbers (~61-91× p99 degradation) don't
+match the originally-cited ~1360× figure, gap unexplained, and (b) real
+`GCSGWorker` traffic today is single-threaded, so the contention scenario
+issue #2 measures (4 readers + 1 writer) isn't produced by anything
+running in this project yet.
+
+**Decision: leave the `RLock` as-is, do not redesign it now.** There is
+no real production contention to fix — doing speculative concurrency
+engineering against a scenario that doesn't exist yet would be exactly
+the kind of premature work this project's own conventions argue against.
+Issue #2 stays open (not closed won't-fix, not silently forgotten) but
+re-scoped explicitly: from "in progress" to blocked on real concurrent
+EAT access actually existing — a future multi-worker or async-server
+setup would produce it, nothing today does. Both the original ~1360×
+figure and today's ~61-91× re-measurement stay recorded side by side,
+neither overwriting the other, since the cause of the gap was never
+identified (see the entry below for the three unconfirmed hypotheses).
+
+This closes sub-goal 5 (M1 debt re-analysis: #1 closed by removal, #4
+moot by the same removal, #2 now explicitly decided-and-deferred rather
+than an open question). README updated (`osx-poc/../README.md` Sprint 4
+paragraph, sub-goal 5 bullet, and the #2/#17 rows in the known-limitations
+table).
+
+### Sprint 4 status after this: 6 of 7 sub-goals closed
+
+Only sub-goal 7 (close-out) remains, and what's left in it is now purely
+mechanical: regenerating the GCSG report's `.docx` (EN/IT) exports to
+match the markdown source, which has been kept current all session
+(Marlin results, path 1 results, this decision).
+
+---
+
 ## 2026-08-12/13 — Tekniska, continued: sub-goal 6 (path 1, `_ShadowExpertINT4`) verified end-to-end under real offload — two pod swaps, one caught GPU-architecture blocker, one real device-mismatch bug found and fixed
 
 Three different pods this stretch before landing on one that actually
