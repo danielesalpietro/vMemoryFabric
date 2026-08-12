@@ -1,6 +1,9 @@
 """Test M1 — Expert Access Table.
 
-Sprint 1 (Möllstorp): BloomFilter, SlabAllocator ed EAT sono implementati.
+Sprint 1 (Möllstorp): SlabAllocator ed EAT sono implementati. Bloom
+filter (era qui, TestBloomFilter) rimosso 2026-08-12 insieme a
+src/eat/bloom.py — issue #1, misurato consistentemente più lento di un
+lookup diretto sul dict a questa scala, vedi LOGBOOK.md.
 
 Coverage target: > 95% (misurata con pytest-cov).
 """
@@ -9,93 +12,7 @@ import time
 
 import pytest
 from eat import EATEntry, ExpertAccessTable, Tier
-from eat.bloom import BloomFilter
 from eat.slab import SlabAllocator
-
-
-# ── BloomFilter ────────────────────────────────────────────────────────────────
-
-class TestBloomFilter:
-
-    def test_add_and_may_contain_expert(self):
-        bf = BloomFilter(capacity=1000)
-        bf.add(expert_id=0, shard_idx=0)
-        assert bf.may_contain_expert(0) is True
-        assert bf.may_contain_expert(999) is False
-
-    def test_may_contain_shard_miss(self):
-        bf = BloomFilter(capacity=1000)
-        assert bf.may_contain_shard(expert_id=999, shard_idx=0) is False
-
-    def test_false_positive_rate_within_spec(self):
-        """FP rate < 1% (+ margine statistico) su 10.000 lookup negativi."""
-        bf = BloomFilter(capacity=10_000, error_rate=0.01)
-        for expert_id in range(5_000):
-            bf.add(expert_id=expert_id, shard_idx=0)
-
-        false_positives = sum(
-            1 for expert_id in range(5_000, 15_000)
-            if bf.may_contain_shard(expert_id, 0)
-        )
-        fp_rate = false_positives / 10_000
-        assert fp_rate < 0.02  # 1% target + margine per varianza statistica
-
-    # ── remove (2026-08-12, issue #4) ────────────────────────────────────────
-
-    def test_remove_shard_makes_may_contain_shard_false(self):
-        bf = BloomFilter(capacity=1000)
-        bf.add(expert_id=5, shard_idx=2)
-        assert bf.may_contain_shard(5, 2) is True
-        bf.remove_shard(5, 2)
-        assert bf.may_contain_shard(5, 2) is False
-
-    def test_remove_expert_makes_may_contain_expert_false(self):
-        bf = BloomFilter(capacity=1000)
-        bf.add(expert_id=7, shard_idx=0)
-        assert bf.may_contain_expert(7) is True
-        bf.remove_expert(7)
-        assert bf.may_contain_expert(7) is False
-
-    def test_remove_shard_does_not_affect_other_shards_of_same_expert(self):
-        bf = BloomFilter(capacity=1000)
-        bf.add(expert_id=1, shard_idx=0)
-        bf.add(expert_id=1, shard_idx=1)
-        bf.remove_shard(1, 0)
-        assert bf.may_contain_shard(1, 0) is False
-        assert bf.may_contain_shard(1, 1) is True
-
-    def test_len_tracks_shard_level_add_and_remove(self):
-        bf = BloomFilter(capacity=1000)
-        bf.add(expert_id=0, shard_idx=0)
-        bf.add(expert_id=0, shard_idx=1)
-        assert len(bf) == 2
-        bf.remove_shard(0, 0)
-        assert len(bf) == 1
-
-    def test_repeated_insert_evict_cycles_do_not_degrade_false_positive_rate(self):
-        """Il bug reale di issue #4: pybloom_live non supportava
-        remove(), quindi ogni eviction lasciava un falso positivo
-        PERMANENTE — dopo abbastanza cicli insert/evict il Bloom filter
-        degradava verso "quasi sempre presente", vanificando il fast-
-        negative path. Con remove() reale, il FP rate resta vicino al
-        target anche dopo 20 cicli x 500 insert+evict (10.000 "fantasmi"
-        cumulativi se non venissero mai rimossi — più della capacity
-        stessa, quindi un test che avrebbe fallito platealmente prima di
-        questo fix)."""
-        bf = BloomFilter(capacity=10_000, error_rate=0.01)
-        for _ in range(20):
-            for expert_id in range(500):
-                bf.add(expert_id=expert_id, shard_idx=0)
-            for expert_id in range(500):
-                bf.remove_shard(expert_id, 0)
-                bf.remove_expert(expert_id)
-
-        false_positives = sum(
-            1 for expert_id in range(500, 10_500)
-            if bf.may_contain_shard(expert_id, 0)
-        )
-        fp_rate = false_positives / 10_000
-        assert fp_rate < 0.02
 
 
 # ── SlabAllocator ──────────────────────────────────────────────────────────────
@@ -195,37 +112,6 @@ class TestEAT:
 
     def test_evict_missing_returns_none(self, eat):
         assert eat.evict(expert_id=0, shard_idx=0) is None
-
-    # ── evict + Bloom filter (2026-08-12, issue #4) ──────────────────────────
-
-    def test_evict_clears_bloom_shard_entry(self, eat):
-        eat.insert(expert_id=0, shard_idx=0)
-        eat.evict(expert_id=0, shard_idx=0)
-        assert eat._bloom.may_contain_shard(0, 0) is False
-
-    def test_evict_clears_bloom_expert_entry_when_last_shard(self, eat):
-        eat.insert(expert_id=0, shard_idx=0)
-        eat.evict(expert_id=0, shard_idx=0)
-        assert eat._bloom.may_contain_expert(0) is False
-
-    def test_evict_keeps_bloom_expert_entry_when_other_shards_remain(self, eat):
-        """Evictare uno shard non deve far "dimenticare" l'intero expert
-        se altri suoi shard sono ancora nella tabella — il bit/contatore
-        a livello expert è condiviso da tutti gli shard di quell'expert_id."""
-        eat.insert(expert_id=0, shard_idx=0)
-        eat.insert(expert_id=0, shard_idx=1)
-        eat.evict(expert_id=0, shard_idx=0)
-        assert eat._bloom.may_contain_expert(0) is True
-        assert eat._bloom.may_contain_shard(0, 1) is True
-        assert eat._bloom.may_contain_shard(0, 0) is False
-
-    def test_evict_missing_does_not_touch_bloom(self, eat):
-        """evict() su una entry inesistente non deve chiamare
-        remove_shard()/remove_expert() — nessun errore, ma anche nessuna
-        rimozione spuria di contatori mai incrementati."""
-        eat.insert(expert_id=1, shard_idx=0)   # entry reale, non toccata sotto
-        eat.evict(expert_id=99, shard_idx=0)   # mai inserita
-        assert eat._bloom.may_contain_shard(1, 0) is True
 
     def test_access_increments_count(self, eat):
         eat.insert(expert_id=0, shard_idx=0)

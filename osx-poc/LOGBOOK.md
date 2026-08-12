@@ -5,6 +5,82 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: issue #1 decided and closed — Bloom filter removed from EAT entirely
+
+Discussed with the user rather than decided unilaterally: given #4's
+fresh numbers (Counting Bloom Filter measuring *worse* than the old
+`pybloom_live`, not better — ~6.8-8.1× slower than a plain dict vs. the
+previous ~4.7-4.9×), agreed the answer to issue #1's long-open question
+("does the Bloom filter belong in the hot path at all") is no, regardless
+of which Bloom implementation backs it — the structure it guards
+(`self._table`, a dict at ~16k-entry scale) is already O(1) and doesn't
+need a fast-negative layer in front of it. Removing it isn't a
+workaround, it's the decision.
+
+### What changed
+
+- **`src/eat/bloom.py` deleted entirely** — not bypassed, not left as
+  dead code. Grepped first to confirm nothing else imported it (only
+  `eat.py` and `tests/test_eat.py` did).
+- **`src/eat/eat.py`**: `insert()`/`lookup()`/`evict()` simplified back
+  to direct `dict` operations under the existing `RLock` — `lookup()` is
+  now just `self._table.get(...)`, no fast-negative check in front.
+  `stats()` drops `bloom_shard_count` (nothing left to report).
+  `capacity` stays as a constructor parameter for signature
+  compatibility but is now unused internally.
+- **`src/eat/__init__.py`**: `BloomFilter` removed from exports.
+- **`pybloom-live==4.0.0`**: already removed from `requirements.txt`
+  during #4's fix a few hours earlier — turned out to be removed twice
+  in the same day for two different reasons (first "replaced by our own
+  Counting BF", now "not needed at all").
+- **Tests**: `TestBloomFilter` (14 tests, including the ones added for
+  #4 a few hours ago) and the four `EAT.evict()`-integration tests that
+  asserted Bloom-specific behavior are gone — nothing left to assert
+  once the structure they tested doesn't exist. 91 passed / 18 skipped
+  afterward (down from 103, expected — removed tests, not broken ones;
+  zero failures).
+- **`benchmarks/bench_eat.py`**: kept, repurposed as a regression check
+  rather than the Bloom-vs-dict comparison it used to be — `eat` and
+  `baseline_plain_dict` are now expected to converge, and re-running
+  confirms it: the delta that used to be the whole point of this
+  benchmark is now **~0.07µs** (was ~4-5µs). If this ever drifts wide
+  again without an intentional change to `EAT`, that's the signal to
+  investigate, not the old "which Bloom variant is faster" question.
+- **`configs/osx_default.yaml`**: `bloom_error_rate` removed (was never
+  actually consumed by any code — checked before removing, this whole
+  file is a reference config, not parsed anywhere yet).
+
+### README updated to match, same session
+
+Sprint 1 percentage bumped (~90% → ~92%) — #1 and #4 both closed now,
+only #2 (contention, see the entry two above) remains genuinely open
+from the original three. Known Limitations table and the roadmap's
+Sprint 1 paragraph rewritten to tell the story in the order it actually
+happened (fix #4 → re-measure #1 against the new implementation → decide
+#1 → remove Bloom entirely, which makes #4's specific fix moot but
+doesn't make it wrong — the bug it fixed was real while the Bloom filter
+still existed).
+
+### Not touched, deliberately
+
+- `osx-poc/reports/gcsg_shadow_execution_report.md` §7 still cites the
+  original "~5-14×" Bloom finding as an open question — that report is
+  Sprint 3/GCSG-scoped, not M1-scoped; leaving it as a historical
+  snapshot rather than editing it for an M1 decision that happened in
+  Sprint 4. `CHANGELOG.MD` untouched — its most recent section is still
+  Sprint 3 (Oskarshamn); Sprint 4 hasn't reached release/CHANGELOG status
+  yet, same as every other Sprint 4 change so far.
+
+### Not yet done
+
+- Marlin path (path 2) TierManager wiring — agreed with the user to
+  proceed (separate from this entry, see the next one).
+- Sub-goal 6 (path 1 real-offload test) — designed, not run, see the
+  entry above.
+- Sub-goal 7 close-out still pending; this entry is part of it.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: sub-goal 6 designed — path 1 real-offload test, not run yet (no GPU here)
 
 Sub-goal 6 (path 1 `_ShadowExpertINT4` parity under real offload) needs
