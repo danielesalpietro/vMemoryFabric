@@ -5,6 +5,36 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: `/dev/shm` measured, second pod live
+
+New pod deployed from the updated template (issue #18's `/dev/shm`
+question was one of the two open items from last night, alongside the
+`pin_memory` test itself).
+
+**`/dev/shm` = 12GB** (`df -h /dev/shm` inside the running pod), not the
+generic 64MB Docker default this project was bracing for. RunPod's own
+support assistant confirmed there's no exposed setting for this
+(2026-08-11 entry) — evidently they size it automatically based on pod
+resources rather than leaving the container runtime default in place.
+Closes the "real blocker" half of issue #18 for this specific concern:
+no `torch.multiprocessing.set_sharing_strategy('file_system')` workaround
+needed. `OMP_NUM_THREADS`-vs-real-vCPU-count, the other half of #18,
+stays open — not re-checked on this pod.
+
+Also noted, neither blocking: `/data/nvme` is backed by MooseFS
+(`mfs#us-il-1.runpod.net:9421`), a shared distributed network filesystem,
+not local disk — 657TB pool-wide, not this volume's own capacity. Worth
+remembering if I/O-heavy work later shows different latency
+characteristics than local NVMe would. Root filesystem (`overlay`) at
+50GB matches the configured Container Disk, 16MB used on fresh boot —
+sizing from the real GHCR manifest (LOGBOOK, 2026-08-11 pod-deployment
+entry) held up.
+
+Next: `ls /data/nvme/models/` (checkpoint presence), then the
+`pin_memory` test itself — still the actual point of this whole detour.
+
+---
+
 ## 2026-08-11 — Tekniska, session close: pod terminated, resume point set
 
 Stopping for the day rather than leaving a GPU pod billing overnight for
