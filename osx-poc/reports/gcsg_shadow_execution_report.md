@@ -403,7 +403,13 @@ rather than GCSG in isolation:
    (`torch.zeros(1024).pin_memory()` reporting `is_pinned() == True`)
    exists, but was never soak-tested. This needs its own direct
    verification before assuming Tier-Manager-mediated transfer would be
-   materially faster than what vLLM does today.
+   materially faster than what vLLM does today. **Update (2026-08-12):**
+   done. 1000 cycles of pin-allocate/H2D/D2H/byte-compare on 256MB shards
+   (Sprint 4, RunPod, real Linux — not WSL2, where this can't be tested at
+   all): 0 mismatches, no timing degradation (pin-alloc time improved
+   -31% after warm-up, total cycle time flat at -1%). Real pinning is
+   safe and stable under sustained load on this platform. Full data:
+   `LOGBOOK.md`, 2026-08-12 "pinning soak test" entry.
 2. Repeat this same MMLU evaluation on that path once it exists, as the
    next data point against this report's baseline.
 3. Exercise path 1 (`_ShadowExpertINT4`) under real offload for parity
