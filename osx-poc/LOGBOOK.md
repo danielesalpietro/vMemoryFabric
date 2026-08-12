@@ -5,6 +5,55 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: `smoke_test_gcsg_tier_manager.py` green on the Z8/RTX 3090 — 4 of 5 checklist items confirmed, 1 partially (as predicted)
+
+Run on the Z8 (WSL2/Docker), not the pod — no rebuild/download needed
+(branch already checked out via the local bind-mount, checkpoint already
+present at the expected path, 23GB). Reported by the other session, not
+independently re-verified against raw log files here (none were pushed
+this time, unlike the earlier `LogBook_20260812_1344/` archive) — recorded
+as relayed, per the same discipline as always, and cross-checked for
+internal consistency against the design instead.
+
+### Result: all 5 checklist items ran, load+generate in ~86s total (54.8s + 31s)
+
+| # | Check | Outcome |
+|---|---|---|
+| 1 | `asyncio.run()` inside `load_model()` | Load completed with `tier_manager` wired — no event-loop error |
+| 2 | Real GPU transfer + EAT → `Tier.VRAM` | 12 (expert_id, layer_id) pairs confirmed at VRAM — with `pin_memory=False` (vLLM's own log: `"Using 'pin_memory=False' as WSL is detected"`) — exactly the predicted `pin=True` path staying untested here |
+| 3 | AWQ dominant parameter fits `SHARD_SIZE_BYTES` | Shadow pool populated (`[0, 1]`), no "impossibile pinnare" warning |
+| 4 | Real per-token EAT traffic | 256/256 EAT entries (8 experts × 32 layers) show `access_count > 0` after `generate()` |
+| 5 | `refresh_shadow_pool_selection()` callable | Pool changed `[0,1] → [2,6]` after real traffic — the selection actually reacted to hotness, not just "didn't crash" |
+
+**Item 3's initial selection, `[0, 1]`, is a real independent confirmation
+of the cold-start-equals-round-robin fix** from two entries back (the
+`last_access_ts` tie-break bug caught by a unit test, not hardware) —
+`shadow_pool_size=2` at true cold start selected exactly `[0, 1]`, matching
+what the stable-sort proof predicted, on real EAT state this time, not a
+test double.
+
+No code bugs surfaced — no typos, no shape mismatches, nothing to patch.
+`generate()` didn't show the heavy Root Cause II slowdown that was
+expected on WSL2 — plausibly because 3 short prompts (32 tokens max) are
+too little traffic to make the pageable-memory CPU↔GPU swap-in cost
+noticeable; not evidence Root Cause II stopped applying, just that this
+particular smoke test's traffic was too light to trigger it visibly.
+
+### Still pod-only, unchanged from two entries back
+
+- The `pin=True` branch — WSL2 disabled it here by design (`in_wsl()`),
+  confirmed by vLLM's own log line; pinning under sustained load remains
+  validated only on real Linux (this morning's soak test).
+- A real MMLU comparison on the integrated path against the 72.28%/72.3%
+  baseline (LOGBOOK.md priority item 4).
+
+### Not yet done
+
+- Pod run: confirm `pin=True`, then the full MMLU comparison.
+- Everything else already queued, unchanged.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: closed a real injection gap in the TierManager wiring, added a pod verification checklist
 
 Before writing a hardware verification checklist for the previous
