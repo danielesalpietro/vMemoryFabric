@@ -5,6 +5,49 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-13 — Berg: Sprint 5 kickoff (PoC delivery + paper)
+
+Sprint 4 (Tekniska) closed 100% the day before. Before planning any new
+work, ran a consistency check between README/CHANGELOG's claimed-closed
+issues and GitHub's actual state — not assumed, checked directly via the
+API. Found a real gap: [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1),
+[#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4), and
+[#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) were all
+documented as closed (2026-08-12/13) but still showed **OPEN** on GitHub —
+only #10/#16 were actually closed there. Closed all three for real now,
+each with a comment pointing at the commits that actually resolved them
+(5cd88eb, 64f6bdc for #1/#4; b9871cf/6727a04/3e6c751/256a293 for #17).
+Lesson for the rest of this sprint: an issue isn't closed until GitHub says
+so, not when a LOGBOOK entry says so.
+
+Full plan for the sprint: `osx-poc/reports/sprint5_berg_plan.md`. Two
+tracks, run in parallel:
+
+- **PoC delivery**, targeted at external stakeholders/reviewers, not just
+  internal close-out — triage the remaining open issues (#2/#3/#5/#6/#7/#8/
+  #12/#18) into fix-before-delivery (#3, #6, #12, #18 — all small, all the
+  kind of thing an outside reviewer trips on first) vs. documented-limitation
+  (#2, #5, #7, #8 — already blocked on hardware or a deliberate prior
+  decision), a consolidated PoC Final Report replacing the scattered
+  README/report/LOGBOOK reconstruction, a real end-to-end repro script, and
+  a tagged release.
+- **Paper**, targeting a real venue (OSDI/EuroSys/MLSys 2027, per the
+  existing README citation — specific venue/deadline still to be picked,
+  first open question). `gcsg_shadow_execution_report.md` already has a
+  paper-shaped skeleton (Abstract/Motivation/Setup/Design/Root-cause
+  analysis/Evaluation/Limitations/Related Work/Conclusions) — this is
+  adaptation and expansion, not a from-scratch draft. Real new work: an
+  actual related-work literature survey (what exists today only cites
+  upstream vLLM bug confirmations, not the MoE-serving literature), real
+  figures instead of the README's ASCII architecture diagram, and a LaTeX
+  writing setup (`osx-poc/paper/` doesn't exist yet, checked).
+
+Nothing implemented yet beyond the issue-tracker fix above — this entry is
+the planning kickoff, mirroring the 2026-08-11 "Tekniska: Sprint 4 kickoff"
+entry's role for that sprint.
+
+---
+
 ## 2026-08-13 — Tekniska, continued: Marlin path MMLU rerun on the 3090, exact aggregate match — and a correction to the "it's the AWQ/awq_marlin kernel switch" hypothesis
 
 Back on RTX 3090-class hardware (`eu-cz-1` MooseFS backend — same volume as

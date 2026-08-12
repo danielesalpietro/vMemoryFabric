@@ -4,7 +4,7 @@ A heterogeneous multi-tier memory fabric for MoE and LLM inference. Hot AI objec
 
 Developed under the internal codename **OSX** ("Operating System for Experts") — a system-level framework for managing the lifecycle of experts in Mixture-of-Experts (MoE) large language models. It treats experts as first-class objects governed by a dedicated runtime, with hierarchical memory placement, predictive prefetching, gating-aware scheduling, and adaptive replication.
 
-> *Current release: **Tekniska** (v0.5.0-dev) — August 13, 2026 — previous: Oskarshamn (v0.4.0-dev), Eketorp (v0.3.0-dev), Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev). Sprint 4 complete; Sprint 5 (PoC delivery + paper) not yet started.*
+> *Current release: **Tekniska** (v0.5.0-dev) — August 13, 2026 — previous: Oskarshamn (v0.4.0-dev), Eketorp (v0.3.0-dev), Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev). Sprint 4 complete; Sprint 5 (PoC delivery + paper, codename **Berg**) in planning — see [`osx-poc/reports/sprint5_berg_plan.md`](osx-poc/reports/sprint5_berg_plan.md).*
 
 ---
 
@@ -166,7 +166,7 @@ vMemoryFabric/                  (repo root)
 | 2      | M2 — Tier Manager      | 5–6 | ✅ **Eketorp** (~85%) |
 | 3      | M3 — Expert Scheduler  | 7–8 | 🟡 in progress (~80%) — **Oskarshamn** |
 | 4      | Integration + benchmarks | 9–12 | ✅ **Tekniska** (100%) (branch `Sprint-4-Tekniska`) |
-| 5      | PoC delivery + paper   | 13–16 | 🔲 pending (~5%) |
+| 5      | PoC delivery + paper   | 13–16 | 🟡 planning (~10%) — **Berg** |
 | 6      | Telemetry + observability dashboard | TBD | 🔲 pending (~10%) — **Stockholm** |
 
 Percentages are grounded in code/test/hardware verification, not label
@@ -353,6 +353,19 @@ entry. **Complete as of 2026-08-12 — all 7 sub-goals done or closed:**
   report's `.docx` (EN/IT) exports to match its markdown source, is done
   — both pass full OOXML schema validation. **Sprint 4 (Tekniska) is
   complete.**
+
+Sprint 5 (Berg) kicked off 2026-08-13, right after Tekniska closed. First
+action was a consistency check between README/CHANGELOG's claimed-closed
+issues and GitHub's actual state, not assumed: found
+[#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1)/[#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4)/[#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17)
+documented as closed but still open on GitHub, closed for real with
+commit references. Full plan:
+[`osx-poc/reports/sprint5_berg_plan.md`](osx-poc/reports/sprint5_berg_plan.md) —
+two parallel tracks, PoC delivery (aimed at external stakeholders/reviewers,
+not just internal close-out: issue triage, a consolidated PoC Final Report,
+real repro packaging, a tagged release) and a systems paper targeting a real
+venue (OSDI/EuroSys/MLSys 2027), reusing `gcsg_shadow_execution_report.md`'s
+already paper-shaped structure rather than starting from a blank page.
 
 Sprint 6 (Stockholm) is a new leg, added without reordering or reweighting
 Sprints 0–5 above — those stay exactly as planned. Named deliberately:
