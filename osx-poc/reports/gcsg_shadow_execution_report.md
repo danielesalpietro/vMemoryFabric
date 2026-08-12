@@ -394,11 +394,28 @@ M1 technical report's limitations section) rather than left implicit:
   hardware (checklist smoke test, 6 sentinel EAT entries confirmed
   reaching Tier.VRAM) but **not yet quality-validated** — no MMLU rerun
   exists yet on the TierManager-routed Marlin path specifically, only on
-  Marlin via the original `cpu_offload_gb` path (§6). Round-robin expert
-  selection is still the placeholder in both cases; hotness-driven
-  selection remains open. Full data: `LOGBOOK.md`, 2026-08-12 entries
-  ("TierManager wired" through "Marlin path ... verified on real
-  hardware"). M1's own extended benchmark found its original Bloom filter
+  Marlin via the original `cpu_offload_gb` path (§6). **Update
+  (2026-08-13):** closed. `eval_mmlu_gcsg.py`'s `--wire-tier-manager` had
+  been silently forcing `quantization=awq` — stale from before Marlin was
+  wired, since it predated this integration and assumed `awq_marlin`
+  would exercise the untouched Marlin path by mistake. Added an explicit
+  `--quantization` flag; reran on the same RTX 3090 used for the AWQ
+  rerun. A 32-question slice matched AWQ's per-subject result exactly
+  (`shadow_activations` within 0.01%); the full 570-question
+  single-process run scored 412/570 (72.28%), matching the historical
+  Marlin baseline exactly. Both quantization paths are now fully
+  validated end-to-end on the TierManager-routed integration. Round-robin
+  expert selection is still the placeholder in both cases; hotness-driven
+  selection remains open. The small ~0.7% per-answer divergence noted for
+  AWQ's TierManager-routed rerun (§9 item 2) recurs identically here even
+  with matched quantization — not attributable to the AWQ↔Marlin kernel
+  switch as first suspected; more likely execution-topology (single
+  process vs. 18 slices) or ordinary floating-point variance at this
+  scale, independent of quantization path. Full data: `LOGBOOK.md`,
+  2026-08-12/13 entries ("TierManager wired" through "Marlin path MMLU
+  rerun on 3090 matches baseline exactly");
+  `osx-poc/marlin_mmlu_20260812/mmlu_marlin_singleshot_*.jsonl`. M1's own
+  extended benchmark found its original Bloom filter
   ~5–14× slower than a plain dict on this workload (issue #1) — **closed
   2026-08-12**: the Bloom filter was removed from EAT's hot path entirely
   rather than tuned, since the plain-dict lookup it wrapped was already
@@ -556,14 +573,22 @@ rather than GCSG in isolation:
    matching the original WSL2 baseline's total exactly (though not
    byte-identical per-answer, consistent with §6.1's cross-run noise), and
    a 32-question slice (`fetta1`) landed an exact per-subject match
-   against the historical baseline. This closes the item for AWQ. It is
-   **not** closed for Marlin (path 2): item 1's Marlin wiring was only
-   verified mechanically today (checklist smoke test, not an MMLU run);
-   no accuracy number exists yet for shadow execution through
-   TierManager-routed Marlin experts specifically. That is the one
-   quality-validation gap this report still has open on the wiring side.
-   Full data: `LOGBOOK.md`, 2026-08-12 "full 570-question single-shot
-   MMLU run, TierManager wired" entry.
+   against the historical baseline. This closes the item for AWQ. **Update
+   (2026-08-13):** now closed for Marlin (path 2) too. Getting there
+   required a small fix first: `eval_mmlu_gcsg.py`'s `--wire-tier-manager`
+   had been silently forcing `quantization=awq`, a leftover from before
+   Marlin was wired at all — added an explicit `--quantization` flag so
+   the combination could be run honestly instead of silently falling back
+   to AWQ. Reran on the same RTX 3090 used for AWQ's rerun: a 32-question
+   slice matched AWQ's per-subject result exactly, and the full
+   570-question single-process run scored 412/570 (72.28%), matching the
+   historical Marlin baseline exactly. Both quantization paths this
+   report covers are now fully validated end-to-end on the
+   TierManager-routed integration — no quality-validation gap remains on
+   the wiring side. Full data: `LOGBOOK.md`, 2026-08-12 "full 570-question
+   single-shot MMLU run, TierManager wired" and 2026-08-13 "Marlin path
+   MMLU rerun on 3090 matches baseline exactly" entries;
+   `osx-poc/marlin_mmlu_20260812/`.
 3. Exercise path 1 (`_ShadowExpertINT4`) under real offload for parity
    with paths 2/3. **Update (2026-08-12, Sprint 4 sub-goal 6):** done —
    see §7's updated Path 1 bullet for the full result, including a real
