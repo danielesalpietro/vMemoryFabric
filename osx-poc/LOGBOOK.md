@@ -5,6 +5,103 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: full re-test pass on the pod with GPU telemetry and pod configuration captured
+
+With time left on this pod session, reran the entire test sequence from
+today a second/third time (`pin_memory()`, `smoke_test_gcsg_tier_manager.py`,
+fetta1 `[32:64]`, the full 570-question single-shot run, `bench_tier.py`)
+back to back, this time with a continuous `nvidia-smi` telemetry logger
+running alongside and a full pod configuration snapshot captured
+up-front. Purpose: more data points on determinism, plus actual GPU
+utilization/power/thermal numbers instead of just pass/fail, plus a
+record of this specific pod's hardware+environment (this is at least the
+third distinct pod this sprint — different DC each time, per the earlier
+entries — despite that, results keep landing in the same place, worth
+having the config on file to make that claim checkable later rather than
+asserted).
+
+### Telemetry: `nvidia-smi --query-gpu=... -l 2`, one continuous log, not per-test
+
+Started before the first rerun, stopped after the last — 983 samples
+(~33 minutes) in `osx-poc/gpu_telemetry_20260812.csv`. One log with the
+whole session's timeline is more useful than five separate short ones:
+timestamps let any window be sliced out after the fact, and it settles a
+question that came up mid-run — does polling `nvidia-smi` every 2s add
+measurable overhead to the workload being measured? Checked directly:
+at the same progress checkpoint (`T+810s` heartbeat), the untelemetered
+first single-shot run (previous entry) was at 485/570; this run's own
+untelemetered-vs-telemetered comparison (rerun 3 of the full run, with
+telemetry active) was at 486/570 at the identical elapsed time — no
+detectable slowdown. Total run time also matched: 924.3s telemetered vs.
+927.2s untelemetered, well inside run-to-run noise. `nvidia-smi` polling
+is a lightweight NVML query, not a CUDA operation — doesn't contend for
+GPU compute/memory bandwidth, and the numbers confirm it.
+
+**Peak/average during the full 570-question run** (`T+19:54:19` to
+`T+20:09:51`, 466 samples): **100% max GPU utilization, 77.3% average**;
+**23,701 MiB max VRAM used** (of 24,576 total — ~96.4%, consistent with
+`gpu_memory_utilization=0.95` reserving nearly the whole card up front);
+**343.9 W max power draw, 299.5 W average** (of a 350 W limit — running
+close to the card's ceiling for most of the run, not power-throttled
+based on the profile); **64°C max temperature** — comfortably within
+normal operating range, no thermal throttling signal.
+
+**During the smoke test** (lighter workload, 3 short prompts): 100% max
+utilization still reached briefly (model load + a few forward passes
+spike it even for a short run), but max VRAM 23,112 MiB, max power
+343.4 W, **max temp only 52°C** — the shorter, lighter run didn't have
+time to heat-soak the die the way the 570-question run did.
+
+### Determinism: 3rd (smoke test, fetta1) / 4th (full run) / 2nd (bench_tier) data point, all consistent
+
+- `smoke_test_gcsg_tier_manager.py`: green again, 5/5, same
+  `[0,1] → [2,6]` pool-selection change after traffic as every prior run.
+- Fetta1 `[32:64]`: **24/32 again**, same per-subject breakdown, same
+  `shadow_activations` (25,108) as both prior fetta1 runs.
+- Full 570-question single-shot: **411/570 again**, `shadow_activations`
+  562,354 again — third time landing on the exact same numbers as the
+  first two runs (previous entry established byte-for-byte identity
+  between runs 1 and 2; this is run 3, same result).
+- `bench_tier.py`'s `promote_live_tensor`: both `pin=False` (620.7µs P50)
+  and `pin=True` (207.8µs P50) still comfortably pass the 732.4µs
+  1.5x-bandwidth threshold — P50s moved a little from the first run
+  (684.2µs/194.1µs) but well within normal small-sample variance for a
+  20-shard synthetic benchmark; P95/P99 moved more (expected, tail
+  statistics on n=20 are noisy, already flagged as such in the previous
+  entry).
+
+### Pod configuration captured (`osx-poc/pod_config_20260812/`)
+
+- GPU: RTX 3090, driver `610.43.02`, CC 8.6, 24,576 MiB, 350 W power
+  limit — full `nvidia-smi -q` output in `nvidia_smi_full.txt`.
+- Kernel: `Linux 783e01336285 6.8.0-134-generic` (Ubuntu 22.04 base,
+  `os_release.txt`/`uname.txt`).
+- Full `pip freeze` (`pip_freeze.txt`) and `lscpu`/`free -h`/`df -h`
+  snapshots.
+- Git state at capture time: `dfa9a9d` (this pod's checkout, before
+  today's later pulls).
+
+This is a third distinct pod configuration this sprint (different DC
+each time — EU-RO-1 originally, then this session's two different pods),
+and results have stayed consistent across all of them where directly
+comparable (`pin_memory()` real, `is_pinned()` True on every real-Linux
+pod tried; MMLU accuracy landing in the same 72%-ish band; shadow
+activation counts within noise of each other across Marlin/AWQ and
+across pods). Not proof of hardware-independence in general — same GPU
+architecture (CC 8.6) and same checkpoint every time — but a real,
+checkable data point rather than an assumption.
+
+### Files brought back before this (non-persistent) pod goes away
+
+- `osx-poc/gpu_telemetry_20260812.csv` — full session telemetry
+- `osx-poc/pod_config_20260812/` — GPU/CPU/OS/package snapshot
+- `osx-poc/smoke_test_rerun2_20260812_213944.log`
+- `osx-poc/mmlu_tier_manager_pod_fetta1_rerun2_20260812_215033.jsonl`
+- `osx-poc/mmlu_tier_manager_pod_singleshot_rerun3_20260812_215416.jsonl`
+- `osx-poc/bench_tier_pod_rerun2_20260812_221103.log`
+
+---
+
 ## 2026-08-12 — Tekniska, continued: issue #1 decided and closed — Bloom filter removed from EAT entirely
 
 Discussed with the user rather than decided unilaterally: given #4's
