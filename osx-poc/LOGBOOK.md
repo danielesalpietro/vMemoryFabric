@@ -5,6 +5,51 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: MMLU run in progress — speed already conclusive, quality not yet
+
+Interim update, 3/18 slices in — not the final numbers, but the speed
+comparison is consistent enough across three independent slices to
+record now rather than wait.
+
+### Speed: dramatic, and it directly confirms the soak test's implication
+
+| | WSL2 (18/18 overnight, 2026-08-11) | RunPod, this run (3/18) |
+|---|---|---|
+| `generate()` per slice | up to ~30 min on the worst slice; 3,690s (~1h03m) summed across all 18 | 17-20s, consistent across all 3 |
+| total per slice (load+generate) | highly variable, unpredictable | 114-133s, stable across all 3 |
+
+Consistent with what this morning's pinning soak test already implied:
+the WSL2 bottleneck was never intrinsic to the model or `GCSGWorker` —
+it was specifically the pageable-memory CPU→GPU swap `maybe_offload_to_cpu()`
+falls back to when vLLM disables `pin_memory` under WSL2 (§5 of the GCSG
+report). Real pinning here removes exactly that cost. No stalls, no
+watchdog drama, none of the variability that forced smaller slices and
+raised timeouts on the WSL2 run — the interaction-effect stall from
+2026-08-10/11 hasn't reappeared once across 3 slices.
+
+Projection at the current pace (~146s/slice average): remaining 15
+slices ≈ 35-40 minutes to completion, versus the WSL2 run's overnight
+wall-clock time.
+
+### Quality: explicitly not compared yet — too early, said so before being asked
+
+96/570 questions done (65.6%, 75%, 62.5% per slice, 67.7% pooled), but
+these are only the first ~9-10 of 57 subjects in dataset order, not a
+representative sample across all subjects/difficulty. **Not compared
+against the WSL2 baseline (72.11%, −0.19pp) yet** — that comparison is
+only meaningful at full completion. Flagged as premature by the session
+running it, not left implicit — same discipline the GCSG report itself
+uses for its own limitations section.
+
+### Not yet done
+
+- Full 570-question completion and the real quality comparison.
+- Everything already queued from the previous entry (Dockerfile
+  unification, corrected-image rebuild+publish, remaining `/etc/environment`
+  var verification).
+
+---
+
 ## 2026-08-12 — Tekniska, continued: false alarm on a "parallel session", full MMLU run launched
 
 ### A "second session on a separate pod" report, checked before acting on it
