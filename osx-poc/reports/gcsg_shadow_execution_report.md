@@ -424,7 +424,27 @@ M1 technical report's limitations section) rather than left implicit:
 - **Path 1 (`_ShadowExpertINT4`) untested under offload.** Only paths 2
   (Marlin) and 3 (AWQ) were exercised against the real checkpoint under
   real offload; path 1 is only verified against a tiny, non-offloaded test
-  model.
+  model. **Closed 2026-08-12, Sprint 4 sub-goal 6:** exercised for the
+  first time against real Mixtral-8x7B-Instruct-v0.1 (unquantized,
+  ~93.4GB) dimensions under real offload (A100 SXM 80GB,
+  `cpu_offload_gb=28`). Found and fixed a genuine bug in the process: the
+  fused-FusedMoE build loop never pinned offloaded `w13_weight`/
+  `w2_weight` slices to GPU before quantizing (unlike paths 2/3, which
+  both do this explicitly) — under real offload the slices stayed
+  CPU-resident, and `_ShadowExpertINT4`'s forward crashed on its first
+  real `generate()` call ("Expected all tensors to be on the same
+  device, cuda:0 and cpu"). Fixed with the same device-check-then-pin
+  pattern paths 2/3 already use; retried green: `load_model()` completed
+  (58.14GiB weights resident, cpu_offload_gb=28 covering the rest),
+  shadow pool populated via path 1, `generate()` produced real non-empty
+  output, gate hooks fired (288 calls, 35 shadow activations), and the
+  INT4 forward was verified numerically correct at real
+  `hidden_size=4096` (previously only checked at the tiny model's 1024).
+  This is a mechanics/correctness check, not an MMLU quality claim, and
+  not a production-viability claim for this offload configuration — see
+  §9 item 3. Full data: `LOGBOOK.md`, 2026-08-12 "sub-goal 6 ... verified
+  end-to-end under real offload" entry;
+  `osx-poc/subgoal6_20260812/smoke_path1_offload28_retry_*.log`.
 - **Per-subject shadow-vs-baseline comparison not available.** The 72.3%
   hook-only baseline exists as an aggregate figure from an earlier
   session; a subject-by-subject baseline breakdown to compare against
@@ -545,7 +565,14 @@ rather than GCSG in isolation:
    Full data: `LOGBOOK.md`, 2026-08-12 "full 570-question single-shot
    MMLU run, TierManager wired" entry.
 3. Exercise path 1 (`_ShadowExpertINT4`) under real offload for parity
-   with paths 2/3.
+   with paths 2/3. **Update (2026-08-12, Sprint 4 sub-goal 6):** done —
+   see §7's updated Path 1 bullet for the full result, including a real
+   bug found and fixed (offloaded weights were never pinned to GPU before
+   quantizing). Mechanics/correctness only, same caveat as paths 2/3 had
+   at this stage: no MMLU quality number exists yet for path 1 under
+   offload, and this offload configuration (`cpu_offload_gb=28` on an
+   A100 80GB, ~62% of the model offloaded) is not claimed to be
+   production-viable.
 4. Establish a confidence interval via repeated full runs rather than a
    single overnight pass.
 5. **New (2026-08-12):** quantify and, if worthwhile, reduce the latency
