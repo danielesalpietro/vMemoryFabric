@@ -354,6 +354,19 @@ M1 technical report's limitations section) rather than left implicit:
   outright crash in a different (UVA/NVFP4) offload path, on a much newer
   vLLM release, closed `not_planned`. This project's wrapper-granularity
   finding (§4) was added there as a comment during this investigation.
+  **Update (2026-08-12):** an independent reporter confirmed the identical
+  failure mode still reproduces on a stack with essentially nothing in
+  common with this project's own — vLLM 0.27.1, PyTorch 2.13.0+cu130, an
+  RTX 5090 (Blackwell, SM120, 24GB), and a different model family entirely
+  (`nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4`, hybrid NemotronH,
+  not Mixtral). Same trigger (`--cpu-offload-gb 4`, Marlin *and* the newer
+  Humming MoE backend both affected), same fix (`--cpu-offload-gb 0`,
+  everything GPU-resident). This is now confirmed across ~20 vLLM releases,
+  three GPU generations (Ampere → Ada → Blackwell), and two unrelated model
+  architectures — strengthens §5's conclusion that this is a structural
+  WSL2 platform limitation, not specific to this project's stack, and that
+  waiting for an upstream fix (rather than the EAT/Tier-Manager-mediated
+  approach in §9) is not a viable path.
 - MoE quantization / precision-degraded expert literature — not yet
   surveyed; to be added before any external submission.
 
