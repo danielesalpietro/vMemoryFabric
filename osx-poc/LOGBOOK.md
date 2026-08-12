@@ -5,6 +5,60 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: the image had no project code on it
+
+Pre-checks before the pinning soak test (checkpoint integrity, free GPU,
+matching torch/CUDA build — all clean) surfaced a real blocker: **`import
+scheduler.gcsg` / `import tier.manager` both fail on the pod** —
+`ImportError`, the modules simply aren't there.
+
+### Same root cause shape as the CMD/sshd fix, different symptom
+
+`Dockerfile` never `COPY`s `osx-poc/src` (or anything else project-side)
+into the image — it only ever worked locally because
+`docker-compose.yml`'s `.:/workspace` bind-mounts the whole repo over
+`/workspace` at container start. That mount doesn't exist on a RunPod
+Pod, which runs the image as published — so the pod had CUDA, torch,
+vLLM, sshd, all the dependencies, and zero lines of this project's own
+code. Not caught earlier because every prior verification (SSH, `sshd`,
+`/dev/shm`, `nvidia-smi`) never touched project code, only the base
+environment.
+
+Second, related finding from the same pre-check pass: `PYTHONPATH` reads
+empty in the SSH session despite `ENV PYTHONPATH=/workspace/src` being
+set in the Dockerfile — `CUDA_VISIBLE_DEVICES`/`TOKENIZERS_PARALLELISM`/
+`OMP_NUM_THREADS` almost certainly have the same problem, not
+individually re-checked. Docker `ENV` sets the environment for the
+container's main process tree; a separate SSH login session gets its own
+environment via PAM, which doesn't read Docker's `ENV` at all.
+
+### Fix, and what didn't block on it
+
+`Dockerfile` (`2baae5c`): `COPY osx-poc/src|scripts|configs|tests` into
+`/workspace/*`, matching the `PYTHONPATH` already declared rather than
+the `osx-poc/`-relative convention `make`/CI use locally — shadowed by
+the bind mount for local dev, so no behavior change there, verified by
+reasoning about mount precedence rather than assumed. Also appended the
+same env values to `/etc/environment`, which `pam_env` reads for every
+login session including SSH.
+
+Not build-tested yet — same caveat as the SSH fix, needs a real GHCR
+build before trusting it. Didn't block today's actual work: the pinning
+soak test doesn't touch `GCSGWorker`/`TierManager` at all, so the plan is
+to `rsync`/`scp` the repo onto the already-running pod directly over the
+working SSH connection as an immediate unblock, independent of a
+rebuild-and-republish cycle.
+
+### Not yet done
+
+- Build + publish the Dockerfile fix as a fresh `sprint-4-tekniska` tag.
+- Verify `CUDA_VISIBLE_DEVICES`/`TOKENIZERS_PARALLELISM`/`OMP_NUM_THREADS`
+  actually reach an SSH session now, not just `PYTHONPATH`.
+- The pinning soak test itself, on the rsync'd copy — still the point of
+  today.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: `/dev/shm` measured, second pod live
 
 New pod deployed from the updated template (issue #18's `/dev/shm`
