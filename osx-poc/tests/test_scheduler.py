@@ -680,6 +680,57 @@ class TestMarlinPoolShardKey:
         assert k1 != k2
 
 
+# ── _build_marlin_tensor_promoter — regressione bug reale (2026-08-12) ────────
+#
+# Trovato sul pod, prima verifica hardware del path Marlin:
+# "cannot pin 'torch.cuda.HalfTensor' only dense CPU tensors can be pinned".
+# _build_marlin_shadow_pool() decide "offloaded" controllando SOLO
+# w13_qweight — non tutte le sei tensori Marlin-packed di un layer
+# condividono per forza lo stesso device; alcune (es. w13_scales) possono
+# restare GPU-resident anche quando w13_qweight è offloaded su CPU.
+# Chiamare .pin_memory() incondizionatamente su una già CUDA crashava.
+
+class _FakeCudaTensor:
+    class _Device:
+        type = "cuda"
+    device = _Device()
+
+
+class TestMarlinTensorPromoterDeviceCheck:
+
+    @staticmethod
+    def _make_worker():
+        worker = GCSGWorker.__new__(GCSGWorker)
+        worker._tier_manager = None   # non serve per il ramo testato: lo
+                                       # short-circuit "già CUDA" ritorna
+                                       # prima di toccare _tier_manager
+        return worker
+
+    def test_promoter_returns_already_cuda_tensor_unchanged(self):
+        """Riproduce esattamente lo scenario del bug: un tensore
+        non-dominante già GPU-resident non deve mai arrivare a
+        .pin_memory()."""
+        worker = self._make_worker()
+        promoter = worker._build_marlin_tensor_promoter(layer_id=5, expert_ids=[0, 1])
+
+        fake_cuda_tensor = _FakeCudaTensor()
+        result = promoter("w13_scales", fake_cuda_tensor)   # non il dominante
+
+        assert result is fake_cuda_tensor   # passthrough, nessun crash
+
+    def test_promoter_dominant_name_also_short_circuits_if_already_cuda(self):
+        """Lo stesso controllo si applica anche al tensore dominante
+        (w13_qweight) — anche se nella pratica quello è il segnale usato
+        per decidere 'offloaded', vale la stessa difesa per coerenza."""
+        worker = self._make_worker()
+        promoter = worker._build_marlin_tensor_promoter(layer_id=5, expert_ids=[0, 1])
+
+        fake_cuda_tensor = _FakeCudaTensor()
+        result = promoter("w13_qweight", fake_cuda_tensor)
+
+        assert result is fake_cuda_tensor   # non chiama _tier_manager (None qui) senza crashare
+
+
 # ── AERManager ────────────────────────────────────────────────────────────────
 
 class TestAER:

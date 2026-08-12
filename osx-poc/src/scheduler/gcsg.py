@@ -1451,6 +1451,28 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         solo layer_id — vedi la sua docstring per il perché quella
         distinzione è necessaria qui e non lo è per il path AWQ (dove la
         chiave è già per-singolo-expert, non condivisa da un pool).
+
+        BUG REALE trovato sul pod (2026-08-12, prima verifica hardware di
+        questo path): `_build_marlin_shadow_pool()` decide "offloaded"
+        controllando SOLO `w13_qweight.data.device.type` — assunzione
+        implicita (mai vera per costruzione) che le altre cinque tensori
+        Marlin-packed dello stesso layer condividano lo stesso device.
+        Non è così: su hardware reale, `w13_scales`/`w2_scales`/altre
+        possono restare GPU-resident anche quando `w13_qweight` è
+        offloaded su CPU — cpu_offload_gb di vLLM evidentemente non
+        offload'a l'intero modulo come unità indivisibile. Il ramo non-
+        dominante sotto chiamava `.pin_memory()` incondizionatamente,
+        che solleva `RuntimeError: cannot pin ... only dense CPU tensors
+        can be pinned` su un tensore già CUDA — esattamente l'errore
+        osservato. Fix: controllo esplicito del device PRIMA di
+        pinnare/spostare, stesso principio difensivo già usato per il
+        path AWQ (_promote_module_via_tier_manager() filtra
+        `p.device.type != "cuda"` prima di processare ogni parametro —
+        qui manca lo stesso controllo, aggiunto ora). Il ramo dominante
+        (via TierManager.promote_live_tensor() -> GPUTransfer.to_vram())
+        era già sicuro per costruzione: to_vram() riporta esplicitamente
+        su CPU un input già CUDA prima di un eventuale pin_memory() —
+        vedi tier/gpu.py.
         """
         import asyncio
 
@@ -1459,6 +1481,11 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         dominant_name = "w13_qweight"
 
         def _promoter(name: str, cpu_slice: Any) -> Any:
+            if cpu_slice.device.type == "cuda":
+                # Già GPU-resident — nulla da promuovere/pinnare, stesso
+                # comportamento del vecchio .to(device) diretto (no-op su
+                # un tensore già sul device target). Vedi BUG REALE sopra.
+                return cpu_slice
             if name == dominant_name:
                 return asyncio.run(
                     self._tier_manager.promote_live_tensor(

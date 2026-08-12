@@ -5,6 +5,79 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-12 — Tekniska, continued: Marlin path's first real-hardware test failed — real bug found and fixed, NOT the one anyone suspected
+
+Pre-96GB-test regression pass (4 scripted tests, one at a time, stop on
+first failure). Tests 1-2 green (110 passed/3 skipped pytest on real
+hardware — GPU-marked tests ran for real for the first time; AWQ-path
+checklist unchanged). **Test 3 — the Marlin checklist, first-ever
+hardware run of today's Marlin wiring — failed.**
+
+### The failure
+
+```
+GCSG: impossibile pinnare gli expert Marlin [0, 1] (layer 5, offloaded)
+in GPU (cannot pin 'torch.cuda.HalfTensor' only dense CPU tensors can be
+pinned) — path Marlin escluso dallo shadow pool.
+Shadow pool populated: expert(s) [] (shadow_pool_size configured: 2).
+FAIL: worker._shadow_pool is empty
+```
+
+### Root cause — not the sentinel-key risk flagged in the previous entry
+
+`_build_marlin_shadow_pool()` decides whether a layer is "offloaded" by
+checking **only** `w13_qweight.data.device.type`. Implicit, never-verified
+assumption: that the other five Marlin-packed tensors per layer
+(`w2_qweight`/`w13_scales`/`w2_scales`/`w13_qzeros`/`w2_qzeros`) share the
+same device. They don't, on real hardware — vLLM's `cpu_offload_gb`
+evidently doesn't offload a module's tensors as one indivisible unit;
+`w13_scales` (or another of the five) stayed GPU-resident while
+`w13_qweight` was correctly offloaded to CPU for the same layer.
+`_build_marlin_tensor_promoter()`'s non-dominant branch called
+`.pin_memory()` unconditionally — a CPU-only operation — on whatever it
+was handed, crashing on the already-CUDA tensor exactly as the error
+says.
+
+The AWQ path's equivalent function (`_promote_module_via_tier_manager()`)
+already guards against exactly this — it filters
+`p.device.type != "cuda"` before processing each parameter individually,
+never assuming module-level "offloaded" applies uniformly. The Marlin
+promoter never got the same guard. Root-caused by reading the code
+against the error message, not by guessing — the other session's
+initial hypothesis (the sentinel-key/`_marlin_pool_shard_key` design)
+was reasonable given what was flagged as the risky part in the previous
+entry, but the actual bug was one layer more basic and unrelated to it;
+worth recording that the first guess was wrong, not just the fix.
+
+### Fix
+
+`_promoter()` now checks `cpu_slice.device.type == "cuda"` first and
+returns the tensor unchanged if so — before touching either the
+dominant-tensor `TierManager.promote_live_tensor()` branch or the
+non-dominant `.pin_memory()` branch. Note: the dominant-tensor branch
+was actually already safe by construction —
+`GPUTransfer.to_vram()` (called via `promote_live_tensor()`) already
+round-trips a CUDA-resident input through `.cpu()` before any pinning
+attempt (see `tier/gpu.py`) — only the non-dominant plain-copy branch
+lacked that defense. Added the short-circuit uniformly anyway, for
+consistency and because it's cheap.
+
+2 new regression tests (`TestMarlinTensorPromoterDeviceCheck`) reproduce
+the exact scenario with a fake CUDA-tagged tensor object, confirming the
+promoter now short-circuits instead of calling `.pin_memory()`. 97
+passed / 18 skipped total (up from 95), zero failures.
+
+### Not yet done
+
+- Re-running the Marlin checklist (test 3) on the pod to confirm the fix
+  actually resolves it — nothing in this entry has touched a GPU with
+  the fix applied.
+- Tests 3 (rerun) and 4 (`bench_eat.py`) from the regression pass, per
+  the "stop on first failure" instruction — resume from test 3.
+- The 96GB path-1 real-offload test stays queued behind this passing.
+
+---
+
 ## 2026-08-12 — Tekniska, continued: Marlin path (path 2) wired through TierManager — implemented, unit-tested, NOT yet run on real hardware
 
 Second decision agreed with the user in the same batch as issue #1
