@@ -254,12 +254,13 @@ def main() -> None:
           f"3 short prompts, this only confirms the call path itself works).")
     print("[checklist item 5 OK]")
 
-    print("\nSMOKE TEST: GREEN — TierManager/EAT wiring verified end-to-end on real "
-          "hardware (asyncio bridging, real GPU transfer + EAT tier update, real routing "
-          "traffic, refresh callable).")
-    print("NOT verified here: MMLU quality on this path (LOGBOOK.md priority item 4 — run "
-          "separately, compare against the 72.28%/72.3% baseline), and the Marlin path "
-          "(path 2, deliberately untouched by this integration).")
+    print(f"\nSMOKE TEST: GREEN — TierManager/EAT wiring verified end-to-end on real "
+          f"hardware for the '{args.quantization}' path (asyncio bridging, real GPU "
+          f"transfer + EAT tier update, real routing traffic, refresh callable).")
+    other_path = "AWQ (path 3)" if args.quantization == "awq_marlin" else "Marlin (path 2)"
+    print(f"NOT verified here: MMLU quality on this path (LOGBOOK.md priority item 4 — run "
+          f"separately, compare against the 72.28%/72.3% baseline), and the {other_path} "
+          f"path (this run only exercises '{args.quantization}').")
 
 
 if __name__ == "__main__":
