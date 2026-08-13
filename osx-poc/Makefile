@@ -39,12 +39,16 @@ test-scheduler:
 bench:
 	$(RUN) python benchmarks/bench_eat.py
 	$(RUN) python benchmarks/bench_tier.py
+	$(RUN) python benchmarks/bench_epm.py
 
 bench-eat:
 	$(RUN) python benchmarks/bench_eat.py
 
 bench-tier:
 	$(RUN) python benchmarks/bench_tier.py
+
+bench-epm:
+	$(RUN) python benchmarks/bench_epm.py
 
 # ── Diagnostic repros (manual, not wired into CI) ───────────────────────────────
 # Requires the real checkpoint on disk (/data/nvme/models/mixtral-instruct-awq)
@@ -106,7 +110,8 @@ help:
 	@echo "  make test-eat     pytest M1 only"
 	@echo "  make test-tier    pytest M2 only"
 	@echo "  make test-scheduler pytest M3 only"
-	@echo "  make bench        Benchmark M1 + M2"
+	@echo "  make bench        Benchmark M1 + M2 + EPM"
+	@echo "  make bench-epm    Benchmark EPM only (issue #27, no GPU needed)"
 	@echo "  make gpu-repro-issue10  Diagnostic repros, issue #10 offload crash (manual, one at a time)"
 	@echo "  make lint         Ruff linter"
 	@echo "  make typecheck    mypy"
