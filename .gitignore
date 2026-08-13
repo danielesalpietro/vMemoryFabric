@@ -13,3 +13,7 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# EPM runtime state (issue #27) — snapshot/storico generati a run-time,
+# non codice. Vedi src/scheduler/epm.py.
+osx-poc/state/

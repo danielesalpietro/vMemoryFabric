@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 from scheduler import PTPEPClassifier, DomainLabel, GCSGGuard, AERManager
 from scheduler.ptpep import PTPEPPrediction
 from scheduler import gcsg as gcsg_module
+from scheduler import epm
 from scheduler.gcsg import GatingContext, ShadowExecutionResult, GCSGWorker
 from eat import ExpertAccessTable, Tier
 from tier import TierManager
@@ -499,6 +500,8 @@ class TestGCSGTierManagerWiring:
         worker.guard = GCSGGuard(shadow_pool_size=shadow_pool_size, check_vram=False)
         worker._tier_manager = tier_manager
         worker._eat_snapshot = eat_snapshot
+        worker._epm_run_id = None
+        worker._epm_initial_selection = None
         worker._n_experts_cached = None
         worker._shadow_pool = {}
         return worker
@@ -715,6 +718,111 @@ class TestGCSGTierManagerWiring:
         snap = worker.export_eat_snapshot()
 
         assert snap["entries"]["0:0"]["access_count"] == 1
+
+    # ── EPM — _epm_capture_initial_position() / finalize_epm_run() (issue #27) ──
+
+    def test_capture_initial_position_without_tier_manager_is_noop(self):
+        worker = self._make_worker(tier_manager=None)
+        worker._epm_capture_initial_position()
+        assert worker._epm_run_id is None
+        assert worker._epm_initial_selection is None
+
+    def test_capture_initial_position_records_shadow_pool_keys(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr)
+        worker._shadow_pool = {3: object(), 1: object()}
+
+        worker._epm_capture_initial_position()
+
+        assert worker._epm_run_id is not None
+        assert worker._epm_initial_selection == [1, 3]   # sorted
+
+    def test_capture_initial_position_empty_pool_is_honest_not_hidden(self, tmp_path):
+        """Un pool vuoto (es. _load_shadow_pool() fallita) viene comunque
+        registrato — non un caso da nascondere allo storico."""
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr)
+        worker._shadow_pool = {}
+
+        worker._epm_capture_initial_position()
+
+        assert worker._epm_run_id is not None
+        assert worker._epm_initial_selection == []
+
+    def test_finalize_epm_run_without_tier_manager_returns_none(self, tmp_path):
+        worker = self._make_worker(tier_manager=None)
+        result = worker.finalize_epm_run(
+            snapshot_path=tmp_path / "snap.json", history_path=tmp_path / "hist.json",
+        )
+        assert result is None
+        assert not (tmp_path / "snap.json").exists()
+
+    def test_finalize_epm_run_before_load_returns_none(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr)   # _n_experts_cached ancora None
+        result = worker.finalize_epm_run(
+            snapshot_path=tmp_path / "snap.json", history_path=tmp_path / "hist.json",
+        )
+        assert result is None
+
+    def test_finalize_epm_run_writes_snapshot_and_history(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(4):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        mgr.eat.access(expert_id=2, shard_idx=0)
+        mgr.eat.access(expert_id=2, shard_idx=0)
+
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=1)
+        worker._n_experts_cached = 4
+        worker._shadow_pool = {0: object()}   # posizione "iniziale" da un cold start
+        worker._epm_run_id = "run-1"
+        worker._epm_initial_selection = [0]
+
+        snap_path = tmp_path / "state" / "snap.json"
+        hist_path = tmp_path / "state" / "hist.json"
+        record = worker.finalize_epm_run(snapshot_path=snap_path, history_path=hist_path)
+
+        assert record["run_id"] == "run-1"
+        assert record["initial_selection"] == [0]
+        assert record["final_selection"] == [2]   # expert 2 è il più caldo per traffico reale
+        assert record["continued_from_previous"] is False   # nessuno storico precedente
+        assert epm.load_snapshot_file(snap_path)["entries"]["2:0"]["access_count"] == 2
+        assert epm.load_history(hist_path) == [record]
+
+    def test_finalize_epm_run_detects_continuity_with_previous_run(self, tmp_path):
+        """Il caso che l'utente ha chiesto di poter verificare: se la
+        posizione finale del run N coincide con quella iniziale del run
+        N+1, vuol dire che quest'ultimo ha davvero usato la memoria."""
+        hist_path = tmp_path / "hist.json"
+        epm.append_run_record({"run_id": "run-0", "final_selection": [1, 2]}, hist_path)
+
+        mgr = self._real_tier_manager(tmp_path)
+        mgr.eat.insert(expert_id=1, shard_idx=0, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=1)
+        worker._n_experts_cached = 2
+        worker._epm_run_id = "run-1"
+        worker._epm_initial_selection = [1, 2]   # coincide col final_selection di run-0
+
+        record = worker.finalize_epm_run(snapshot_path=tmp_path / "snap.json", history_path=hist_path)
+
+        assert record["continued_from_previous"] is True
+
+    def test_finalize_epm_run_history_respects_max_runs(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        mgr.eat.insert(expert_id=0, shard_idx=0, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=1)
+        worker._n_experts_cached = 1
+        worker._epm_run_id = "run-x"
+        worker._epm_initial_selection = []
+
+        hist_path = tmp_path / "hist.json"
+        for i in range(3):
+            epm.append_run_record({"run_id": f"pre-{i}"}, hist_path, max_runs=2)
+        worker.finalize_epm_run(snapshot_path=tmp_path / "snap.json", history_path=hist_path, max_history_runs=2)
+
+        history = epm.load_history(hist_path)
+        assert len(history) == 2
+        assert history[-1]["run_id"] == "run-x"
 
     # ── traffico EAT reale nell'hook .gate ──────────────────────────────────
 

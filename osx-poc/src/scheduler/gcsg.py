@@ -94,6 +94,7 @@ Hook vLLM — verificato contro il sorgente reale di vllm==0.6.6.post1
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import logging
 import time
@@ -109,6 +110,7 @@ import pynvml   # provided by the `nvidia-ml-py` package (requirements.txt) —
 # the local vllm imports below (see docstring above).
 from eat import Tier
 from tier import TierManager
+from . import epm
 
 log = logging.getLogger(__name__)
 
@@ -794,10 +796,21 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
           un dict da un EAT.export_snapshot() precedente,
           _seed_eat_entries() lo applica come prior di hotness (access_count
           decayed) dopo il seeding strutturale, invece di ripartire sempre
-          da access_count=0. export_eat_snapshot() è il simmetrico lato
-          salvataggio, per chi orchestra questo worker. Nessun ripristino
-          di tier fisico: vedi le docstring di ExpertAccessTable.export_
-          snapshot()/load_snapshot() per il perché.
+          da access_count=0. Nessun ripristino di tier fisico: vedi le
+          docstring di ExpertAccessTable.export_snapshot()/load_snapshot()
+          per il perché. finalize_epm_run() (scheduler.epm per l'I/O) è il
+          lato salvataggio: scrive lo snapshot su disco per il prossimo
+          run E accoda un record allo storico posizioni (ultimi
+          epm.MAX_HISTORY_RUNS run, FIFO) con continued_from_previous —
+          True se la posizione finale del run precedente coincide con
+          quella iniziale di questo, l'evidenza empirica che il prior ha
+          davvero guidato la selezione. Pensato per essere attivo di
+          default (configure_eat_snapshot() con lo snapshot su disco +
+          finalize_epm_run() a fine run) e disattivabile passando un
+          argomento a livello di script (vedi es. --no-epm in
+          scripts/smoke_test_gcsg_tier_manager.py) — GCSGWorker stesso non
+          impone né un default né un modo di spegnerlo, quella decisione
+          resta dello script che lo orchestra.
 
     Stato di verifica, dichiarato esplicitamente per lo stesso motivo di
     ogni altra claim in questo file: la logica pura Python (selezione,
@@ -901,6 +914,13 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         self._tier_manager = tier_manager if tier_manager is not None else type(self)._pending_tier_manager
         # EPM (issue #27) — stesso pattern/fallback di _tier_manager sopra.
         self._eat_snapshot = eat_snapshot if eat_snapshot is not None else type(self)._pending_eat_snapshot
+        # Storico posizioni (issue #27) — id di questo run + selezione shadow
+        # pool "iniziale" (subito dopo load_model(), prima di traffico reale),
+        # popolati da load_model()/_load_shadow_pool(); consumati da
+        # finalize_epm_run(). None finché tier_manager non è wired: senza EAT
+        # non c'è una "posizione" di cui tenere lo storico.
+        self._epm_run_id: Optional[str] = None
+        self._epm_initial_selection: Optional[List[int]] = None
         self._n_experts_cached: Optional[int] = None
         self._shadow_pool: Dict[int, object] = {}
         self._gate_hook_handles: List[object] = []
@@ -997,6 +1017,28 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                 "modalità hook-only: hook/request_id/contamination bookkeeping "
                 "restano verificabili, nessuna shadow execution possibile.", e,
             )
+
+        self._epm_capture_initial_position()
+
+    def _epm_capture_initial_position(self) -> None:
+        """EPM (issue #27) — "posizione iniziale" di questo run: la
+        selezione shadow pool subito dopo il seeding/prior, prima che un
+        solo token reale sia stato instradato. Solo con tier_manager
+        wired: senza EAT non c'è hotness la cui posizione abbia senso
+        tracciare (sempre round-robin, storicizzarlo non direbbe nulla).
+
+        Chiamata da load_model() dopo _load_shadow_pool() — anche se
+        quest'ultima è fallita (pool vuoto): un run che non è riuscito a
+        popolare il pool è comunque un dato onesto da tenere nello
+        storico, non un caso da nascondere. Isolata dal resto di
+        load_model() perché, a differenza di quest'ultima, non richiede
+        un vLLM Worker reale — solo self._shadow_pool/self._tier_manager,
+        già assegnabili a mano nei test (stesso principio di
+        _seed_eat_entries()/_load_shadow_pool()).
+        """
+        if self._tier_manager is not None:
+            self._epm_run_id = epm.new_run_id()
+            self._epm_initial_selection = sorted(self._shadow_pool.keys())
 
     def _load_shadow_pool(self) -> None:
         """Costruisce shadow_pool_size shadow expert, da TUTTI i layer del
@@ -1338,6 +1380,74 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         if tier_manager is None:
             return None
         return tier_manager.eat.export_snapshot()
+
+    def finalize_epm_run(
+        self,
+        snapshot_path: Path = epm.DEFAULT_SNAPSHOT_PATH,
+        history_path: Path = epm.DEFAULT_HISTORY_PATH,
+        max_history_runs: int = epm.MAX_HISTORY_RUNS,
+    ) -> Optional[dict]:
+        """Chiude il ciclo EPM (issue #27) per questo run: scrive lo
+        snapshot di hotness su disco (per il prossimo run) e accoda un
+        record allo storico posizioni — questo IL punto in cui EPM tocca
+        il filesystem, deliberatamente, a differenza di export_eat_
+        snapshot()/configure_eat_snapshot() che restano pura logica.
+
+        Va chiamato esplicitamente dal chiamante a fine run (stesso
+        principio di export_eat_snapshot(): GCSGWorker non intercetta la
+        propria distruzione/shutdown, vedi eat.eat.EAT.shutdown() — chi
+        orchestra questo worker decide quando "il run è finito"). Con
+        --no-epm o equivalente, il chiamante semplicemente non lo invoca.
+
+        "posizione finale" qui è la selezione che _select_shadow_expert_ids()
+        produrrebbe ORA, dalla hotness realmente accumulata in questo run —
+        non necessariamente lo shadow pool fisicamente caricato in questo
+        momento (che riflette l'ultima refresh_shadow_pool_selection(), se
+        mai chiamata): è il segnale onesto di "cosa ha davvero visto EAT",
+        indipendente da se/quando il pool è stato ricaricato.
+
+        Il record include continued_from_previous: True se la posizione
+        finale dell'ULTIMO run nello storico coincide con la posizione
+        iniziale di QUESTO run — l'evidenza empirica che il prior caricato
+        ha davvero determinato la selezione (vedi epm.positions_match()).
+
+        Returns:
+            Il record run scritto nello storico, o None se non wired a un
+            TierManager o se load_model() non è mai girato con successo
+            (nessuna "posizione" di cui avere uno storico in nessuno dei
+            due casi).
+        """
+        tier_manager = getattr(self, "_tier_manager", None)
+        if tier_manager is None:
+            return None
+        if getattr(self, "_n_experts_cached", None) is None:
+            log.warning(
+                "GCSG: finalize_epm_run() chiamato prima che _load_shadow_pool() "
+                "sia mai girato con successo — no-op."
+            )
+            return None
+
+        final_selection = sorted(self._select_shadow_expert_ids(self._n_experts_cached))
+        snapshot = tier_manager.eat.export_snapshot()
+        epm.write_snapshot_file(snapshot, snapshot_path)
+
+        history = epm.load_history(history_path)
+        continued_from_previous = bool(history) and epm.positions_match(
+            history[-1].get("final_selection"), self._epm_initial_selection,
+        )
+        record = {
+            "run_id": self._epm_run_id,
+            "initial_selection": self._epm_initial_selection,
+            "final_selection": final_selection,
+            "continued_from_previous": continued_from_previous,
+            "shadow_pool_size": self.guard.shadow_pool_size,
+        }
+        epm.append_run_record(record, history_path, max_runs=max_history_runs)
+        log.info(
+            "GCSG: EPM — run %s finalizzato (continued_from_previous=%s, "
+            "final_selection=%s).", self._epm_run_id, continued_from_previous, final_selection,
+        )
+        return record
 
     def _should_pin_transfers(self) -> bool:
         """True su Linux reale (dove il soak test 2026-08-12 ha verificato

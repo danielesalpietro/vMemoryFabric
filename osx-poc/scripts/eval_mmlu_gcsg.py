@@ -48,6 +48,7 @@ from collections import defaultdict
 
 from datasets import load_dataset
 
+from scheduler import epm
 from scheduler.gcsg import GCSGWorker
 
 MODEL_PATH = "/data/nvme/models/mixtral-instruct-awq"
@@ -195,7 +196,7 @@ def main() -> None:
              "via GCSGWorker.configure_tier_manager() before LLM(...), same "
              "config as scripts/smoke_test_gcsg_tier_manager.py (issue #17 "
              "sub-goal 1). This is sub-goal 3 (integrated-path MMLU rerun): "
-             "the actual comparison against the 72.28%/72.3% baseline runs "
+             "the actual comparison against the 72.28%%/72.3%% baseline runs "
              "through this flag. Pair with --quantization to pick which "
              "wired path to measure.",
     )
@@ -224,6 +225,13 @@ def main() -> None:
              "flushata subito dopo ogni blocco. Se un blocco successivo si "
              "blocca, questo file dice esattamente fin dove si è arrivato e "
              "con quale esito per blocco, senza perdere il lavoro già fatto.",
+    )
+    parser.add_argument(
+        "--no-epm", action="store_true",
+        help="Disabilita EPM (issue #27, ha effetto solo con --wire-tier-manager): "
+             "non carica lo snapshot di hotness del run precedente (sempre cold "
+             "start round-robin) e non salva snapshot/storico di questo run. "
+             "EPM è attivo di default quando --wire-tier-manager è passato.",
     )
     args = parser.parse_args()
 
@@ -272,6 +280,15 @@ def main() -> None:
         GCSGWorker.configure_tier_manager(tier_manager)
         _log("--wire-tier-manager: TierManager/EAT wired via "
              "GCSGWorker.configure_tier_manager().")
+
+        if args.no_epm:
+            GCSGWorker.configure_eat_snapshot(None)
+            _log("EPM disabilitato (--no-epm): cold start round-robin, "
+                 "nessuno snapshot/storico salvato a fine run.")
+        else:
+            prior = epm.load_snapshot_file()
+            GCSGWorker.configure_eat_snapshot(prior)
+            _log(f"EPM: {'snapshot precedente caricato da ' + str(epm.DEFAULT_SNAPSHOT_PATH) if prior else 'nessuno snapshot trovato in ' + str(epm.DEFAULT_SNAPSHOT_PATH) + ' — cold start'}.")
 
     if args.quantization is not None:
         quantization = args.quantization
@@ -434,6 +451,14 @@ def main() -> None:
             "hook-only, non la degradazione di qualità da contaminazione shadow "
             "che il target README (<2%) misura."
         )
+
+    if args.wire_tier_manager and not args.no_epm:
+        worker = llm.llm_engine.model_executor.driver_worker
+        record = worker.finalize_epm_run()
+        if record is not None:
+            print(f"\nEPM: run finalizzato — {record}")
+            print(f"EPM: snapshot scritto in {epm.DEFAULT_SNAPSHOT_PATH}, storico in "
+                  f"{epm.DEFAULT_HISTORY_PATH} (ultimi {epm.MAX_HISTORY_RUNS} run).")
 
     sys.exit(0)
 

@@ -51,6 +51,17 @@ Checklist mechanized here, in the same priority order as LOGBOOK.md's
        EAT.access() call) actually accumulates during generate().
     5. refresh_shadow_pool_selection() is callable post-generate()
        without raising, and reflects whatever hotness accumulated.
+    6. EPM (issue #27, 2026-08-13): on by default — a prior snapshot from
+       state/epm_eat_snapshot.json (if present) is loaded via
+       GCSGWorker.configure_eat_snapshot() before LLM(...), and
+       worker.finalize_epm_run() writes this run's snapshot + a history
+       record (initial/final shadow pool position, continued_from_
+       previous) after the checklist above. Two consecutive runs of this
+       script (same --quantization) are the actual verification: the
+       second run's "initial position" printed below should match the
+       first run's "final position" — continued_from_previous=True is
+       that check made explicit. --no-epm disables both load and save,
+       forcing every run back to the round-robin cold start.
 
 NOT covered here (needs a separate, larger run): a real MMLU comparison
 against the existing 72.28%/72.3% baseline with tier_manager wired —
@@ -59,6 +70,7 @@ LOGBOOK.md's priority item 4. Do that only after this script is green.
 Usage:
     PYTHONPATH=src python scripts/smoke_test_gcsg_tier_manager.py  # path 3, AWQ
     PYTHONPATH=src python scripts/smoke_test_gcsg_tier_manager.py --quantization awq_marlin  # path 2
+    PYTHONPATH=src python scripts/smoke_test_gcsg_tier_manager.py --no-epm  # sempre cold start
 """
 from __future__ import annotations
 
@@ -73,6 +85,7 @@ from eat import ExpertAccessTable, Tier
 from tier import TierManager
 from vllm import LLM, SamplingParams
 
+from scheduler import epm
 from scheduler.gcsg import GCSGWorker
 
 MODEL_PATH = "/data/nvme/models/mixtral-instruct-awq"
@@ -122,6 +135,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--quantization", choices=["awq", "awq_marlin"], default="awq",
                          help="path 3 (AWQ ModuleList) or path 2 (Marlin) — see module docstring")
+    parser.add_argument("--no-epm", action="store_true",
+                         help="Disabilita EPM (issue #27): non carica lo snapshot di hotness "
+                              "del run precedente (sempre cold start round-robin) e non salva "
+                              "snapshot/storico di questo run. EPM è attivo di default.")
     args = parser.parse_args()
 
     threading.Thread(target=_watchdog, args=(1200.0,), daemon=True).start()
@@ -134,6 +151,14 @@ def main() -> None:
     _log("TierManager wired via GCSGWorker.configure_tier_manager() — vLLM will pick it "
          "up when it constructs the worker itself (no direct kwarg path exists, see the "
          "docstring on configure_tier_manager()/_pending_tier_manager in gcsg.py).")
+
+    if args.no_epm:
+        GCSGWorker.configure_eat_snapshot(None)
+        _log("EPM disabilitato (--no-epm): cold start round-robin, nessuno snapshot/storico salvato.")
+    else:
+        prior = epm.load_snapshot_file()
+        GCSGWorker.configure_eat_snapshot(prior)
+        _log(f"EPM: {'snapshot precedente caricato da ' + str(epm.DEFAULT_SNAPSHOT_PATH) if prior else 'nessuno snapshot trovato in ' + str(epm.DEFAULT_SNAPSHOT_PATH) + ' — cold start'}.")
 
     _log(f"Loading {MODEL_PATH} via EngineArgs(worker_cls=GCSGWorker), "
          f"quantization={args.quantization}, cpu_offload_gb=4 ...")
@@ -253,6 +278,31 @@ def main() -> None:
           f"({'changed' if pool_before != pool_after else 'unchanged'} — either is fine on "
           f"3 short prompts, this only confirms the call path itself works).")
     print("[checklist item 5 OK]")
+
+    # ── checklist 6: EPM — snapshot + storico posizioni (issue #27) ─────────
+
+    if args.no_epm:
+        print("\nEPM disabilitato (--no-epm) — checklist item 6 skipped.")
+    else:
+        print(f"\nEPM: posizione iniziale di questo run (subito dopo load_model(), prima di "
+              f"generate()): {worker._epm_initial_selection}.")
+        record = worker.finalize_epm_run()
+        if record is None:
+            _fail("finalize_epm_run() ha restituito None con tier_manager wired e "
+                  "_n_experts_cached impostato — non dovrebbe succedere qui.")
+        print(f"EPM: run finalizzato — {record}")
+        print(f"EPM: snapshot scritto in {epm.DEFAULT_SNAPSHOT_PATH}, storico in "
+              f"{epm.DEFAULT_HISTORY_PATH} (ultimi {epm.MAX_HISTORY_RUNS} run).")
+        if record["continued_from_previous"]:
+            print("EPM: continued_from_previous=True — la posizione iniziale di QUESTO run "
+                  "coincide con la posizione finale dell'ULTIMO run nello storico: la memoria "
+                  "è stata usata per davvero, non solo caricata senza effetto.")
+        else:
+            print("EPM: continued_from_previous=False — o questo è il primo run "
+                  "(niente storico precedente), oppure il prior caricato non ha determinato "
+                  "la stessa selezione del run precedente (verificabile solo eseguendo "
+                  "questo script due volte di fila con lo stesso --quantization).")
+        print("[checklist item 6 OK]")
 
     print(f"\nSMOKE TEST: GREEN — TierManager/EAT wiring verified end-to-end on real "
           f"hardware for the '{args.quantization}' path (asyncio bridging, real GPU "
