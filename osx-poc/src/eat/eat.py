@@ -44,7 +44,15 @@ contesa concorrente, issue #2): tre strategie selezionabili via
                      sfruttando l'atomicità di dict.get() sotto il GIL;
                      touch() (chiamato da access()) resta sotto lock
                      perché fa due scritture non atomiche
-                     (access_count, poi last_access_ts).
+                     (access_count, poi last_access_ts). L'entry
+                     restituita da lookup() è comunque un riferimento
+                     mutabile condiviso: chi la legge dopo il lock
+                     (o senza mai prenderlo) può incrociare un touch()
+                     concorrente a metà. EATEntry.write_in_progress /
+                     seqlock_write() (Opzione D — riusa version, non più
+                     solo un contatore incrementato a vuoto) danno al
+                     chiamante il segnale per accorgersene e decidere lui
+                     cosa fare — non è enforcement automatico.
 
 Internamente "single" e "lockfree_read" sono un caso speciale di
 "striped" con un solo shard: stesso comportamento di prima della issue
@@ -171,7 +179,8 @@ class ExpertAccessTable:
     def update_tier(self, expert_id: ExpertID, shard_idx: ShardID, new_tier: Tier) -> None:
         """Aggiorna il tier di uno shard (chiamato dal Tier Manager post-promozione/evizione).
 
-        Thread-safe tramite lock (dello shard competente) + version bump.
+        Thread-safe tramite lock (dello shard competente) + seqlock_write
+        (version dispari/pari attorno alla mutazione — vedi EATEntry).
         """
         key = (expert_id, shard_idx)
         idx = self._shard_idx(key)
@@ -179,8 +188,8 @@ class ExpertAccessTable:
             entry = self._shards[idx].get(key)
             if entry is None:
                 raise KeyError(f"shard non presente: {key}")
-            entry.tier = new_tier
-            entry.version += 1
+            with entry.seqlock_write():
+                entry.tier = new_tier
 
     def evict(self, expert_id: ExpertID, shard_idx: ShardID) -> Optional[EATEntry]:
         """Rimuove uno shard dalla EAT (eviction dal Tier Manager).

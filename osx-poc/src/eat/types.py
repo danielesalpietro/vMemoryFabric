@@ -1,5 +1,6 @@
 """Tipi fondamentali per M1 — EAT."""
 from __future__ import annotations
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Optional
@@ -43,9 +44,40 @@ class EATEntry:
     access_count:   int             = 0             # 4 bytes
     last_access_ts: float           = field(default_factory=time.monotonic)  # 8 bytes
     semantic_vec_ptr: Optional[int] = None          # 8 bytes (futuro: indice vettore)
-    version:        int             = 0             # 4 bytes (CAS counter)
+    version:        int             = 0             # 4 bytes (seqlock/CAS counter)
+
+    @property
+    def write_in_progress(self) -> bool:
+        """True se in questo istante è in corso una scrittura su questa entry
+        (version dispari — protocollo seqlock, issue #23).
+
+        Pensato per EAT.lookup() con locking_strategy="lockfree_read": chi
+        legge senza lock può controllare version prima e dopo aver letto i
+        campi che gli interessano — se è dispari, o se è cambiata tra le
+        due letture, il dato letto può essere incoerente (es. touch() a
+        metà: access_count già aggiornato, last_access_ts non ancora) e
+        chi legge decide da sé cosa fare (retry, scarta, accetta comunque,
+        logga). Questo non è enforcement automatico: è il segnale grezzo
+        su cui costruire la policy.
+        """
+        return self.version % 2 == 1
+
+    @contextmanager
+    def seqlock_write(self):
+        """Contesto per mutare l'entry sotto protocollo seqlock: incrementa
+        version prima (dispari = scrittura in corso) e dopo (pari =
+        stabile) del blocco. Non sostituisce il lock dello shard di
+        EAT — i writer restano serializzati da quello; questo protegge
+        solo i lettori lock-free che leggono senza mai prendere un lock.
+        """
+        self.version += 1
+        try:
+            yield
+        finally:
+            self.version += 1
 
     def touch(self) -> None:
         """Aggiorna timestamp e contatore di accesso (non thread-safe — usa EAT.access())."""
-        self.access_count += 1
-        self.last_access_ts = time.monotonic()
+        with self.seqlock_write():
+            self.access_count += 1
+            self.last_access_ts = time.monotonic()

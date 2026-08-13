@@ -96,7 +96,10 @@ class TestEAT:
 
         entry = eat.lookup(expert_id=0, shard_idx=0)
         assert entry.tier == Tier.VRAM
-        assert entry.version == 1
+        # seqlock_write() incrementa version due volte (dispari a inizio
+        # mutazione, pari a fine) — vedi EATEntry.seqlock_write()
+        assert entry.version == 2
+        assert entry.write_in_progress is False
 
     def test_update_tier_missing_raises(self, eat):
         with pytest.raises(KeyError):
@@ -273,7 +276,49 @@ class TestEATConcurrency:
             t.join()
 
         entry = eat.lookup(expert_id=0, shard_idx=0)
-        assert entry.version == n_threads * updates_per_thread
+        # seqlock_write(): 2 bump per update_tier() (dispari a inizio,
+        # pari a fine) — vedi EATEntry.seqlock_write()
+        assert entry.version == 2 * n_threads * updates_per_thread
+        assert entry.write_in_progress is False
+
+
+# ── Seqlock su EATEntry (issue #23, Opzione C+D: version riusato come segnale) ─
+
+class TestEATEntrySeqlock:
+
+    def test_initial_state_not_write_in_progress(self):
+        entry = EATEntry(expert_id=0, shard_idx=0)
+        assert entry.version == 0
+        assert entry.write_in_progress is False
+
+    def test_seqlock_write_marks_write_in_progress(self):
+        entry = EATEntry(expert_id=0, shard_idx=0)
+        with entry.seqlock_write():
+            assert entry.write_in_progress is True
+            assert entry.version == 1
+            entry.access_count = 42
+        assert entry.write_in_progress is False
+        assert entry.version == 2
+        assert entry.access_count == 42
+
+    def test_seqlock_write_bumps_version_even_on_exception(self):
+        """version deve tornare pari anche se il blocco protetto solleva —
+        altrimenti un lettore lock-free vedrebbe write_in_progress=True
+        per sempre dopo un errore a metà scrittura."""
+        entry = EATEntry(expert_id=0, shard_idx=0)
+        with pytest.raises(ValueError):
+            with entry.seqlock_write():
+                raise ValueError("boom")
+        assert entry.write_in_progress is False
+        assert entry.version == 2
+
+    def test_touch_uses_seqlock(self):
+        entry = EATEntry(expert_id=0, shard_idx=0)
+        entry.touch()
+        assert entry.version == 2
+        assert entry.write_in_progress is False
+        entry.touch()
+        assert entry.version == 4
 
 
 # ── Locking strategies (issue #23: A=single, B=striped, C=lockfree_read) ───────
