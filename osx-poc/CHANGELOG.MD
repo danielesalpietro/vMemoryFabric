@@ -16,6 +16,66 @@ Releases are named after cities where significant project milestones were reache
 
 \---
 
+## [Berg] — v0.6.0-dev — 2026-08-13 (in progress, not yet released)
+
+*Named after Berg, where Sprint 5 (PoC delivery + paper) is happening.*
+
+**Coverage note:** this CHANGELOG had no entry between the Oskarshamn
+entry below (2026-08-10, Sprint 3) and this one — Sprint 4 (Tekniska,
+complete) and the rest of Sprint 5 (Berg) are not reflected here. This
+entry documents EPM (issue #27) only, not a full Sprint 4/5 summary. See
+`LOGBOOK.md` for the session-by-session record and `README.md`'s
+roadmap/known-issues sections for current sprint/issue status.
+
+### Added
+
+**EPM — Expert Position Memory (issue #27)**
+
+- `src/eat/eat.py` — `ExpertAccessTable.export_snapshot()`/`load_snapshot(decay=0.5)`:
+  a hotness checkpoint (`access_count`, recency) persisted across process
+  restarts. `last_access_ts` exported as `age_seconds` (monotonic clock
+  doesn't survive a restart); tier is never restored (dead-process CUDA
+  state); `decay` defaults to 0.5, not 1.0 ("no decay"), so a stale prior
+  can't outweigh fresh traffic indefinitely
+- `src/scheduler/gcsg.py` (`GCSGWorker`) — `configure_eat_snapshot()`/
+  `_pending_eat_snapshot` (mirrors `configure_tier_manager()`'s pattern);
+  `_seed_eat_entries()` applies the loaded prior after structural seeding;
+  `export_eat_snapshot()`/`finalize_epm_run()` for the save side, including
+  a bounded (256, FIFO) run-history log with `continued_from_previous`
+  detection
+- `src/scheduler/epm.py` (new) — the file-I/O layer: tolerant snapshot/
+  history read-write, and `snapshot_path_for_model()`/
+  `history_path_for_model()`, which scope the checkpoint filename to the
+  model identity (path/checkpoint) rather than validating snapshot content
+  — switching models points at a different file; none found means a clean
+  cold start, no content-level check needed
+- `--no-epm` on `scripts/eval_mmlu_gcsg.py` (gated behind
+  `--wire-tier-manager`) and `scripts/smoke_test_gcsg_tier_manager.py`
+  (new checklist item 6) — EPM on by default, disable to force round-robin
+  from scratch every run
+- `benchmarks/bench_epm.py` (`make bench-epm`) — synthetic, no GPU/vLLM
+  needed: demonstrates 0%→100% cold-start match with a stationary hotness
+  prior, and that `decay=0.5` reconverges within 2 runs of a hot-expert
+  shift while `decay=1.0` never does within the tested window
+
+### Fixed
+
+- `scripts/eval_mmlu_gcsg.py --help` crashed on a pre-existing unescaped
+  `%` in the `--wire-tier-manager` help string — unrelated to EPM, found
+  while verifying `--no-epm` registers correctly, fixed because it blocked
+  that verification
+
+### Status
+
+**Not released — real-hardware verification pending.** All logic is
+unit-tested (154 passed, CPU suite) and the synthetic benchmark confirms
+the mechanism does what it's designed to do, but none of it has run
+against a real vLLM worker/GPU yet. Issue #27 stays open until a real
+`--wire-tier-manager` rerun (same model, twice in a row) confirms
+`continued_from_previous=True` on actual routing traffic.
+
+\---
+
 
 
 ## [Oskarshamn] — v0.4.0-dev — 2026-08-10 (in progress, not yet released)

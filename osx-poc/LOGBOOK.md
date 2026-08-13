@@ -5,6 +5,152 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-13 — EPM (issue #27): hotness checkpoint primitive, default wiring, model-scoped snapshots, synthetic benchmark
+
+Started from a discussion on the ECS (emotional/cognitive scheduler)
+design the same day — scorporated deliberately into its own issue (#27)
+because its scope/risk is much smaller: `ExpertAccessTable.shutdown()`
+clears the table unconditionally on every process restart, so hours of
+accumulated hotness are lost, and `GCSGWorker._seed_eat_entries()` always
+seeds `access_count=0`. EPM is a persistence primitive, not a scheduling
+policy — explicitly not nested inside the ECS work.
+
+**Corrected a wrong base mid-session.** First attempt built the primitive
+on `develop`, where `scheduler/gcsg.py` is still the Sprint 3
+`GCSGGuard` stub — `_seed_eat_entries()`/`_select_shadow_expert_ids()`/
+`GCSGWorker` (the actual integration points the issue names) don't exist
+there at all. Caught when the referenced line numbers didn't match
+anything on disk. Reset the branch onto `claude/sprint-5-berg-plan-e4dsc3`
+and rebuilt against the real `GCSGWorker` (issue #17's wiring), where
+`_seed_eat_entries()` is a real, tested method — the primitive is
+otherwise unchanged, since `eat.py`'s Bloom-filter removal (issue #1,
+2026-08-12) didn't touch anything EPM depends on.
+
+**Primitive (`src/eat/eat.py`):** `export_snapshot()`/`load_snapshot()`.
+`last_access_ts` is on the monotonic clock — meaningless across process
+restarts — so it's exported as `age_seconds` relative to "now" instead of
+an absolute timestamp, preserving relative recency order without assuming
+clock continuity. `load_snapshot(decay=0.5)`: default is *not* "no decay"
+(1.0) — an unscaled prior would weigh a stale checkpoint as much as fresh
+traffic, exactly the risk the issue's cautions section named. Tier is
+never restored (VRAM tier from a dead process is meaningless — dead CUDA
+state); the checkpoint is a prefetch-priority hint only.
+
+**GCSGWorker wiring:** `configure_eat_snapshot()`/`_pending_eat_snapshot`
+mirrors the existing `configure_tier_manager()` pattern (vLLM constructs
+the worker itself, no reachable kwarg path — same reachability problem,
+same fix). `_seed_eat_entries()` applies the loaded prior after the
+structural seed loop, in its own `try/except` separate from
+`load_model()`'s outer one, so a malformed prior can't retroactively fail
+seeding that already succeeded.
+
+**Follow-up requests from the project owner, same session, addressed in
+order:**
+1. *"Default on, disable with a specific startup flag."* Landed at the
+   script layer, not inside `GCSGWorker` (same reachability constraint as
+   above — `GCSGWorker` doesn't own path/policy decisions the caller can't
+   see, precedent already set by `export_eat_snapshot()`). New
+   `src/scheduler/epm.py` I/O layer (tolerant JSON read — missing/corrupt
+   file returns `None`, never raises; atomic write via tmp+rename).
+   `--no-epm` added to both `scripts/smoke_test_gcsg_tier_manager.py`
+   (new checklist item 6) and `scripts/eval_mmlu_gcsg.py` (gated behind
+   `--wire-tier-manager`, since EPM only means something with a
+   `TierManager` actually wired).
+2. *"Bound the memory depth — 256 max."* `epm.append_run_record()` caps
+   the run-history log at `MAX_HISTORY_RUNS=256`, FIFO — same category of
+   risk already fixed once this project for `captured_router_logits`
+   (issue #10/#16, unbounded GPU tensor list). Each record holds a run's
+   initial/final shadow-pool selection (`_epm_capture_initial_position()`,
+   split out of `load_model()` specifically so it's unit-testable without
+   a real vLLM `Worker`) plus `continued_from_previous` — `True` when a
+   run's initial position matches the *previous* run's final one
+   (`epm.positions_match()`, set-equality — order isn't a position signal,
+   see `_select_shadow_expert_ids()`'s own docstring on stable-sort ties)
+   — the empirical check that a loaded prior actually determined the next
+   run's selection, not just that a file got read.
+3. *"What if the model changes — does it fall back to scratch?"* It
+   didn't, and that was a real gap: `expert_id`/`shard_idx` are bare
+   positional integers, nothing checked model identity before this.
+   Loading a snapshot from a different model wouldn't crash — it would
+   silently apply a wrong, misleading prior (worse than round-robin, which
+   is at least neutral). Fixed per the project owner's own suggestion:
+   scope the *filename*, not the content — `epm.snapshot_path_for_model()`/
+   `history_path_for_model()` derive a slug+hash from the model identifier
+   (`MODEL_PATH` in both scripts). Different model -> different file -> no
+   file found -> clean cold start, no content-level validation needed
+   anywhere.
+
+**Drive-by fix, unrelated:** `eval_mmlu_gcsg.py --help` crashed
+(`ValueError: unsupported format character '/'`) on a pre-existing
+unescaped `%` in the `--wire-tier-manager` help string
+("72.28%/72.3% baseline") — argparse's `%`-style help substitution choked
+on it. Predates this session (verified against the file before any EPM
+edits); fixed because it blocked verifying `--no-epm` registers correctly.
+
+**Synthetic benchmark (`benchmarks/bench_epm.py`, no GPU/vLLM needed):**
+isolates the one question EPM answers — does a loaded prior improve the
+*next* run's cold-start selection, before a single real token routes —
+from the noise a real MMLU run would add. Reuses production code
+directly (`ExpertAccessTable`, `TierManager`,
+`GCSGWorker._select_shadow_expert_ids()`/`finalize_epm_run()`) via the
+same `__new__()`+manual-attrs pattern already used in
+`tests/test_scheduler.py`. Two sections, actually run, numbers below are
+real output, not projected:
+- `stationary` (hot experts fixed across 6 runs): without EPM, cold-start
+  selection stays at the round-robin default (`[0, 1]`) forever — 0% match
+  against the true hot experts (`[2, 5]`, chosen off round-robin's default
+  on purpose). With EPM: 100% match from run 1 onward.
+- `regime_shift` (hot experts change partway through 8 runs): `decay=0.5`
+  (the default) reconverges to the new hot experts within 2 runs of the
+  shift. `decay=1.0` ("no decay") *never* reconverges in the 4-run
+  post-shift window — the undecayed pre-shift count keeps accumulating and
+  permanently outweighs fresh post-shift traffic. Concrete confirmation of
+  why the primitive rejected a 1.0 default.
+
+**What's verified and what isn't — stated plainly, same standard as every
+other claim in this file.** All pure-Python logic (the EAT primitive,
+`scheduler/epm.py`, the `GCSGWorker` methods, the benchmark) is covered by
+unit tests — 154 passed in the CPU suite (`tests/ -m "not gpu"`) by the
+end of this session, zero regressions. The two real scripts'
+`--no-epm`/`configure_eat_snapshot()`/`finalize_epm_run()` wiring itself
+has **not** been exercised on real hardware in this session — no GPU
+available here. Checked this explicitly rather than assuming: grepped
+every historical `--wire-tier-manager` run on file
+(`mmlu_tier_manager_pod_singleshot_20260812_195140.*`,
+`marlin_mmlu_20260812/eval_marlin_{fetta1,singleshot}_20260813_*`,
+including the deliberate reruns done that day for determinism checking) —
+all of them predate issue #27 (opened 2026-08-13T20:59:58Z, after every
+one of those runs). `TierManager`/EAT wiring itself is hardware-verified
+(issue #17); EPM specifically has zero real-hardware runs to date.
+`scripts/run_mmlu_in_slices.sh` still never passes `--wire-tier-manager`
+at all — unrelated to EPM, a pre-existing gap noted for whoever picks up
+the next real 570-question sweep.
+
+**Not done, on purpose:** an LLM/PT-PEP-style predictive bootstrap (guess
+hot experts from the prompt content before any real routing) was raised
+and deliberately deferred — PT-PEP's own `expert_map` is already
+documented as "empirical routing statistics, not ground truth" for the
+same reason (MoE gating is input-dependent, not a fixed domain->expert
+identity); a predictive prior would need calibration against real routing
+before being trustworthy, at which point it's empirical measurement done
+differently, not a shortcut around it. Kept out of EPM's scope
+deliberately, same reasoning as ECS above.
+
+**Recommended next real-hardware step, not done this session:** rerun a
+known slice (`fetta1` or the 570-question singleshot) twice in a row with
+`--wire-tier-manager`, same pod/checkpoint — the first actual (not
+synthetic) confirmation that `continued_from_previous=True` shows up on
+real routing traffic.
+
+Issue #27 left **open** — consistent with this project's own standing
+practice (#10/#16 stayed open against a partial fix; #2 stays open against
+a scenario that doesn't exist in production yet): the primitive is
+implemented and unit-tested, but its own stated acceptance path ("save →
+restart process → verify `_select_shadow_expert_ids()` reflects the
+checkpoint") has not been run for real.
+
+---
+
 ## 2026-08-13 — Berg, continued: M1/M2 folded in, renamed to `poc_final_report.md`
 
 Requested explicitly by the project owner: extend the just-updated MMLU
