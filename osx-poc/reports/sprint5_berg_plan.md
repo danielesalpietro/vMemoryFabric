@@ -70,14 +70,16 @@ reader passa da ~1000µs (single, comportamento pre-fix) a ~1-2µs
 stato misurato, non solo teorizzato: 10/119038 letture (~0.008%) sotto
 churn concorrente, zero su single/striped nello stesso run. Dettagli e
 numeri completi nel branch `claude/rlock-data-quality-9pcxzq`.
-Non ancora rimisurato su hardware reale (Z8/`Z8-G4-RTX3090` via
-`full-gpu-tests`) — vedi nota su deviazione hardware Sprint 4 sotto: i
-numeri di contention di questa issue esistono già in più versioni
-incoerenti tra loro a seconda dell'host, quindi un nuovo numero da hardware
-reale va aggiunto con la stessa cautela, non semplicemente sommato ai
-precedenti. #2 e #23 restano aperte su GitHub finché quella misura non è
-fatta e la issue non è chiusa esplicitamente (vedi regola §0: "nessun
-issue si considera chiuso finché non lo è su GitHub").
+**Rimisurato su hardware reale 2026-08-13** (Z8/`Z8-G4-RTX3090` via
+`full-gpu-tests`, [run #150](https://github.com/danielesalpietro/vMemoryFabric/actions/runs/31726685030)):
+a differenza dei numeri di contention pre-esistenti su #2 (più versioni
+incoerenti tra loro a seconda dell'host, vedi nota su deviazione hardware
+Sprint 4 sotto), qui sandbox CI e Z8 raccontano la stessa storia — p99
+reader `lockfree_read` ~700-900x più veloce di `single` su entrambi gli
+host, torn-read confermati solo su `lockfree_read` (rari, ~0.002-0.008%,
+zero su single/striped). Nessuna riconciliazione necessaria. **#2 e #23
+sono chiuse su GitHub** (state_reason: completed), coerente con la
+regola §0 ("nessun issue si considera chiuso finché non lo è su GitHub").
 
 **Da sistemare prima della delivery** (piccoli, ma pesano sulla prima
 impressione di un reviewer esterno che clona il repo e prova a farlo
