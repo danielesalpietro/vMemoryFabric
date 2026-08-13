@@ -37,6 +37,21 @@ Sezioni:
                             n_readers/n_prefill/n_writes — per decidere quale
                             opzione (A/B/C) attacca davvero la tail latency
                             misurata sopra, invece di scegliere a intuito.
+                            Nota: qui writer e reader operano su range di
+                            chiavi disgiunti (il writer inserisce chiavi
+                            nuove) — non esercita la race di touch() su
+                            un'entry condivisa, vedi churn sotto.
+    churn_by_strategy     — writer che chiama access()/touch() ripetutamente
+                            sulle STESSE n_keys chiavi lette dai reader
+                            (pattern segnalato come più realistico di M2/M3
+                            nel commento PR #15 su issue #2). Con
+                            locking_strategy="lockfree_read" i reader
+                            verificano ogni lettura col protocollo seqlock
+                            (EATEntry.version prima/dopo) e contano quante
+                            volte incrociano un touch() a metà — quantifica
+                            la race deliberata dell'Opzione C invece di
+                            lasciarla solo teorica. Con single/striped ci si
+                            aspetta zero torn read (stesso lock di touch()).
     slab_scale           — alloc/free timing a 4 vs 32 slot (1 GB vs 8 GB),
                             per verificare empiricamente l'O(1) del free-list
 
@@ -209,6 +224,85 @@ def bench_contention_by_strategy() -> dict:
     }
 
 
+# ── Churn: writer e reader sulle STESSE chiavi (torn-read stress) ──────────
+
+def bench_churn(n_readers: int = 4, n_keys: int = 2_000, n_writes: int = 20_000,
+                 locking_strategy: str = "lockfree_read") -> dict:
+    """A differenza di bench_contention() (writer e reader su chiavi
+    disgiunte), qui il writer chiama access() ripetutamente sulle STESSE
+    `n_keys` chiavi interrogate dai reader — pattern "churn", segnalato
+    come più realistico di M2/M3 nel commento PR #15 su issue #2.
+
+    Con locking_strategy="lockfree_read" i reader applicano il
+    protocollo seqlock (version prima/dopo la lettura dei campi) per
+    rilevare quando incrociano un touch() a metà — quantifica la race
+    deliberata dell'Opzione C (issue #23) invece di lasciarla solo
+    teorica.
+    """
+    eat = ExpertAccessTable(capacity=n_keys * 2, n_slots=4, locking_strategy=locking_strategy)
+    for shard_idx in range(n_keys):
+        eat.insert(expert_id=0, shard_idx=shard_idx, tier=Tier.NVME)
+
+    stop = threading.Event()
+    reader_latencies: list = [[] for _ in range(n_readers)]
+    reader_reads = [0] * n_readers
+    reader_torn = [0] * n_readers
+
+    def writer() -> None:
+        rng = random.Random(2000)
+        for _ in range(n_writes):
+            eat.access(expert_id=0, shard_idx=rng.randrange(n_keys))
+        stop.set()
+
+    def reader(idx: int) -> None:
+        rng = random.Random(3000 + idx)
+        latencies = reader_latencies[idx]
+        while not stop.is_set():
+            shard_idx = rng.randrange(n_keys)
+            t0 = time.perf_counter()
+            entry = eat.lookup(expert_id=0, shard_idx=shard_idx)
+            if entry is not None:
+                v1 = entry.version
+                _ac, _ts = entry.access_count, entry.last_access_ts  # campi "letti" dal chiamante
+                v2 = entry.version
+                reader_reads[idx] += 1
+                if v1 != v2 or v1 % 2 == 1:
+                    reader_torn[idx] += 1
+            latencies.append((time.perf_counter() - t0) * 1e6)
+
+    threads = [threading.Thread(target=writer)] + [
+        threading.Thread(target=reader, args=(i,)) for i in range(n_readers)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    all_reader_latencies = [lat for bucket in reader_latencies for lat in bucket]
+    total_reads = sum(reader_reads)
+    total_torn = sum(reader_torn)
+    return {
+        "locking_strategy": locking_strategy,
+        "n_readers": n_readers,
+        "n_keys": n_keys,
+        "n_writes": n_writes,
+        "reader_lookups_completed": len(all_reader_latencies),
+        "reader_lookup_latency_under_churn": _percentiles(all_reader_latencies),
+        "reader_reads_with_entry": total_reads,
+        "reader_torn_reads_detected": total_torn,
+        "reader_torn_read_rate": (total_torn / total_reads) if total_reads else None,
+    }
+
+
+def bench_churn_by_strategy() -> dict:
+    """Confronta le tre locking_strategy sullo stesso scenario di churn —
+    unica variabile è la strategia."""
+    return {
+        strategy: bench_churn(locking_strategy=strategy)
+        for strategy in ("single", "striped", "lockfree_read")
+    }
+
+
 # ── Slab allocator — scalabilita del free-list ──────────────────────────────
 
 def bench_slab_scale(slot_counts: tuple = (4, 32)) -> dict:
@@ -260,6 +354,7 @@ def main() -> None:
         "eat_vs_baseline_delta_us": delta_us,
         "contention": bench_contention(),
         "contention_by_strategy": bench_contention_by_strategy(),
+        "churn_by_strategy": bench_churn_by_strategy(),
         "slab_scale": bench_slab_scale(),
     }
     print(json.dumps(result, indent=2))

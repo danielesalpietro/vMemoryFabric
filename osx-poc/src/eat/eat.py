@@ -24,8 +24,7 @@ Locking strategy (issue #23, 2026-08-13 — tail latency ~1360x sotto
 contesa concorrente, issue #2): tre strategie selezionabili via
 `locking_strategy` al costruttore, stessa API pubblica per tutte:
 
-    "single"        (default, invariato per i chiamanti esistenti) —
-                     un solo threading.Lock su tutta la tabella
+    "single"         — un solo threading.Lock su tutta la tabella
                      (Opzione A: era RLock, ma nessun metodo EAT
                      richiama un altro metodo lockato mentre tiene già
                      il lock — nessuna rientranza usata — quindi Lock
@@ -40,24 +39,28 @@ contesa concorrente, issue #2): tre strategie selezionabili via
                      shard diversi se letto durante una mutazione
                      concorrente — scelta deliberata (vedi issue #23),
                      non un bug.
-    "lockfree_read"  (Opzione C) — lookup() legge senza lock,
-                     sfruttando l'atomicità di dict.get() sotto il GIL;
-                     touch() (chiamato da access()) resta sotto lock
-                     perché fa due scritture non atomiche
-                     (access_count, poi last_access_ts). L'entry
-                     restituita da lookup() è comunque un riferimento
-                     mutabile condiviso: chi la legge dopo il lock
-                     (o senza mai prenderlo) può incrociare un touch()
-                     concorrente a metà. EATEntry.write_in_progress /
-                     seqlock_write() (Opzione D — riusa version, non più
-                     solo un contatore incrementato a vuoto) danno al
-                     chiamante il segnale per accorgersene e decidere lui
-                     cosa fare — non è enforcement automatico.
+    "lockfree_read"  (Opzione C, DEFAULT dal 2026-08-13) — lookup()
+                     legge senza lock, sfruttando l'atomicità di
+                     dict.get() sotto il GIL; touch() (chiamato da
+                     access()) resta sotto lock perché fa due scritture
+                     non atomiche (access_count, poi last_access_ts).
+                     L'entry restituita da lookup() è comunque un
+                     riferimento mutabile condiviso: chi la legge dopo
+                     il lock (o senza mai prenderlo) può incrociare un
+                     touch() concorrente a metà. EATEntry.write_in_progress
+                     / seqlock_write() (Opzione D — riusa version, non
+                     più solo un contatore incrementato a vuoto) danno
+                     al chiamante il segnale per accorgersene e decidere
+                     lui cosa fare — non è enforcement automatico.
+                     Promosso a default perché nessun chiamante di
+                     produzione oggi legge access_count/last_access_ts
+                     da una entry restituita da lookup() (i consumer di
+                     hotness passano dai metodi bulk, che restano
+                     lockati) — vedi issue #23, misure §contention:
+                     p99 reader ~1000µs (single) -> ~1-2µs.
 
 Internamente "single" e "lockfree_read" sono un caso speciale di
-"striped" con un solo shard: stesso comportamento di prima della issue
-#23 (lock singolo, snapshot bulk coerente), nessuna migrazione richiesta
-per i chiamanti esistenti.
+"striped" con un solo shard.
 """
 from __future__ import annotations
 import threading
@@ -82,15 +85,24 @@ class ExpertAccessTable:
                           2026-08-12 — vedi docstring di modulo) — non usato
                           internamente, nessuna struttura dimensionata su di esso.
         n_slots:          Numero di slot Slab Allocator.
-        locking_strategy: "single" (default), "striped" o "lockfree_read" —
-                          vedi docstring di modulo (issue #23).
+        locking_strategy: "single", "striped" o "lockfree_read" (default) —
+                          vedi docstring di modulo (issue #23). "lockfree_read"
+                          è il default dal 2026-08-13 (issue #23/#2): riduce
+                          il p99 reader sotto contesa da ~1000µs a ~1-2µs
+                          nel benchmark §contention, nessun chiamante di
+                          produzione legge oggi access_count/last_access_ts
+                          da una entry restituita da lookup() (solo dai
+                          metodi bulk, che restano lockati) — vedi
+                          EATEntry.write_in_progress per chi in futuro
+                          volesse farlo in modo sicuro. Sovrascrivibile per
+                          chiamata.
         n_shards:         Numero di shard indipendenti. Usato solo con
                           locking_strategy="striped"; ignorato altrimenti
                           (1 shard implicito).
     """
 
     def __init__(self, capacity: int = 16_384, n_slots: int = 4,
-                 locking_strategy: LockingStrategy = "single",
+                 locking_strategy: LockingStrategy = "lockfree_read",
                  n_shards: int = 16) -> None:
         if locking_strategy not in _STRATEGIES:
             raise ValueError(f"locking_strategy sconosciuta: {locking_strategy!r}")
