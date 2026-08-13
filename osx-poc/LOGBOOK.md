@@ -5,6 +5,159 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-13 — Berg, continued: issue #2 (RLock contention) actually fixed — locking_strategy on EAT, seqlock on version, confirmed on real hardware, #2/#23 closed
+
+Started from an open-ended question, not a task: the project owner said
+the RLock contention data "didn't look good" and asked whether just
+implementing issue #23's Opzione A (RLock → Lock) would improve it.
+Answer, worked through before writing any code: no, not meaningfully — A
+removes RLock's reentrancy bookkeeping overhead, but the ~1000x-order tail
+latency comes from every thread queueing behind one shared lock (a
+queueing/contention problem, not an overhead problem), which A doesn't
+touch. Talked through B (lock striping) and C (lock-free reads via GIL
+atomicity) the same way before touching code — B splits the single queue
+into N independent ones, C removes readers from the queue entirely for
+`lookup()`.
+
+Asked directly: "possiamo generare tutti e tre i metodi e selezionare
+quello che vogliamo tramite un parametro in input a run?" Yes — implemented
+as `ExpertAccessTable(locking_strategy="single"|"striped"|"lockfree_read")`,
+same public API for all three. Key simplification found while designing
+it: `"single"` and `"lockfree_read"` are just `"striped"` with
+`n_shards=1` — unifying the three internally instead of branching
+per-method three ways. One real decision needed the project owner's input
+before writing code: what should the bulk methods (`get_tier`,
+`eviction_candidates`, `hottest_candidates`, `stats`) do under striping,
+given they lose the "one lock, one coherent snapshot" property? Answered:
+relaxed snapshot (read each shard under its own lock, don't hold them all
+together) — implemented as a shared `_collect()` helper.
+
+First sandbox benchmark (`bench_contention_by_strategy()`, 4 readers + 1
+writer, disjoint keys) confirmed the hypothesis: p99 single 1119µs →
+striped 611µs → lockfree_read 1.3µs. A matters little on its own, B helps
+but not enough, C is the one that actually removes the queue.
+
+Next question, also worked through before coding: "servirebbe un metadata
+che informi il lettore che c'è una scrittura in corso" — recognized as
+asking for a seqlock, and it maps directly onto Opzione D (the `version`
+field already existed as an unused "CAS counter" comment in `types.py`).
+Implemented `EATEntry.seqlock_write()` (increments `version` before/after
+a mutation — odd = write in progress, even = stable, via a context manager
+so it fires even on exception) and `EATEntry.write_in_progress` as the raw
+signal a lock-free reader can check — deliberately NOT an automatic
+retry-until-consistent wrapper, since the ask was for the caller to decide
+policy, not to have one imposed. `touch()` now goes through it (previously
+touched `version` not at all, despite being exactly the two-non-atomic-
+writes race issue #23's Opzione C flagged); `update_tier()` switched from
+a bare increment to the same context manager. Two existing test asserts
+needed updating (`version` now bumps by 2 per mutation, not 1) — done with
+the project owner's explicit go-ahead, not silently.
+
+Asked "possiamo quindi chiudere le Issue su RLock?" — before saying yes,
+checked `reports/sprint5_berg_plan.md` and found a real conflict: Sprint 5
+had explicitly decided, the day before (2026-08-12), to leave #2 open and
+document it in the paper as a "known limitation, not yet triggered by
+production traffic" — not to fix it. Today's work (implementing A/B/C/D
+and flipping the production default) directly supersedes that decision.
+Flagged it rather than silently overriding a written planning decision;
+project owner confirmed updating the plan now rather than treating this as
+out-of-scope. Updated `sprint5_berg_plan.md` §2/A1 in place (struck through
+the old bullet, added a dated addendum, did not rewrite the original text
+away — same "record corrections, don't erase" convention this LOGBOOK
+itself follows).
+
+Flipped `ExpertAccessTable`'s default from `"single"` to `"lockfree_read"`
+— checked first via grep that no production caller (`TierManager`,
+`GCSGWorker`, `eval_mmlu_gcsg.py`) passes `locking_strategy` explicitly or
+reads `access_count`/`last_access_ts` off a raw `lookup()` result (hotness
+consumers go through the bulk methods, which stay locked regardless of
+strategy) — so the flip is safe for every existing call site. Added a new
+benchmark scenario, `bench_churn_by_strategy()`: unlike `bench_contention`
+(writer and readers on disjoint keys), the writer here calls `access()`
+repeatedly on the *same* keys the readers query — the pattern the PR #15
+comment on issue #2 had already flagged as more realistic of M2/M3 traffic
+than a disjoint-key scenario. Readers apply the seqlock check and count
+detected torn reads directly instead of leaving Opzione C's race
+theoretical: sandbox result 10/119,038 (~0.0084%) on `lockfree_read`,
+0/46,567 and 0/76,751 on `single`/`striped` — the race is real but rare,
+and now measured instead of assumed-benign.
+
+Posted status comments on #2 and #23 with the sandbox numbers, explicitly
+*not* closing yet — the standing bar for this issue, given its own history
+of measurements that don't agree with each other (see below), was real
+hardware confirmation, not another sandbox run. Found the self-hosted GPU
+runner (`Z8-G4-RTX3090` — literally the project's own Z8, registered back
+in Sprint 0, see the 2026-08-07 entry) already has a `full-gpu-tests`
+workflow gated to manual `workflow_dispatch` that runs `bench_eat.py` on
+real hardware and uploads the JSON as an artifact — exactly the mechanism
+needed, zero new CI work required. Tried to dispatch it via the GitHub MCP
+tool directly: `403 Resource not accessible by integration` — the
+session's GitHub token doesn't have `actions:write`, reported rather than
+worked around. Project owner dispatched it manually; run
+[#150](https://github.com/danielesalpietro/vMemoryFabric/actions/runs/31726685030)
+went green in ~27 minutes. Artifact download hit a second wall: GitHub
+Actions artifact downloads go through a signed Azure Blob Storage URL
+(`productionresultssa4.blob.core.windows.net`), which this session's
+egress proxy denies by policy (403, confirmed via the proxy's own status
+endpoint as a deliberate org-policy block, not a transient failure) —
+reported rather than retried, per the proxy's own README. Project owner
+downloaded and uploaded the two artifact zips back into the session
+instead.
+
+Real numbers confirmed the sandbox story, not just roughly — p99 single→
+striped→lockfree_read: 758µs → 442µs → 1.1µs (`§contention`, disjoint
+keys), torn-read rate 10/410,829 (~0.0024%) under `§churn`, zero on
+`single`/`striped`. Sandbox and real hardware *agree* here, which is
+notable specifically because this issue's own history is the opposite:
+the original 2026-08-08 filing (~1360×), a 2026-08-12 sandbox re-measurement
+(~61-91×), and two 2026-08-12 RunPod-pod regression rounds (~348×/~413×)
+never agreed with each other and were recorded side by side as an
+unexplained discrepancy rather than picked-and-forgotten (see
+`poc_final_report.md` §1.2, and the 2026-08-12/13 "issue #2 decided"
+entry below). This time there's no reconciliation needed. Posted the real
+numbers as follow-up comments on #2/#23, then closed both
+(`state_reason: completed`) with the project owner's explicit go-ahead —
+each closing comment cites the actual commit SHAs on
+`claude/rlock-data-quality-9pcxzq`, not just "see the branch."
+
+A PR (`#26`) was opened for the branch from the Claude Code web UI
+mid-session, not by this session directly — noted for future reference so
+commits keep landing on the right target without re-deriving it.
+
+Closing the loop on documentation surfaced two pre-existing gaps unrelated
+to today's actual fix, both flagged to the project owner before touching
+either: `CHANGELOG.MD` was missing entries for Tekniska (Sprint 4, done
+for a while) and Berg (Sprint 5, in progress) entirely — jumped straight
+from Oskarshamn (Sprint 3) to nothing — and separately had a real, broad
+formatting bug: 129 of 504 lines started with a literal backslash before
+markdown-special characters (`\#`, `\-`, `\*`, `\_`, `\[`, `\---`), even
+inside inline-code spans where CommonMark never needs escaping and a
+literal backslash actually renders. Confirmed via round-trip (re-escaping
+the fixed file with the same pattern reproduces the original byte-for-byte)
+that the fix was pure formatting, zero content change, before touching
+anything. Fixed the escaping across all four existing entries, reconstructed
+the missing Tekniska entry from this LOGBOOK's own Sprint 4 sessions (the
+~2500 lines below, 2026-08-11 through 2026-08-12/13), and added the Berg
+entry for today's work — deliberately kept #2's "decided, left open" framing
+in the *Tekniska* entry historically accurate (that's genuinely what was
+decided in Sprint 4, at the time) rather than back-dating today's fix into
+it; the resolution lives in the Berg entry instead, with the Tekniska entry
+cross-referencing forward. `README.md`'s "Known limitations" table and
+Sprint 5 narrative, and `poc_final_report.md` §1.2/§4, updated the same
+way — old numbers kept for the record, new section added on top explaining
+what superseded them, nothing silently overwritten.
+
+### End of session state
+
+- `ExpertAccessTable` default: `lockfree_read` (was `single`/RLock)
+- Issues #2, #23: **closed**, confirmed on real hardware
+- CI: `cpu-tests` green ×4 on `claude/rlock-data-quality-9pcxzq`;
+  `full-gpu-tests` green ×1 (run #150, manual dispatch)
+- `CHANGELOG.MD`: escaping fixed, Tekniska + Berg entries added
+- PR #26 open, tracking this branch
+
+---
+
 ## 2026-08-13 — EPM (issue #27): hotness checkpoint primitive, default wiring, model-scoped snapshots, synthetic benchmark
 
 Started from a discussion on the ECS (emotional/cognitive scheduler)
@@ -142,12 +295,25 @@ known slice (`fetta1` or the 570-question singleshot) twice in a row with
 synthetic) confirmation that `continued_from_previous=True` shows up on
 real routing traffic.
 
+**Doc conflict with PR #26, found and pre-resolved same session:** both
+branches fork from `claude/sprint-5-berg-plan-e4dsc3` and both touched
+`README.md`/`CHANGELOG.MD`/`LOGBOOK.md` at the same anchor points (top of
+this file, the same README paragraph, a literal duplicate `## [Berg]`
+CHANGELOG heading) — checked explicitly via `git diff` against every
+sibling branch sharing that base, not assumed. Resolved by adopting PR
+#26's version of all three files as the working base and re-applying
+EPM's entries as subsections/repositioned insertions underneath theirs
+(chronologically later the same day, PR #26 opened 18:16 UTC vs. issue
+#27 opened 20:59 UTC) — makes this branch cleanly mergeable regardless of
+which PR lands first, instead of leaving raw conflict markers for
+whoever merges second.
+
 Issue #27 left **open** — consistent with this project's own standing
-practice (#10/#16 stayed open against a partial fix; #2 stays open against
-a scenario that doesn't exist in production yet): the primitive is
-implemented and unit-tested, but its own stated acceptance path ("save →
-restart process → verify `_select_shadow_expert_ids()` reflects the
-checkpoint") has not been run for real.
+practice (#10/#16 stayed open against a partial fix; #2 stayed open
+against a scenario that didn't exist in production, until today): the
+primitive is implemented and unit-tested, but its own stated acceptance
+path ("save → restart process → verify `_select_shadow_expert_ids()`
+reflects the checkpoint") has not been run for real.
 
 ---
 
