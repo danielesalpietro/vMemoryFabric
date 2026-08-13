@@ -224,7 +224,15 @@ sezione Evaluation.
 - **Related work reale con citazioni verificate** — quanto già citato nei
   report è solo la conferma upstream dei bug vLLM (#10/#16), non una survey
   della letteratura MoE-serving. Questa è ricerca bibliografica vera da
-  fare, non un riordino di materiale esistente.
+  fare, non un riordino di materiale esistente. **Prima ricerca fatta
+  2026-08-13**, tracciata in `osx-poc/logbook_paper.md` (piano a
+  sotto-obiettivi + bibliografia di lavoro): la gerarchia di memoria M1/M2
+  è in uno spazio affollato (5-6 sistemi simili trovati, inclusa **FineMoE,
+  EuroSys 2026 — stessa venue/anno target**, da leggere per intero e
+  differenziare esplicitamente), mentre GCSG (shadow-verification della
+  qualità sotto quantizzazione) non ha ancora trovato un corrispettivo
+  diretto — non prova di originalità, solo la premessa per una survey più
+  mirata. Non chiudere B3 senza aver letto FineMoE integralmente.
 - **Figure pulite** — il diagramma di architettura oggi è ASCII nel README,
   serve una figura vettoriale vera; grafici latenza/accuratezza a partire
   dai dati grezzi già presenti (`gpu_telemetry_20260812.csv`, i vari
