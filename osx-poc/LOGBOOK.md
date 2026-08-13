@@ -5,6 +5,58 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-13 — Berg, continued: M1/M2 folded in, renamed to `poc_final_report.md`
+
+Requested explicitly by the project owner: extend the just-updated MMLU
+report to also cover M1 (EAT) and M2 (Tier Manager), and give it a title
+that actually matches its contents — "MMLU Final Report" stopped being
+accurate the moment it also had to hold EAT/TierManager benchmark data.
+Renamed `osx-poc/mmlu_final_report.md` → `osx-poc/reports/poc_final_report.md`
+(moved into `reports/` alongside `gcsg_shadow_execution_report.md`, matching
+that directory's existing convention rather than sitting alone at
+`osx-poc/` root next to raw log/data files). Updated the three places that
+referenced the old filename by bare name: `gcsg_shadow_execution_report.md`
+(×3) and `sprint5_berg_plan.md` (×3). This entry and the one below it
+(which describe work done against the old filename) are left as written —
+this project's own convention is to record corrections/renames going
+forward, not rewrite prior entries.
+
+New content, all recomputed from raw sources rather than re-describing
+README prose:
+
+- **§0, new:** the 4 non-functional acceptance criteria evaluated together
+  for the first time, each with its actual supporting number next to it.
+  Three are solid; PT-PEP's <3ms p99 target is flagged as *nominally* met
+  only — the sole number ever recorded against it is a single isolated
+  3.71ms failure that then passed cleanly in the next run, never
+  re-measured cleanly. Recording that honestly rather than listing it as
+  "met" on the same footing as the other three.
+- **M1 (§1):** two real regression-pod benchmark rounds
+  (`regression_20260812/bench_eat_*.log`) gave EAT-vs-dict lookup/insert
+  numbers, confirming the p50 delta is noise (consistent with the
+  removal-day "~0.07µs" finding) but surfacing a p99 gap (~1.5-2.0×) that
+  no prior report had called out as distinct from the p50 story.
+- **M1 §1.2, the interesting one:** issue #2's contention ratio already
+  existed in two disagreeing forms (~1360× original, ~61-91× sandbox
+  re-measurement). Computing the same ratio from the regression-pod logs
+  (already collected for other purposes, never used for this) gives a
+  **third and fourth data point** — ~348×/~413× — that don't match either
+  prior figure. Recorded as a fourth data point in an unresolved question,
+  consistent with the 2026-08-12 decision to leave #2 open rather than
+  chase a root cause that real (single-threaded) traffic doesn't yet
+  motivate investigating.
+- **M2 (§2):** both `bench_tier.py` regression rounds (not just the one
+  previously cited), plus the soak-test pinning numbers (1000/1000,
+  0 mismatches, -31% pin-alloc drift) folded in from
+  `LogBook_20260812_1344/soak_test_pinning/`.
+
+A2 (Sprint 5 plan) is now done: one document,
+`osx-poc/reports/poc_final_report.md`, covers M1/M2/M3 and supersedes the
+README-roadmap-table/scattered-report reconstruction it was meant to
+replace.
+
+---
+
 ## 2026-08-13 — Berg, continued: `mmlu_final_report.md` consolidated across Sprint 3+4
 
 `mmlu_final_report.md` was still frozen at its original Sprint 3 snapshot

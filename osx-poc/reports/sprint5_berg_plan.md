@@ -38,7 +38,7 @@ Due filoni paralleli ma dipendenti:
   terzi (stakeholder/reviewer), non solo "funzionante per chi ha scritto il
   codice".
 - **Filone B — Paper**: trasformare i report tecnici già esistenti
-  (`gcsg_shadow_execution_report.md`, `mmlu_final_report.md`, LOGBOOK.md) in
+  (`gcsg_shadow_execution_report.md`, `poc_final_report.md`, LOGBOOK.md) in
   un paper sottomettibile a una venue di sistemi reale.
 
 Esplicitamente **fuori scope** di Sprint 5 (restano "future work" nel paper,
@@ -79,37 +79,42 @@ girare):
   [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) — bloccati
   da hardware (PMEM, RTX 5080), già trattati come tali nel roadmap.
 
-### A2. Report finale consolidato del PoC
+### A2. Report finale consolidato del PoC — fatto (2026-08-13)
 
-**Prima fetta fatta (2026-08-12):** `osx-poc/mmlu_final_report.md` era
-fermo allo snapshot di Sprint 3 (411/570, 72.11%, solo path `cpu_offload_gb`)
-e non conteneva nessuno dei run di Sprint 4 — i due cross-hardware repro
-(A5000), i due rerun TierManager-wired (AWQ e Marlin, quest'ultimo la
-chiusura dell'issue #17), la correlazione shadow-activations/latenza
-(r=0.993), il benchmark di promotion latency. Riscritto consolidando tutti
-i run in un'unica tabella (§0 del report), con i diff per-subject
-ricalcolati direttamente dai `.jsonl` grezzi invece che ripresi dal prosa
-di README/LOGBOOK — che su questo punto erano imprecisi su quale run fosse
-confrontato con quale (vedi §2.3 del report aggiornato).
+`osx-poc/mmlu_final_report.md` (M3/MMLU-only, fermo allo snapshot di
+Sprint 3) è stato prima aggiornato con tutti i run di Sprint 4, poi
+rinominato/esteso in **`osx-poc/reports/poc_final_report.md`** — ora copre
+M1 (EAT), M2 (Tier Manager) e M3 (GCSG/MMLU) in un unico documento, con in
+apertura (§0) i 4 target non funzionali valutati insieme invece che sparsi:
 
-Ancora da fare per il resto di A2: lo stesso trattamento per M1/M2 (oggi
-solo nel README, non in un report dedicato) — il report MMLU era la parte
-più urgente perché alimenta direttamente la sezione Evaluation del paper
-(§B2/B3), ma non esaurisce A2.
+- **PT-PEP <3ms p99**: 🟡 nominalmente rispettato, ma l'unico numero reale
+  mai registrato è un singolo fallimento isolato (3.71ms), mai
+  ri-misurato con un valore pulito — segnalato esplicitamente come
+  evidenza debole rispetto agli altri tre target, non presentato come
+  "rispettato" allo stesso livello.
+- **PT-PEP hit rate >70%**: ✅ 87.2%, con la riserva già nota (held-out
+  same-distribution, non OOD).
+- **GCSG degradation <2%**: ✅ margine ampio, corroborato da 5 run
+  indipendenti (piattaforma/hardware/quantizzazione/data-path tutti
+  diversi, tutti entro 0.7pp l'uno dall'altro).
+- **Promotion latency entro 1.5× bandwidth teorica**: ✅ rispettato a P50
+  su entrambi i round di benchmark disponibili (non solo uno, come nella
+  versione precedente del report).
 
-Oggi i risultati restanti (M1/M2) sono sparsi tra README (sezione roadmap,
-molto lunga) e centinaia di KB di `LOGBOOK.md`. Serve comunque un unico
-**PoC Final Report** (`osx-poc/reports/`) che:
+Aggiunta anche una scoperta non richiesta ma reale: i numeri di
+contention dell'issue #2 (RLock) esistevano già in tre versioni
+incoerenti tra loro (~1360× originale, ~61-91× ri-misurato in sandbox);
+ricalcolando i rapporti dagli stessi log di regressione già usati per
+M1/M2 emerge una **quarta cifra, mai calcolata prima** (~348×/~413×, dai
+due round sul pod RunPod) — che non conferma nessuna delle altre due,
+rinforzando (non risolvendo) la decisione già presa di lasciare l'issue
+aperta.
 
-- raccoglie M1/M2/M3 con i numeri finali per i 4 target non funzionali
-  (PT-PEP <3ms p99, PT-PEP hit rate >70%, GCSG degradation <2%, promotion
-  latency entro 1.5× bandwidth teorica), tutti già misurati — qui si tratta
-  di consolidare, non ri-misurare;
-- diventa la base fattuale unica da cui il paper (Filone B) attinge, così i
-  due documenti non divergono nel tempo;
-- include esplicitamente la deviazione hardware Sprint 4 (RTX A5000 su
-  RunPod invece dell'RTX 3090 di riferimento dichiarato nel README) in un
-  unico punto ben visibile, non solo in nota sparsa nel LOGBOOK.
+A2 è quindi completo: un solo documento, `osx-poc/reports/poc_final_report.md`,
+è ora la base fattuale unica da cui il paper (Filone B) attinge — la
+deviazione hardware Sprint 4 (RTX A5000 su RunPod invece dell'RTX 3090 di
+riferimento) è dichiarata esplicitamente per ogni singolo dataset citato,
+non più in nota sparsa nel LOGBOOK.
 
 ### A3. Riproducibilità (necessaria per audience esterna)
 
@@ -187,8 +192,9 @@ Conclusions and Future Work. Questo è il nucleo delle sezioni Design/
 Implementation/Evaluation/Limitations del paper — lavoro di adattamento ed
 espansione, non stesura da zero.
 
-`mmlu_final_report.md` fornisce la tabella per-subject e i numeri di
-accuratezza già pronti per la sezione Evaluation.
+`poc_final_report.md` (§0, §3) fornisce ora sia i 4 target non funzionali
+sia la tabella per-subject/i numeri di accuratezza, già pronti per la
+sezione Evaluation.
 
 ### B2. Outline paper (bozza di lavoro)
 

@@ -307,7 +307,8 @@ questions, 57/57 subjects, zero slice failures, unattended overnight
 | Average slice time | 205.0s |
 | Slowest slice | `[32:64)` — 1,784.7s (~29.7 min) — the previously-flagged slow region, now understood per §5 |
 
-Full per-subject breakdown: `mmlu_final_report.md`. Lowest-scoring
+Full per-subject breakdown: `poc_final_report.md` §3.1 (formerly a
+standalone `mmlu_final_report.md`, folded in during Sprint 5). Lowest-scoring
 subjects are STEM-heavy (`abstract_algebra`, `college_physics`,
 `electrical_engineering`, `formal_logic`, `high_school_mathematics`, all
 40.0%) — expected for a 4-bit quantized 8x7B model, not attributed to
@@ -316,8 +317,8 @@ re-broken down per-subject for direct comparison (see §7).
 
 **Note on the shadow-activations figure:** the value above (562,338) is
 the corrected sum across all 18 independent slice processes, each with
-its own `GCSGGuard` state. An earlier draft of `mmlu_final_report.md`
-reported 13,756 — the last slice's own counter, mistaken for a run-wide
+its own `GCSGGuard` state. An earlier draft of the MMLU results report
+(now `poc_final_report.md` §3.1) reported 13,756 — the last slice's own counter, mistaken for a run-wide
 total. No per-slice `total_tokens_evaluated` is logged in the results
 file, so an aggregate activation *rate* cannot be derived from this run;
 a rerun with that field added would be needed.
@@ -630,7 +631,7 @@ rather than GCSG in isolation:
 - MMLU harness: `scripts/eval_mmlu_gcsg.py`,
   `scripts/run_mmlu_in_slices.sh`,
   `scripts/measure_mmlu_prompt_lengths.py`, `scripts/probe_kv_blocks.py`
-- Results: `mmlu_final_report.md`,
+- Results: `poc_final_report.md` (M1/M2/M3 consolidated),
   `mmlu_results_overnight_20260811.jsonl`
 - Full investigation trail: `LOGBOOK.md`, 2026-08-09 through 2026-08-11
   entries
