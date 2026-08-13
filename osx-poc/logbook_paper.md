@@ -238,6 +238,78 @@ sezione Design/Evaluation del paper:
    ciò che il PoC misura davvero oggi — riformulando abstract/§9 di
    conseguenza.
 
+### CORREZIONE (2026-08-13, dal project owner) — il gap è più a monte: per i path 2/3 non esiste nemmeno un riferimento a precisione piena da confrontare
+
+Il Risultato 2 sopra si fermava a "manca il codice che confronta shadow vs
+reale". Il project owner ha verificato meglio: per i path effettivamente
+usati sul checkpoint reale (`_AWQShadowExpert`, path 3; `_MarlinFusedShadowExpert`,
+path 2 — gli unici due esercitati nel run MMLU del report), lo "shadow" non
+è affatto una copia a precisione degradata rispetto a un originale più
+preciso — **è un secondo forward attraverso lo stesso modulo già
+quantizzato**, dichiarato esplicitamente nel docstring di `_AWQShadowExpert`:
+"Lo 'shadow' qui è un secondo forward attraverso lo stesso expert già
+caricato... non richiede una replica fisica del peso." Il checkpoint reale
+(`casperhansen/mixtral-instruct-awq`) è AWQ/Marlin 4-bit end-to-end fin dal
+caricamento — non esiste, in nessun punto del sistema in quella
+configurazione, una versione a precisione piena con cui confrontare, quindi
+anche implementando il confronto (Risultato 2, opzione 1) non ci sarebbe
+alcuna divergenza di precisione da misurare: shadow e reale userebbero
+letteralmente gli stessi pesi.
+
+**Solo il path 1 (`_ShadowExpertINT4`) ha una vera divergenza di precisione
+misurabile** — pesi fp16 grezzi (`w13_weight`) vs versione quantizzata a
+INT4 simulato (`_quantize_int4`, int8 non packed) calcolata al volo — perché
+lì il modello base non è pre-quantizzato e la "degradazione" è introdotta
+davvero dallo shadow path stesso, non già presente ovunque.
+
+**Conseguenza, verificata incrociando col report (`gcsg_shadow_execution_report.md`
+§6-7-9) e col LOGBOOK generale:** "validato in qualità" (72.11/72.28/72.3%
+MMLU) e "ha una divergenza di precisione reale" non si sono MAI verificati
+insieme in nessun run di questo progetto fino ad oggi.
+- I run MMLU (§6) sono tutti sul checkpoint AWQ reale, path 2/3 — zero
+  divergenza di precisione per costruzione (paragrafo sopra).
+- Path 1 è stato esercitato sotto offload reale solo come check di
+  meccanica/correttezza (Sprint 4 sotto-obiettivo 6, A100, checkpoint
+  Mixtral-8x7B-Instruct-v0.1 *non quantizzato* — un checkpoint diverso da
+  quello usato per l'MMLU) — nessun numero di qualità esiste per path 1,
+  né con né senza l'ipotetico confronto per-token.
+
+Quindi il numero -0.19pp del report non misura "quanto costa in qualità
+fidarsi di un expert degradato quando il router è sicuro" — non può, perché
+nella configurazione in cui è stato misurato la nozione stessa di "degradato
+vs reale" non si applica. Misura, nella lettura più caritatevole, se
+raddoppiare il forward di un modulo AWQ/Marlin già caricato introduce
+instabilità/rumore nella generazione — un risultato di robustezza
+ingegneristica reale e non banale (i due root-cause di crash/stallo in
+§4-5 restano scoperte genuine), ma ortogonale alla premessa "quality-safe
+shadow execution under aggressive quantization" del titolo del report.
+
+Opzioni concrete per procedere (sostituiscono le due sopra, ora più precise):
+1. **Esperimento vero**: portare path 1 a scala MMLU sul checkpoint reale
+   non quantizzato (o su un checkpoint fp16/bf16 caricato apposta), con un
+   confronto per-token shadow-vs-reale implementato — l'unico modo di
+   misurare davvero l'ipotesi del titolo. Costo: hardware più grande
+   (visto il precedente A100 80GB con cpu_offload_gb=28 solo per farci
+   stare il modello fp16), tempo di sviluppo per il confronto per-token,
+   nuovo run MMLU completo — rischio concreto sulla scadenza di fine agosto.
+2. **Ridisegnare i path 2/3** perché abbiano una divergenza di precisione
+   reale anche dentro il regime già quantizzato — es. lo shadow chiama una
+   versione ulteriormente degradata (2-bit, o un sottoinsieme di canali
+   prunato) rispetto al 4-bit "reale" del checkpoint — mantiene il
+   deployment realistico (AWQ/Marlin) ma richiede lavoro di ingegneria
+   nuovo (un vero path di quantizzazione aggiuntiva dentro shadow, non
+   presente oggi).
+3. **Riformulare la claim** del paper su ciò che è stato davvero misurato:
+   non "quality-safe under degradation" ma "safe to insert a redundant
+   verification-shaped computation into a real serving pipeline without
+   destabilizing it" — zero nuovi esperimenti, ma restringe sensibilmente
+   cosa GCSG può rivendicare nel paper rispetto alla premessa originale del
+   docstring di modulo.
+
+Nessuna opzione scelta in questa entry — decisione del project owner,
+probabilmente vincolata dalla finestra stretta fino a fine agosto 2026
+(§B0).
+
 ### Bibliografia — metadata aggiornati (Cluster A)
 
 | Paper | Riferimento verificato | Nota aggiornata |
