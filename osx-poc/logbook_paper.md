@@ -139,6 +139,124 @@ verificare, non come bibliografia citabile as-is.
 
 ---
 
+## 2026-08-13 (continua) — Letture integrali FineMoE/AdapMoE/ReMoE/FloE/PagedWeight + MoEpic/MoE-Lightning via web, isolamento del meccanismo GCSG
+
+**Contesto:** richiesta esplicita del project owner di approfondire — leggere per
+intero FineMoE/MoEpic/MoE-Lightning e isolare con più precisione cosa
+distingue GCSG, seguito diretto dei "Non fatto ancora" dell'entry precedente.
+
+### Metodologia
+
+Letti per intero (PDF diretti, non solo abstract/intro come nel primo giro):
+FineMoE (EuroSys'26, 14 pagine), AdapMoE (ICCAD'24, corpo completo + inizio
+references), ReMoE (ICML'26, 16 pagine incluse le appendici con le
+dimostrazioni), FloE (ICML'25, 15 pagine incluse appendici teoriche),
+PagedWeight (13 pagine, completo). MoEpic (arXiv:2509.08342) e MoE-Lightning
+(arXiv:2411.11217, ASPLOS'25) **non recuperabili come PDF**: `arxiv.org` e i
+mirror provati (`ar5iv.labs.arxiv.org`, `pschafhalter.com`,
+`semanticscholar.org`, `themoonlight.io`) sono tutti bloccati dalla egress
+policy di rete di questa sessione (403 dal proxy, non un errore transitorio —
+verificato via `/__agentproxy/status`). Ricostruiti via più query di ricerca
+web incrociate (abstract, dblp, ACM DOI per MoE-Lightning). Metadata di
+MoE-Lightning cross-verificati anche indirettamente: sia PagedWeight che
+ReMoE lo citano per intero nelle rispettive bibliografie (Cao et al., ASPLOS
+2025, arXiv:2411.11217) — stesso paper, tre fonti indipendenti concordi.
+MoEpic resta senza autori verificati (nessuna fonte secondaria li riportava);
+non citabile ancora come bibliografia formale.
+
+In parallelo, riletto `src/scheduler/gcsg.py` per intero (non solo il
+docstring di modulo, letto nel primo giro) per capire esattamente cosa fa
+`run_shadow()` a runtime.
+
+### Risultato 1 — asse di differenziazione più preciso
+
+Tutti i sei sistemi di offloading/caching letti (MoE-Infinity, Mixtral-
+Offloading, FineMoE, MoEpic, MoE-Lightning, e in parte AdapMoE/PagedWeight)
+rispondono alla stessa domanda strutturale: **dove/cosa posizionare nella
+gerarchia di memoria o quanto comprimere**, guidati da statistiche di
+traffico (hotness, similarità semantica/di traiettoria, sensitività
+Hessiana offline). Nessuno di essi decide "questo token, adesso, in base a
+quanto il router stesso è sicuro della propria decisione, tollera
+un'esecuzione degradata?" — un trust-gate per-token basato su segnali
+*endogeni al modello* (confidenza del gating + entropia della distribuzione
+di routing) a runtime, non un problema di posizionamento in memoria.
+
+Il parente più stretto resta AdapMoE (unico altro sistema che usa un segnale
+per-token/per-layer — gap top1/top2 — per una decisione di qualità), ma con
+tre differenze strutturali: (1) AdapMoE decide *riduzione di computo* (droppa
+il secondo expert), GCSG decide *sostituzione di precisione* di un secondo
+percorso eseguito in parallelo; (2) AdapMoE non ha un termine di entropia
+né un contamination-rate auto-limitante; (3) AdapMoE è open-loop — soglia
+derivata da un'espansione di Taylor/informazione di Fisher, mai verificata
+a runtime contro un'esecuzione di riferimento. PagedWeight è il parente più
+stretto sull'asse "quality-aware, runtime, per-request", ma la sua unità di
+adattamento è la weight-page sotto pressione KV-cache, guidata da un
+regressore offline+online che *stima* il danno — mai un'esecuzione shadow
+reale che lo misuri empiricamente.
+
+Nessuno dei sette paper esegue un secondo forward pass ridondante e lo
+confronta con quello reale come primitiva di verifica runtime. Questo
+pattern (draft economico eseguito in parallelo, poi verificato) è
+strutturalmente più vicino a *speculative decoding* o a *shadow/dark-launch
+deployment* (pratica SRE) che a qualunque lavoro di serving MoE trovato.
+
+### Risultato 2 — scoperta critica: `run_shadow()` scarta il proprio output
+
+Seguita la catena completa in `gcsg.py`: `_evaluate_gcsg_for_rows()` (riga
+1657 circa) chiama `self.guard.run_shadow(...)`, il cui valore di ritorno
+non è mai assegnato; dentro `run_shadow()`, la chiamata
+`shadow_pool[shadow_expert_id](hidden_states, layer_id)` (riga 318 circa)
+esegue il forward INT4 reale ma **anche qui il risultato non è catturato in
+nessuna variabile**. In tutto il file non esiste un confronto tra l'output
+dello shadow expert e l'output dell'expert reale — nessuna KL-divergence,
+nessuna cosine similarity, nessuna soglia di scostamento.
+`contamination_flag`/`contamination_rate` contano *quante volte* lo shadow
+si è attivato, non se il suo output divergeva da quello reale.
+
+**Conseguenza diretta per `gcsg_shadow_execution_report.md`:** il numero
+72.11% vs 72.3% (baseline hook-only, −0.19pp) misura se eseguire il calcolo
+shadow ridondante — il cui risultato viene scartato — danneggia comunque la
+generazione reale (un test di **non-interferenza/sicurezza del sistema**),
+non "se servire attraverso l'expert degradato preservi la qualità", che è la
+premessa dichiarata nell'abstract del report stesso e nel docstring del
+modulo. Con l'output scartato, la differenza di 1 domanda su 570 è
+verosimilmente rumore (coerente con la caveat già presente in report §7
+sull'assenza di un intervallo di confidenza formale), non segnale di un vero
+costo di qualità.
+
+**Non invalida la premessa di GCSG** — anzi rafforza l'argomento di
+originalità, perché nessuno dei sette paper fa questo confronto neppure loro
+— ma è un gap reale tra la claim del report/abstract e ciò che il codice
+misura oggi. Due strade, da decidere col project owner prima di scrivere la
+sezione Design/Evaluation del paper:
+1. Implementare davvero il confronto shadow-vs-reale (catturare l'output
+   reale dell'expert nello stesso hook `.gate`/forward della decoder layer,
+   calcolare una divergenza — es. KL sui logit finali o cosine sull'hidden
+   state — e riportare *quel* numero come "costo di qualità dello shadow").
+2. Restringere esplicitamente la claim del paper a "sicurezza/non-
+   interferenza dell'eseguire un canary computation nell'ombra", che è
+   ciò che il PoC misura davvero oggi — riformulando abstract/§9 di
+   conseguenza.
+
+### Bibliografia — metadata aggiornati (Cluster A)
+
+| Paper | Riferimento verificato | Nota aggiornata |
+|---|---|---|
+| MoE-Lightning | Shiyi Cao, Shu Liu, Tyler Griggs, Peter Schafhalter, Xiaoxuan Liu, Ying Sheng, Joseph E. Gonzalez, Matei Zaharia, Ion Stoica. ASPLOS 2025 (Vol. 1), DOI 10.1145/3669940.3707267, arXiv:2411.11217 — metadata cross-verificati (dblp + ACM DOI + citazioni concordi in PagedWeight e ReMoE) | CGOPipe (pipelining CPU-GPU-I/O) + Hierarchical Roofline Model + paged weights; sistema di *scheduling per throughput batch*, nessun meccanismo di verifica qualità/shadow — asse ortogonale a GCSG |
+| MoEpic | arXiv:2509.08342, "Accelerating Mixture-of-Expert Inference with Adaptive Expert Split Mechanism" — **autori non ancora verificati, non citabile as-is** | Split verticale top/bottom per expert (top in GPU, bottom in CPU) + configurazione cache via iterazione a punto fisso; nessuna quantizzazione, nessuna verifica di qualità — lossless per design, asse ortogonale a GCSG |
+
+### Non fatto ancora
+
+- Autori/venue di MoEpic non verificati alla fonte (arXiv irraggiungibile da
+  questa sessione) — da recuperare in un ambiente con accesso, o chiedendo
+  al project owner di incollare l'abstract/PDF direttamente.
+- MoEQuant, MoQE, Harvest (Cluster B/adiacenti nella bibliografia sopra) non
+  ancora letti per intero.
+- Decisione da prendere col project owner sui due percorsi del Risultato 2
+  prima di scrivere Design/Evaluation nel paper vero e proprio.
+
+---
+
 ## Riferimenti interni
 
 - Piano completo del Filone B: `osx-poc/reports/sprint5_berg_plan.md` §3
