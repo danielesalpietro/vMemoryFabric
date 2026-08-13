@@ -16,7 +16,129 @@ Releases are named after cities where significant project milestones were reache
 
 ---
 
+## [Berg] — v0.6.0-dev — 2026-08-13 (in progress, not yet released)
 
+*Named after Berg, Stockholm, where the Sprint 5 planning conversation happened — PoC delivery + paper, two parallel tracks.*
+
+### Added
+
+**EAT locking — selectable strategy, issue [#23](https://github.com/danielesalpietro/vMemoryFabric/issues/23)**
+
+- `ExpertAccessTable(locking_strategy=...)` — `"single"` (Option A: `RLock` → `Lock`, no method re-enters another while holding the lock, so `RLock`'s owner/reentrancy bookkeeping was pure overhead), `"striped"` (Option B: table partitioned into `n_shards` independent shards, each with its own `Lock`; bulk methods — `get_tier`/`eviction_candidates`/`hottest_candidates`/`stats`/`__len__`/`__iter__` — read one shard at a time under its own lock, a deliberate relaxed snapshot rather than holding all shard locks together), or `"lockfree_read"` (Option C: `lookup()` skips locking entirely, relying on `dict.get()`'s atomicity under the GIL). `"single"`/`"lockfree_read"` are internally a `"striped"` special case with one shard — no behavior change for existing callers beyond the new default below
+- `EATEntry.seqlock_write()` / `EATEntry.write_in_progress` (Option D — the `version` field already existed as an unused "CAS counter" comment; now a real seqlock) — `version` increments before (odd = write in progress) and after (even = stable) every mutation (`touch()`, `update_tier()`). Lets a `lockfree_read` caller detect a `touch()` caught mid-write (its two non-atomic field writes, `access_count` then `last_access_ts`) instead of silently trusting a possibly-torn read; the caller decides the policy (retry/discard/accept), no automatic enforcement
+- `benchmarks/bench_eat.py::bench_contention_by_strategy()` — the existing `contention` benchmark (disjoint reader/writer keys) repeated across all three strategies
+- `benchmarks/bench_eat.py::bench_churn_by_strategy()` (new scenario) — writer calls `access()` repeatedly on the *same* keys the readers query (the pattern flagged as more realistic of M2/M3 traffic in the PR #15 comment on issue #2, vs. the disjoint-key `contention` scenario). Readers apply the seqlock check and count detected torn reads directly, instead of leaving the race theoretical
+
+### Changed
+
+**`ExpertAccessTable` default locking strategy: `"single"` → `"lockfree_read"`**
+
+- Verified via grep that no production caller (`TierManager`, `GCSGWorker`, `eval_mmlu_gcsg.py`) passed `locking_strategy` explicitly, and none read `access_count`/`last_access_ts` off a raw `lookup()` result — hotness consumers (`gcsg.py`, `tier/policies.py`) go through the bulk methods, which stay locked regardless of strategy. On that basis `lockfree_read` was promoted to the default rather than left opt-in
+
+### Fixed
+
+**Issue [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) — `RLock` p99 degradation under contention**
+
+- Superseded the 2026-08-12 (Tekniska) decision to leave this open as a "known limitation" pending real production contention — implementing the locking-strategy options turned out to be cheap enough not to wait. `bench_contention_by_strategy()` (disjoint keys): p99 reader latency single→striped→lockfree_read = ~1119µs → ~611µs → ~1.3µs in sandbox CI, ~758µs → ~442µs → ~1.1µs on real hardware (`Z8-G4-RTX3090`, `full-gpu-tests` run [#150](https://github.com/danielesalpietro/vMemoryFabric/actions/runs/31726685030)) — ~700-900× improvement, confirmed on both environments, unlike the four-way sandbox/pod discrepancy this issue previously accumulated (see Tekniska entry, and `reports/poc_final_report.md` §1.2)
+- `bench_churn_by_strategy()` (same-key writer/reader traffic): the torn read `lockfree_read` deliberately accepts is real but rare — 10/119,038 (~0.0084%) in sandbox, 10/410,829 (~0.0024%) on real hardware; zero on `single`/`striped` in both environments
+
+### Tracking
+
+- Issues [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) and [#23](https://github.com/danielesalpietro/vMemoryFabric/issues/23) closed (`state_reason: completed`), both confirmed on real hardware before closing, not just sandbox CI
+- `reports/sprint5_berg_plan.md` §2/A1 updated — #2 was scoped there as "document as known limitation, not fix this sprint" one day before this fix landed; corrected in place rather than left inconsistent
+
+---
+
+## [Tekniska] — v0.5.0-dev — 2026-08-12
+
+*Named after the Tekniska museet, Stockholm, where the Sprint 4 kickoff conversation happened.*
+
+### Added
+
+**Sub-goal 1 — GCSGWorker wired to TierManager/EAT for real, both quantization paths (issue [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17))**
+
+- `GCSGWorker(tier_manager=...)` — opt-in, default `None`, byte-for-byte unchanged behavior unless wired. Since vLLM constructs the worker itself via a string `worker_cls` (no path for an extra kwarg to reach it), added `GCSGWorker.configure_tier_manager()` as a classmethod set *before* `LLM(...)`/`EngineArgs(...)` construction — `__init__` falls back to the pending value when `tier_manager=` isn't passed directly
+- `TierManager.promote_live_tensor()` (new) — a live-tensor promotion bridge, since `TierManager.promote()`'s NVMe→DDR4→VRAM chain expects shard *files* on NVMe and GCSG's shadow experts are live in-process tensors, not files. Registers/updates the tensor in EAT (seeded at `Tier.DDR4`) and moves it to VRAM via `GPUTransfer`, skipping the NVMe hop that doesn't apply here. Idempotent by key
+- `EAT.hottest_candidates(tier, n)` (new) — the promotion-side complement to `eviction_candidates()` (LRU/coldest-first); ranks by `(access_count, last_access_ts)` descending
+- `GPUTransfer.to_vram()` — now accepts `pin: bool` (default `False`) and a `torch.Tensor` directly, not just numpy
+- `_seed_eat_entries()` / `_select_shadow_expert_ids()` — seeds one EAT entry per `(expert_id, layer_id)` at load time for *all* experts, and replaces the round-robin `range(shadow_pool_size)` placeholder with EAT-hotness-driven selection when a `TierManager` is wired. Real per-token EAT traffic now flows through `_evaluate_gcsg_for_rows()` → `EAT.access()` independent of shadow activation — the "no real concurrent EAT traffic" precondition Sprint 1/2 were waiting on before touching issues #1/#2/#4
+- **AWQ ModuleList path (path 3)** — `_pin_awq_expert_to_gpu()` routes its GPU-residency transfer through `TierManager.promote_live_tensor()` instead of a direct `.to('cuda')` when wired. Verified 4/5 checklist items on a real RTX 3090 (WSL2 — `pin=True` correctly disabled there by design) and 5/5 on a second real GPU (real Linux, `pin=True` confirmed end-to-end)
+- **Marlin path (path 2)** — wired only after AWQ was validated twice with perfect determinism, since `_PinnedMarlinExperts` is the most fragile mechanism in the file (its own docstring documents the 2026-08-10 CUDA-allocator-fragmentation hang from an earlier attempt at pinning all 32 layers instead of only the offloaded ones). New `GCSGWorker._build_marlin_tensor_promoter(layer_id, expert_ids)` routes one dominant tensor per layer (`w13_qweight`) through `promote_live_tensor()`; EAT key uses a sentinel (`expert_id=-1`) with `shard_idx = _marlin_pool_shard_key(layer_id, expert_ids)`, encoding both `layer_id` and `hash(tuple(sorted(expert_ids)))` — caught before writing it, not after: a key varying only by `layer_id` would let a future `refresh_shadow_pool_selection()` silently reuse stale VRAM data across a changed pool composition
+- `scripts/smoke_test_gcsg_tier_manager.py` (new) — hardware verification checklist, extended with `--quantization {awq,awq_marlin}`
+- 98 unit tests passing by end of sub-goal 1 work (up from 91 pre-sprint)
+
+**Sub-goal 2 — real pinning wired in, soak-tested safe on real Linux**
+
+- `torch.Tensor.pin_memory()`, bypassing vLLM's own `is_pin_memory_available()`/WSL2 gate, now wired into `GPUTransfer.to_vram(pin=True)` — opt-in, default `False`
+- `scripts/verify_pin_memory_soak.py` (new) — **1000/1000 cycles, 0 byte-exact mismatches**, real pinned 256MB shards (the same unit `TierManager`/`EAT` operate on), on the RTX A5000 pod. Total-cycle drift -1%, H2D+D2H transfer-time drift -3%, pin-alloc-specific drift **-31%** (pinning got *faster* after the first several hundred cycles — consistent with host-allocator warm-up, no sign of the fragmentation-style degradation seen once before on 2026-08-10). 1000 cycles in 589s (~513ms/cycle average, including a fresh pin + H2D + D2H + byte comparison each time)
+
+**Sub-goal 3 — `--wire-tier-manager` on `eval_mmlu_gcsg.py`**
+
+- New opt-in flag (default off, zero change to the existing baseline path); forces `quantization="awq"` on the AWQ path, `awq_marlin` once the Marlin path was wired
+
+**Sub-goal 4 — promotion latency benchmark**
+
+- `benchmarks/bench_tier.py::bench_promote_live_tensor` (new), `pin=True` vs. `pin=False`
+
+**Sub-goal 6 — path 1 real-offload harness**
+
+- `scripts/probe_kv_blocks.py` extended: `--model-path`, `--cpu-offload-gb`, `--quantization none`
+- `scripts/smoke_test_gcsg_path1_real_offload.py` (new) — same watchdog+heartbeat+checklist idiom as every other smoke test in this project, including a direct numerical check of the INT4 quantize/dequantize/SwiGLU math at real `hidden_size=4096` (only ever verified before at the tiny test model's `hidden_size=1024`)
+
+### Fixed
+
+**`_build_marlin_shadow_pool()` — inferred a whole layer's offload state from one tensor (first real-hardware Marlin failure)**
+
+- First hardware run of the Marlin+TierManager wiring failed: `cannot pin 'torch.cuda.HalfTensor' — only dense CPU tensors can be pinned`, `worker._shadow_pool` empty. Root cause: the function decided "offloaded" by checking only `w13_qweight.data.device.type`, but vLLM's `cpu_offload_gb` doesn't offload a Marlin-packed layer's six tensors (`w13_qweight`/`w2_qweight`/`w13_scales`/`w2_scales`/`w13_qzeros`/`w2_qzeros`) as one indivisible unit — one of the other five could stay GPU-resident while `w13_qweight` was correctly offloaded, and the non-dominant-tensor promotion branch called `.pin_memory()` unconditionally on whatever it was handed. The AWQ path's equivalent function already guarded this (`p.device.type != "cuda"` filter); the Marlin promoter never got the same guard. Notably **not** the sentinel-key/`_marlin_pool_shard_key` risk both sessions initially suspected — one layer more basic
+- Fix: `_promoter()` now checks `cpu_slice.device.type == "cuda"` first and short-circuits before either the dominant-tensor `promote_live_tensor()` branch or the non-dominant `.pin_memory()` branch. 2 new regression tests (`TestMarlinTensorPromoterDeviceCheck`) reproduce the exact scenario. Reran on real hardware afterward, twice independently: green both times, "Marlin-path sentinel entries (expert_id=-1) reached Tier.VRAM: 6 confirmed"
+
+**Path 1 (`_ShadowExpertINT4`) — device mismatch under real offload on A100 SXM 80GB**
+
+- First real-checkpoint, real-offload test of path 1 (`mistralai/Mixtral-8x7B-Instruct-v0.1`, unquantized, ~93.4GB, `cpu_offload_gb=28`) failed at `generate()`: `RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu! (mat2 in wrapper_CUDA_mm)`, traced to `gcsg.py:452`, `_ShadowExpertINT4.__call__`'s `hidden_states @ w13.T`. Root cause: the fused-FusedMoE build loop constructed the INT4-dequantized shadow weight `w13` directly from the source `w13_weight`, which under real `cpu_offload_gb` can itself be CPU-resident — nothing moved the dequantized result to GPU, because the only prior test of this path (a tiny, never-offloaded model) had every source weight on GPU already, so the gap never had a chance to show. Fixed with the same device-check-then-pin pattern used on paths 2/3. Retest green: `generate()` completed (`' The sum of 2 + 2'`), `.gate` hooks fired 288 times, `shadow_activations=35` (5.0%), direct shadow-expert forward at `hidden_size=4096` finite and correctly shaped
+
+**`GCSGWorker.__getattr__` — `RecursionError` instead of a clean `AttributeError` on test doubles**
+
+- `__getattr__` delegated unknown attributes to `self._base` unconditionally; on a worker built via `__new__()` with `_base` never set (the established test pattern bypassing vLLM's constructor), any missing-attribute access recursed infinitely instead of raising cleanly. Pre-existing latent bug, surfaced only once the new `_tier_manager` read in `_evaluate_gcsg_for_rows()` exercised it. Fixed with an explicit `_base` presence check via `__dict__` before delegating
+
+**Cold-start expert selection — silent insertion-order bias, caught by a unit test before hardware**
+
+- First draft of `_select_shadow_expert_ids()` used `last_access_ts` as a tie-break for cold-start selection ("prefer fresher"), which turned out to silently bias toward whichever expert `_seed_eat_entries()` happened to insert *last* — an insertion-order artifact, not real hotness. Caught writing the cold-start unit test, not on hardware; dropped the tie-break entirely rather than patch around it. At true cold start (all `access_count == 0`), selection is now provably equivalent to the prior round-robin placeholder, since Python's `sorted(..., reverse=True)` is stable
+
+**Issue [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) — `BloomFilter.remove_expert()` fixed, then made moot the same day**
+
+- `remove_expert()` had raised `NotImplementedError` since Sprint 1 and was never called from anywhere, not even `EAT.evict()` — two gaps, not one. A classic Bloom filter can't support deletion at all, so the original `pybloom_live`-backed implementation could never have supported it; replaced with a self-contained Counting Bloom Filter (`_CountingBloomFilter`, 8-bit counters, double hashing via two `blake2b` digests, no new dependency) and wired `EAT.evict()` to call the new `remove_shard()`/`remove_expert()` correctly (expert-level entry only cleared when it was the *last* remaining shard). New regression test: 20 cycles of insert-then-evict 500 entries (10,000 cumulative "ghosts") — false-positive rate stays under 2%; would have failed loudly against the old stub. Made moot hours later when issue #1 was closed by removing the Bloom filter entirely (see Changed)
+
+### Changed
+
+**Issue [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) — Bloom filter removed from EAT's hot path entirely, not tuned**
+
+- The Counting Bloom Filter fix above also produced fresh numbers: hit-lookup ratio vs. a plain dict went from ~4.7-4.9× (old `pybloom_live`) to ~6.8-8.1× (new Counting BF) — worse, not better; insert throughput improved (~50,715 → ~74,000-98,000 ops/sec). Net effect on the open question ("does the Bloom filter belong in the hot path at all") was a wash. Decided with the project owner: the structure it guards (`self._table`, a dict at ~16k-entry scale) is already O(1) and doesn't need a fast-negative layer in front of it regardless of which implementation backs it. `src/eat/bloom.py` deleted entirely (not bypassed); `EAT.insert()`/`lookup()`/`evict()` simplified back to direct dict operations under the existing `RLock`; `pybloom-live==4.0.0` removed from `requirements.txt`. `benchmarks/bench_eat.py` repurposed from a Bloom-vs-dict comparison into a regression check — `eat` and a plain-dict baseline are now expected to converge, and do: delta dropped from ~4-5µs to **~0.019-0.07µs**
+
+**Issue [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) — RLock contention: decided, left open deliberately, not redesigned**
+
+- Re-measured `bench_eat.py::bench_contention` (4 readers + 1 writer) under this sprint's real EAT traffic: p99 degradation landed at **~61-91×** across 4 runs, 15-20× smaller than the issue's originally-cited **~1360×**, gap unexplained (plausible causes — different machine, Python/GIL scheduling, an unrepeated original measurement — none confirmed). More decisive than the gap itself: real `GCSGWorker` traffic today is single-threaded (`_evaluate_gcsg_for_rows()` runs synchronously inside vLLM's own forward-pass hook), so the multi-threaded contention scenario issue #2 measures isn't produced by anything running in this project yet. Redesigning the `RLock` now would be speculative work against a scenario that doesn't exist. Decision, requested and given explicitly by the project owner: leave the `RLock` as-is; issue #2 stays open, re-scoped from "in progress" to "blocked on real concurrent EAT access actually existing" (a future multi-worker/async-server setup), not closed and not silently forgotten. Both the original ~1360× and today's ~61-91× figures stay recorded side by side, neither overwriting the other. **Superseded 2026-08-13 — see the Berg entry above: implementing selectable locking turned out to be cheap enough not to wait for real contention to exist first.**
+
+### Status
+
+**Complete — all 7 sub-goals of issue [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) done or closed.**
+
+- **Sub-goal 1 (wiring):** both quantization paths hardware-verified — AWQ 5/5, Marlin 6/6 sentinel `Tier.VRAM` promotions confirmed, reproduced on a second independent pod run
+- **Sub-goal 2 (pinning):** closed positively — 1000-cycle soak test, 0 mismatches, no degradation, real pinning now the defensible default on real Linux (not WSL2, where vLLM disables it structurally)
+- **Sub-goal 3 (integrated MMLU rerun):** AWQ+TierManager landed at **411/570 (72.1%)**, same total as the historical baseline with 4 individual answers flipped (0.7%, inside the <2% target), confirmed byte-identical on a determinism rerun. Marlin+TierManager later matched **412/570 (72.3%)** exactly against the historical Marlin baseline, plus an exact 24/32 per-subject match on a spot-check slice — both quantization paths now have real MMLU numbers on the integrated path, not just mechanical checklists
+- **Sub-goal 4 (promotion latency):** `pin=True` P50 **194.1µs** vs. `pin=False` P50 **684.2µs** (~3.5× faster) — meets the README's "within 1.5× theoretical bandwidth" criterion at P50 (threshold 732.4µs), reproduced on a second run (207.8µs/620.7µs). P95/P99 move the other way under `pin=True`, but at n=20 synthetic 4MB shards that isn't a statistically meaningful tail measurement — not investigated further
+- **Sub-goal 5 (M1 debt):** #1 closed (Bloom filter removed), #4 moot (same removal), #2 decided-and-deferred at the time (see Changed — resolved a sprint later, in Berg)
+- **Sub-goal 6 (path 1 parity):** verified end-to-end on A100 SXM 80GB against the real 93GB unquantized checkpoint under `cpu_offload_gb=28`; one real device-mismatch bug found and fixed (see Fixed). Mechanics/correctness only — no MMLU number on this path, no production-viability claim for this offload configuration
+- **Sub-goal 7 (close-out):** `reports/gcsg_shadow_execution_report.md` EN/IT `.docx` exports regenerated via `pandoc --reference-doc=...`, several generic pandoc-template OOXML ordering bugs hand-fixed (`nsid` zero-padding, `pStyle`-before-`numPr`, `jc`-before-`tblLook`, `settings.xml`'s `CT_Settings` sequence), both pass full XSD schema validation with zero errors, 19 heading styles matching the markdown's 19 `#` headings
+
+**Environment note:** most of this sprint ran on a RunPod RTX A5000 (GA102, CC 8.6, 24GB) rather than the RTX 3090 reference hardware every prior measurement is calibrated against — a substitution, not a deviation, since it's the same architecture/VRAM class and was the first choice among WSL2-escape candidates for exactly that reason. An RTX 4090 (Ada Lovelace, CC 8.9 — a different generation) was used briefly for architecture-independent SSH/`pin_memory` checks only, explicitly flagged as not pre-approved for MMLU numbers. Sub-goal 6 required an A100 SXM 80GB for VRAM headroom; an RTX PRO 6000 Blackwell (sm_120) attempt was retired first — the project's pinned `torch==2.5.1+cu124` reports no `sm_120` in `get_arch_list()`, a hardware/library mismatch, not a project bug.
+
+### Tracking
+
+- Issue [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) closed — all 7 sub-goals done
+- Issue [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) closed (Bloom filter removed); issue [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) closed as moot by the same removal; issue [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) stays open at this point, re-scoped to blocked-on-real-concurrency (closed the following sprint — see Berg)
+- Known open item, not blocking sprint close: no root cause identified yet for the small, stable per-subject divergence pattern (4-5 subjects, ±1 question each, net near zero) seen on both the AWQ+TierManager and Marlin+TierManager reruns against their respective baselines — an early hypothesis (the `awq`-vs-`awq_marlin` kernel switch) was tested directly and ruled out, since the Marlin+TierManager rerun uses the identical kernel as its baseline and shows the same class of divergence anyway
+
+---
 
 ## [Oskarshamn] — v0.4.0-dev — 2026-08-10 (in progress, not yet released)
 
