@@ -26,9 +26,17 @@ Sezioni:
                             atteso vicino a zero ora, non più un vantaggio
                             "Bloom" da giustificare
     contention           — 4 reader concorrenti + 1 writer, per misurare il
-                            costo dell'RLock sotto traffico misto stile M2/M3
+                            costo del lock sotto traffico misto stile M2/M3
                             (issue #2 — vedi LOGBOOK.md 2026-08-12 per la nota
-                            sul fatto che il traffico reale oggi è single-thread)
+                            sul fatto che il traffico reale oggi è single-thread).
+                            Usa locking_strategy="single" (default EAT) —
+                            baseline di regressione invariata, issue #23.
+    contention_by_strategy — stesso scenario di bench_contention(), ripetuto
+                            per le tre locking_strategy introdotte in issue
+                            #23 (single/striped/lockfree_read), a parità di
+                            n_readers/n_prefill/n_writes — per decidere quale
+                            opzione (A/B/C) attacca davvero la tail latency
+                            misurata sopra, invece di scegliere a intuito.
     slab_scale           — alloc/free timing a 4 vs 32 slot (1 GB vs 8 GB),
                             per verificare empiricamente l'O(1) del free-list
 
@@ -145,8 +153,10 @@ def bench_baseline() -> dict:
 
 # ── Contention: 4 reader concorrenti + 1 writer ─────────────────────────────
 
-def bench_contention(n_readers: int = 4, n_prefill: int = 5_000, n_writes: int = 20_000) -> dict:
-    eat = ExpertAccessTable(capacity=(n_prefill + n_writes) * 2, n_slots=4)
+def bench_contention(n_readers: int = 4, n_prefill: int = 5_000, n_writes: int = 20_000,
+                      locking_strategy: str = "single") -> dict:
+    eat = ExpertAccessTable(capacity=(n_prefill + n_writes) * 2, n_slots=4,
+                             locking_strategy=locking_strategy)
     for shard_idx in range(n_prefill):
         eat.insert(expert_id=0, shard_idx=shard_idx, tier=Tier.NVME)
 
@@ -179,11 +189,23 @@ def bench_contention(n_readers: int = 4, n_prefill: int = 5_000, n_writes: int =
 
     all_reader_latencies = [lat for bucket in reader_latencies for lat in bucket]
     return {
+        "locking_strategy": locking_strategy,
         "n_readers": n_readers,
         "n_writes": n_writes,
         "writer_throughput_ops_sec_under_contention": n_writes / writer_elapsed,
         "reader_lookups_completed": len(all_reader_latencies),
         "reader_lookup_latency_under_contention": _percentiles(all_reader_latencies),
+    }
+
+
+def bench_contention_by_strategy() -> dict:
+    """Confronta le tre locking_strategy (issue #23: A=single, B=striped,
+    C=lockfree_read) sullo stesso scenario di contesa 4 reader + 1 writer —
+    unica variabile è la strategia, tutto il resto invariato rispetto a
+    bench_contention()."""
+    return {
+        strategy: bench_contention(locking_strategy=strategy)
+        for strategy in ("single", "striped", "lockfree_read")
     }
 
 
@@ -237,6 +259,7 @@ def main() -> None:
         "baseline_plain_dict": baseline_result,
         "eat_vs_baseline_delta_us": delta_us,
         "contention": bench_contention(),
+        "contention_by_strategy": bench_contention_by_strategy(),
         "slab_scale": bench_slab_scale(),
     }
     print(json.dumps(result, indent=2))
