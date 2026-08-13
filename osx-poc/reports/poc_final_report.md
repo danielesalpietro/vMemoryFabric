@@ -37,7 +37,7 @@ with margin," unlike the other three).
 ## 1. M1 — Expert Access Table (EAT)
 
 All numbers in this section are from `benchmarks/bench_eat.py`, run twice
-(`osx-poc/regression_20260812/bench_eat_20260812_224334.log`,
+(`logs/sprint4_tekniska/regression/bench_eat_20260812_224334.log`,
 `..._round2_20260812_230701.log`) on the same RunPod RTX A5000 pod as the
 Sprint 4 MMLU/tier-manager work (real Linux, not WSL2) — **not** the same
 environment as the sandbox re-measurement cited in §1.2, a distinction
@@ -134,7 +134,7 @@ data already collected for other purposes and no report had mentioned it.
 
 ### 2.1 NVMe → DDR4 → VRAM raw pipeline (Sprint 2 benchmarks)
 
-From the same two regression-pod runs (`bench_tier_pod_20260812_212555.log`,
+From the same two regression-pod runs (`logs/sprint4_tekniska/bench_tier_pod/bench_tier_pod_20260812_212555.log`,
 `..._rerun2_20260812_221103.log`), synthetic 4MB shards (not the 256MB
 production shard size — see the benchmark module's own docstring):
 
@@ -176,7 +176,7 @@ lands.
 
 ### 2.3 Soak test — pinned memory under sustained load (issue #17 sub-goal 2, closed)
 
-`LogBook_20260812_1344/soak_test_pinning/soak_test.log` — 1000 cycles,
+`logs/sprint4_tekniska/logbook_20260812_1344/soak_test_pinning/soak_test.log` — 1000 cycles,
 256MB shard (production size, unlike §2.1/§2.2's synthetic 4MB shards),
 real pinned `H2D`+`D2H`+byte-comparison each cycle:
 
@@ -212,7 +212,7 @@ now ships with (opt-in, default `False`).
 decimals used elsewhere in this table — same underlying count as row 2/3,
 not a different result.
 
-**Row 4 was run three independent times** (`mmlu_tier_manager_pod_singleshot_20260812_195140.jsonl`,
+**Row 4 was run three independent times** (`logs/sprint4_tekniska/mmlu/mmlu_tier_manager_pod_singleshot_20260812_195140.jsonl`,
 `..._rerun_20260812_210821.jsonl`, `..._rerun3_20260812_215416.jsonl`) —
 byte-identical result: 411/570, 562,354 shadow activations, every time.
 
@@ -227,7 +227,7 @@ number in isolation, and directly supports target #3 in §0 above.
 
 **Model:** `casperhansen/mixtral-instruct-awq` (Mixtral-8x7B-Instruct, AWQ, `quantization="awq_marlin"`)
 **Runtime:** vLLM 0.6.6.post1, `GCSGWorker` (real shadow execution — issues #10/#16), `cpu_offload_gb=4`, `gpu_memory_utilization=0.95`, `max_num_seqs=16`, `enforce_eager=True`, `max_model_len=3328`
-**Results file:** `mmlu_results_overnight_20260811.jsonl`
+**Results file:** `logs/sprint4_tekniska/mmlu/mmlu_results_overnight_20260811.jsonl`
 **Orchestration:** `scripts/run_mmlu_in_slices.sh` — 18 slices of 32 prompts each
 
 | Metric | Value |
@@ -258,8 +258,8 @@ rows: **562,338**.
 
 | Run | Results file | Correct | Accuracy | Wall time |
 |---|---|---|---|---|
-| Sliced (18×) | `LogBook_20260812_1344/mmlu_sliced_run/mmlu_results.jsonl` | 412/570 | 72.28% | ~38–40 min |
-| Single-process | `LogBook_20260812_1344/mmlu_burn_singleshot/burn_singleshot.log` | 412/570 | 72.3%¹ | 9.5 min (~4.2× faster, same quality) |
+| Sliced (18×) | `logs/sprint4_tekniska/logbook_20260812_1344/mmlu_sliced_run/mmlu_results.jsonl` | 412/570 | 72.28% | ~38–40 min |
+| Single-process | `logs/sprint4_tekniska/logbook_20260812_1344/mmlu_burn_singleshot/burn_singleshot.log` | 412/570 | 72.3%¹ | 9.5 min (~4.2× faster, same quality) |
 
 No stall reproduced on real Linux — the historical WSL2 stall (~request
 27-31) is structural to WSL2's pageable-memory path, not a deadlock, so it
@@ -275,13 +275,13 @@ Evaluation section as a latency-vs-quality tradeoff finding.
 
 **TierManager-wired reruns (issue #17 — the actual point of Sprint 4):**
 
-AWQ path (path 3): `mmlu_tier_manager_pod_singleshot_20260812_195140.jsonl`
+AWQ path (path 3): `logs/sprint4_tekniska/mmlu/mmlu_tier_manager_pod_singleshot_20260812_195140.jsonl`
 (+2 identical reruns) — **411/570 (72.11%)**, `tier_manager_wired: true`.
 First MMLU number generated via the real `TierManager`/`EAT` data path
 instead of vLLM's native `cpu_offload_gb`.
 
 Marlin path (path 2, the path every previously-published MMLU number
-actually used): `marlin_mmlu_20260812/mmlu_marlin_singleshot_20260813_005201.jsonl`
+actually used): `logs/sprint4_tekniska/marlin_mmlu/mmlu_marlin_singleshot_20260813_005201.jsonl`
 — **412/570 (72.28%/72.3%)**, `tier_manager_wired: true`,
 `quantization: awq_marlin`. Closes the last open gap of issue #17.
 
@@ -408,9 +408,9 @@ at this size): `abstract_algebra`, `college_physics`,
 
 ## References
 
-- **M1 (EAT):** `regression_20260812/bench_eat_20260812_224334.log`, `..._round2_20260812_230701.log`, `LOGBOOK.md` 2026-08-12 "sub-goal 5 started" entry (sandbox re-measurement), "issue #2 ... decided" entry (decision)
-- **M2 (Tier Manager):** `bench_tier_pod_20260812_212555.log`, `..._rerun2_20260812_221103.log`, `LogBook_20260812_1344/soak_test_pinning/soak_test.log`
-- **M3 (GCSG/MMLU):** `mmlu_results_overnight_20260811.jsonl`, `LogBook_20260812_1344/mmlu_sliced_run/`, `LogBook_20260812_1344/mmlu_burn_singleshot/burn_singleshot.log`, `mmlu_tier_manager_*.jsonl`, `marlin_mmlu_20260812/*.jsonl`
+- **M1 (EAT):** `logs/sprint4_tekniska/regression/bench_eat_20260812_224334.log`, `..._round2_20260812_230701.log`, `LOGBOOK.md` 2026-08-12 "sub-goal 5 started" entry (sandbox re-measurement), "issue #2 ... decided" entry (decision)
+- **M2 (Tier Manager):** `logs/sprint4_tekniska/bench_tier_pod/bench_tier_pod_20260812_212555.log`, `..._rerun2_20260812_221103.log`, `logs/sprint4_tekniska/logbook_20260812_1344/soak_test_pinning/soak_test.log`
+- **M3 (GCSG/MMLU):** `logs/sprint4_tekniska/mmlu/mmlu_results_overnight_20260811.jsonl`, `logs/sprint4_tekniska/logbook_20260812_1344/mmlu_sliced_run/`, `logs/sprint4_tekniska/logbook_20260812_1344/mmlu_burn_singleshot/burn_singleshot.log`, `mmlu_tier_manager_*.jsonl`, `logs/sprint4_tekniska/marlin_mmlu/*.jsonl`
 - Full narrative/investigation trail: `LOGBOOK.md`, `osx-poc/reports/gcsg_shadow_execution_report.md` §6/§9
 - Issues: [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1), [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) (open, deliberately), [#3](https://github.com/danielesalpietro/vMemoryFabric/issues/3) (open), [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4), [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10), [#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16), [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) (all others closed)
 - Upstream vLLM/WSL2 confirmation: [vllm-project/vllm#1084](https://github.com/vllm-project/vllm/issues/1084), [vllm-project/vllm#37883](https://github.com/vllm-project/vllm/issues/37883)
