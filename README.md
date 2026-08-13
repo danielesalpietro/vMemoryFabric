@@ -159,6 +159,11 @@ vMemoryFabric/                  (repo root)
 
 ## Development roadmap
 
+> Questa sezione è la narrativa retrospettiva, sprint per sprint. Per la
+> vista forward-looking — cosa contiene ciascuna release pianificata, con
+> impatto/rischio per voce — vedi
+> [`osx-poc/reports/development_roadmap.md`](osx-poc/reports/development_roadmap.md).
+
 | Sprint | Module | Weeks | Status      |
 |--------|--------|-------|-------------|
 | 0      | Environment + skeleton | 1–2 | ✅ **Karlshamn** (100%) |

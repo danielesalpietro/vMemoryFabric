@@ -309,3 +309,16 @@ paper — per questo è spostata in settimana 1 invece che in settimana 3.
    Architect (indipendente), salpietro.it, daniele@salpietro.it. Restano da
    scegliere solo categoria arXiv e licenza (B4), non bloccanti per iniziare
    a scrivere.
+
+## 6. Nota aggiunta 2026-08-13 — rischio nuovo su B2/B4, non presente quando questo piano è stato scritto
+
+La related-work survey (B3, avviata come da piano) ha trovato che la
+premessa centrale di GCSG ("quality-safe shadow execution under aggressive
+quantization") non è supportata dai dati per i path effettivamente usati nel
+run MMLU pubblicato — vedi `osx-poc/logbook_paper.md`, entry "CORREZIONE"
+del 2026-08-13, e issue [#19](https://github.com/danielesalpietro/vMemoryFabric/issues/19)/[#22](https://github.com/danielesalpietro/vMemoryFabric/issues/22).
+Questo non era prevedibile in B0 (2026-08-12) e va deciso prima di scrivere
+Design/Evaluation (B2 punto 4/6, B4) — trattato in dettaglio, con impatto
+sul timeline della settimana 1, in `osx-poc/reports/development_roadmap.md`
+§1. Il timeline §4 sopra non è stato ricalcolato per questo rischio — da
+rivedere insieme alla decisione su #19/#22.
