@@ -327,6 +327,56 @@ probabilmente vincolata dalla finestra stretta fino a fine agosto 2026
 - Decisione da prendere col project owner sui due percorsi del Risultato 2
   prima di scrivere Design/Evaluation nel paper vero e proprio.
 
+## 2026-08-13 (continua) — Verifica diretta del codice: fork di FineMoE/AdapMoE/ReMoE clonati e confrontati con gli originali
+
+**Contesto:** il project owner ha forkato sul proprio profilo GitHub i tre
+repo con codice confermato (FineMoE-EuroSys26, AdapMoE, ReMoE — vedi tabella
+nell'entry precedente) per una verifica diretta invece di fidarsi solo del
+testo dei paper. Cloni fatti in questa sessione (shallow, `--depth 1`),
+codice letto direttamente.
+
+### FineMoE e AdapMoE — codice reale, confermato corrispondente al paper
+
+- **FineMoE-EuroSys26**: 45 file Python+C++, ~6.100 righe. `core/prefetch/`
+  contiene uno scheduler C++ reale (`task_scheduler.cpp/h`,
+  `archer_prefetch_handle.cpp/h`); `finemoe/memory/` contiene
+  `expert_prefetcher.py`/`expert_tracer.py` — corrisponde all'architettura
+  di prefetching fine-grained descritta nel paper. Costruito esplicitamente
+  sopra MoE-Infinity (dichiarato nel README).
+- **AdapMoE**: 22 file Python, ~5.450 righe. Controllato `src/dp.py` riga
+  per riga contro §4.4.2 del paper: la funzione `f(index, size)` implementa
+  esattamente i quattro termini di costo f1-f4 (Eq. 11-14), e
+  `get_cache_size()` è la stessa ricorsione DP-knapsack di Eq. 19
+  (`dp[i][j] = min(dp[i-1][j-k] + f(i,k))`). Match diretto codice-formula,
+  non solo somiglianza di intento.
+
+### ReMoE — il repo "ufficiale" non contiene il codice del metodo
+
+`git ls-remote` su `danielesalpietro/ReMoE` (fork) e `BUAA-OSCAR/ReMoE`
+(originale, quello citato nei risultati di ricerca come "[ICML'26] ReMoE")
+restituisce **lo stesso identico commit** (`701420b...`), singolo branch
+`main`, **un solo file: `README.md`**. Il contenuto non è il codice di
+router fine-tuning descritto nel paper — è una model card che rimanda a un
+checkpoint GGUF già fine-tuned e quantizzato
+(`Zhu149248/DeepSeek-V2-Lite-Chat-ReMoE-GGUF` su HuggingFace, pensato per
+Ollama). Zero training loop, zero implementazione del router fine-tuning,
+zero harness di valutazione. Non è un fork "sbagliato" — è il repo
+realmente linkato dal paper/dai risultati di ricerca, verificato identico
+in entrambe le direzioni — ma il tag "[ICML'26] ReMoE" nei risultati di
+ricerca descrive un repo che esiste ed è taggato correttamente, senza però
+contenere codice sorgente riproducibile. Aggiornamento diretto alla tabella
+data al project owner in chat: ReMoE passa da "repo ufficiale, alta
+affidabilità" a "repo esiste, zero codice del metodo — non verificabile
+staticamente, solo il checkpoint derivato è ispezionabile".
+
+### Implicazione
+
+Se serve verificare/confrontare numeri contro un baseline reale in fase di
+Evaluation del paper, FineMoE e AdapMoE sono staticamente ispezionabili ed
+eseguibili (repo completi); ReMoE no — l'unico modo di verificare qualcosa
+di quel paper sarebbe scaricare il checkpoint GGUF e testarlo a runtime,
+non leggerne l'implementazione.
+
 ---
 
 ## Riferimenti interni
