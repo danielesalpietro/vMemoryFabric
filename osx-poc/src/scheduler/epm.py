@@ -19,11 +19,25 @@ Storico limitato (2026-08-13, richiesta esplicita utente): un log che
 cresce senza limite è uno stesso tipo di rischio già evitato altrove in
 questo progetto (vedi captured_router_logits in GCSGWorker, issue #10/#16)
 — MAX_HISTORY_RUNS tiene solo gli ultimi N run, FIFO.
+
+Path scoped per modello (2026-08-13, richiesta esplicita utente): expert_id
+è solo un intero posizionale (vedi docstring EPM in eat.eat) — un prior
+salvato da un modello diverso applicato alla cieca non crasha, ma applica
+un bias silenzioso e sbagliato (peggio del round-robin, che almeno è
+neutro). Invece di validare il CONTENUTO dello snapshot contro il modello
+corrente, snapshot_path_for_model()/history_path_for_model() derivano il
+NOME del file dall'identità del modello (path/checkpoint) — cambiare
+modello punta automaticamente a un file diverso; se non esiste ancora,
+load_snapshot_file() restituisce None e si riparte da zero, senza bisogno
+di nessun controllo esplicito. Chi vuole EPM senza scoping per modello può
+comunque usare DEFAULT_SNAPSHOT_PATH/DEFAULT_HISTORY_PATH direttamente.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from pathlib import Path
@@ -43,6 +57,32 @@ MAX_HISTORY_RUNS = 256
 def new_run_id() -> str:
     """ID leggibile e ordinabile per timestamp: <epoch>-<8 hex>."""
     return f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+
+
+# ── path scoped per modello ──────────────────────────────────────────────────
+
+def _slugify_model_identifier(model_identifier: str) -> str:
+    """Slug leggibile e filesystem-safe da un identificativo modello (path
+    assoluto o HF repo id tipo 'org/nome'). Prefisso leggibile (per poter
+    riconoscere il file a occhio in state/) + suffisso hash breve
+    dell'identificativo completo, per disambiguare identificativi diversi
+    che slugificherebbero allo stesso modo (es. 'a/b' e 'a_b')."""
+    readable = re.sub(r"[^a-zA-Z0-9._-]+", "_", model_identifier).strip("_").lower()
+    digest = hashlib.sha256(model_identifier.encode()).hexdigest()[:8]
+    return f"{readable}-{digest}" if readable else digest
+
+
+def snapshot_path_for_model(model_identifier: str, base_dir: Path = Path("state")) -> Path:
+    """Path dello snapshot EAT scoped al modello — vedi nota di modulo su
+    perché lo scoping è nel NOME del file, non in un controllo sul
+    contenuto."""
+    return Path(base_dir) / f"epm_eat_snapshot__{_slugify_model_identifier(model_identifier)}.json"
+
+
+def history_path_for_model(model_identifier: str, base_dir: Path = Path("state")) -> Path:
+    """Path dello storico run scoped al modello — stesso principio di
+    snapshot_path_for_model()."""
+    return Path(base_dir) / f"epm_run_history__{_slugify_model_identifier(model_identifier)}.json"
 
 
 # ── snapshot (hotness EAT) ───────────────────────────────────────────────────

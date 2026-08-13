@@ -52,8 +52,11 @@ Checklist mechanized here, in the same priority order as LOGBOOK.md's
     5. refresh_shadow_pool_selection() is callable post-generate()
        without raising, and reflects whatever hotness accumulated.
     6. EPM (issue #27, 2026-08-13): on by default — a prior snapshot from
-       state/epm_eat_snapshot.json (if present) is loaded via
-       GCSGWorker.configure_eat_snapshot() before LLM(...), and
+       a file scoped to MODEL_PATH (epm.snapshot_path_for_model(), e.g.
+       state/epm_eat_snapshot__*.json — different model -> different
+       file, no snapshot found -> clean cold start, no content-level
+       validation needed) is loaded via GCSGWorker.configure_eat_snapshot()
+       before LLM(...), and
        worker.finalize_epm_run() writes this run's snapshot + a history
        record (initial/final shadow pool position, continued_from_
        previous) after the checklist above. Two consecutive runs of this
@@ -152,13 +155,21 @@ def main() -> None:
          "up when it constructs the worker itself (no direct kwarg path exists, see the "
          "docstring on configure_tier_manager()/_pending_tier_manager in gcsg.py).")
 
+    # Path scoped su MODEL_PATH (issue #27): expert_id è solo un intero
+    # posizionale, un prior di un modello diverso applicato alla cieca
+    # sarebbe un bias silenzioso, non un cold start pulito — cambiare
+    # modello punta automaticamente a un file diverso, vedi la nota di
+    # modulo in scheduler/epm.py.
+    epm_snapshot_path = epm.snapshot_path_for_model(MODEL_PATH)
+    epm_history_path = epm.history_path_for_model(MODEL_PATH)
+
     if args.no_epm:
         GCSGWorker.configure_eat_snapshot(None)
         _log("EPM disabilitato (--no-epm): cold start round-robin, nessuno snapshot/storico salvato.")
     else:
-        prior = epm.load_snapshot_file()
+        prior = epm.load_snapshot_file(epm_snapshot_path)
         GCSGWorker.configure_eat_snapshot(prior)
-        _log(f"EPM: {'snapshot precedente caricato da ' + str(epm.DEFAULT_SNAPSHOT_PATH) if prior else 'nessuno snapshot trovato in ' + str(epm.DEFAULT_SNAPSHOT_PATH) + ' — cold start'}.")
+        _log(f"EPM: {'snapshot precedente caricato da ' + str(epm_snapshot_path) if prior else 'nessuno snapshot trovato in ' + str(epm_snapshot_path) + ' — cold start'}.")
 
     _log(f"Loading {MODEL_PATH} via EngineArgs(worker_cls=GCSGWorker), "
          f"quantization={args.quantization}, cpu_offload_gb=4 ...")
@@ -286,13 +297,13 @@ def main() -> None:
     else:
         print(f"\nEPM: posizione iniziale di questo run (subito dopo load_model(), prima di "
               f"generate()): {worker._epm_initial_selection}.")
-        record = worker.finalize_epm_run()
+        record = worker.finalize_epm_run(snapshot_path=epm_snapshot_path, history_path=epm_history_path)
         if record is None:
             _fail("finalize_epm_run() ha restituito None con tier_manager wired e "
                   "_n_experts_cached impostato — non dovrebbe succedere qui.")
         print(f"EPM: run finalizzato — {record}")
-        print(f"EPM: snapshot scritto in {epm.DEFAULT_SNAPSHOT_PATH}, storico in "
-              f"{epm.DEFAULT_HISTORY_PATH} (ultimi {epm.MAX_HISTORY_RUNS} run).")
+        print(f"EPM: snapshot scritto in {epm_snapshot_path}, storico in "
+              f"{epm_history_path} (ultimi {epm.MAX_HISTORY_RUNS} run).")
         if record["continued_from_previous"]:
             print("EPM: continued_from_previous=True — la posizione iniziale di QUESTO run "
                   "coincide con la posizione finale dell'ULTIMO run nello storico: la memoria "

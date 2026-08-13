@@ -142,3 +142,55 @@ class TestNewRunId:
     def test_unique_across_calls(self):
         ids = {epm.new_run_id() for _ in range(100)}
         assert len(ids) == 100
+
+
+# ── path scoped per modello ──────────────────────────────────────────────────
+
+class TestModelScopedPaths:
+
+    def test_different_models_get_different_snapshot_paths(self, tmp_path):
+        p1 = epm.snapshot_path_for_model("/data/nvme/models/mixtral-instruct-awq", tmp_path)
+        p2 = epm.snapshot_path_for_model("/data/nvme/models/some-other-model", tmp_path)
+        assert p1 != p2
+
+    def test_same_model_gets_stable_path(self, tmp_path):
+        p1 = epm.snapshot_path_for_model("casperhansen/mixtral-instruct-awq", tmp_path)
+        p2 = epm.snapshot_path_for_model("casperhansen/mixtral-instruct-awq", tmp_path)
+        assert p1 == p2
+
+    def test_snapshot_and_history_paths_differ(self, tmp_path):
+        model = "casperhansen/mixtral-instruct-awq"
+        assert epm.snapshot_path_for_model(model, tmp_path) != epm.history_path_for_model(model, tmp_path)
+
+    def test_path_is_filesystem_safe_for_hf_repo_id(self, tmp_path):
+        """'org/nome' contiene '/' — non deve produrre sotto-directory
+        indesiderate né path traversal, deve restare un singolo file sotto
+        base_dir."""
+        path = epm.snapshot_path_for_model("casperhansen/mixtral-instruct-awq", tmp_path)
+        assert path.parent == tmp_path
+
+    def test_visually_different_identifiers_do_not_collide(self, tmp_path):
+        """'a/b' e 'a_b' slugificano allo stesso prefisso leggibile — il
+        suffisso hash deve comunque distinguerli (vedi _slugify_model_
+        identifier)."""
+        p1 = epm.snapshot_path_for_model("a/b", tmp_path)
+        p2 = epm.snapshot_path_for_model("a_b", tmp_path)
+        assert p1 != p2
+
+    def test_missing_scoped_snapshot_is_a_clean_cold_start(self, tmp_path):
+        """Il caso che motiva lo scoping: un modello mai visto prima non
+        ha un file -> load_snapshot_file() restituisce None, nessun
+        errore, nessun bisogno di validare nulla contro il modello."""
+        path = epm.snapshot_path_for_model("a-brand-new-model", tmp_path)
+        assert epm.load_snapshot_file(path) is None
+
+    def test_switching_model_does_not_leak_the_other_models_snapshot(self, tmp_path):
+        model_a, model_b = "model-a", "model-b"
+        epm.write_snapshot_file({"version": 1, "entries": {"0:0": {"access_count": 99}}},
+                                 epm.snapshot_path_for_model(model_a, tmp_path))
+
+        loaded_for_b = epm.load_snapshot_file(epm.snapshot_path_for_model(model_b, tmp_path))
+
+        assert loaded_for_b is None   # non lo snapshot di model_a, cold start pulito
+        loaded_for_a = epm.load_snapshot_file(epm.snapshot_path_for_model(model_a, tmp_path))
+        assert loaded_for_a["entries"]["0:0"]["access_count"] == 99   # model_a intatto

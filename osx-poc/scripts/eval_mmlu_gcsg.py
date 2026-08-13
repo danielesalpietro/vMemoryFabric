@@ -281,14 +281,19 @@ def main() -> None:
         _log("--wire-tier-manager: TierManager/EAT wired via "
              "GCSGWorker.configure_tier_manager().")
 
+        # Path scoped su MODEL_PATH (issue #27) — vedi la nota gemella in
+        # scripts/smoke_test_gcsg_tier_manager.py e scheduler/epm.py.
+        epm_snapshot_path = epm.snapshot_path_for_model(MODEL_PATH)
+        epm_history_path = epm.history_path_for_model(MODEL_PATH)
+
         if args.no_epm:
             GCSGWorker.configure_eat_snapshot(None)
             _log("EPM disabilitato (--no-epm): cold start round-robin, "
                  "nessuno snapshot/storico salvato a fine run.")
         else:
-            prior = epm.load_snapshot_file()
+            prior = epm.load_snapshot_file(epm_snapshot_path)
             GCSGWorker.configure_eat_snapshot(prior)
-            _log(f"EPM: {'snapshot precedente caricato da ' + str(epm.DEFAULT_SNAPSHOT_PATH) if prior else 'nessuno snapshot trovato in ' + str(epm.DEFAULT_SNAPSHOT_PATH) + ' — cold start'}.")
+            _log(f"EPM: {'snapshot precedente caricato da ' + str(epm_snapshot_path) if prior else 'nessuno snapshot trovato in ' + str(epm_snapshot_path) + ' — cold start'}.")
 
     if args.quantization is not None:
         quantization = args.quantization
@@ -454,11 +459,11 @@ def main() -> None:
 
     if args.wire_tier_manager and not args.no_epm:
         worker = llm.llm_engine.model_executor.driver_worker
-        record = worker.finalize_epm_run()
+        record = worker.finalize_epm_run(snapshot_path=epm_snapshot_path, history_path=epm_history_path)
         if record is not None:
             print(f"\nEPM: run finalizzato — {record}")
-            print(f"EPM: snapshot scritto in {epm.DEFAULT_SNAPSHOT_PATH}, storico in "
-                  f"{epm.DEFAULT_HISTORY_PATH} (ultimi {epm.MAX_HISTORY_RUNS} run).")
+            print(f"EPM: snapshot scritto in {epm_snapshot_path}, storico in "
+                  f"{epm_history_path} (ultimi {epm.MAX_HISTORY_RUNS} run).")
 
     sys.exit(0)
 
