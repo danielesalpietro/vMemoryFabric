@@ -479,12 +479,14 @@ class TestGCSGTierManagerWiring:
 
     @pytest.fixture(autouse=True)
     def _reset_pending_tier_manager(self):
-        """_pending_tier_manager è stato di classe (necessario perché
-        vLLM costruisce GCSGWorker da solo — vedi configure_tier_manager()) —
-        senza reset, un test che lo imposta trapelerebbe negli altri test
-        di questo file e di scheduler.gcsg in generale."""
+        """_pending_tier_manager/_pending_eat_snapshot sono stato di classe
+        (necessario perché vLLM costruisce GCSGWorker da solo — vedi
+        configure_tier_manager()/configure_eat_snapshot()) — senza reset, un
+        test che li imposta trapelerebbe negli altri test di questo file e
+        di scheduler.gcsg in generale."""
         yield
         GCSGWorker.configure_tier_manager(None)
+        GCSGWorker.configure_eat_snapshot(None)
 
     @staticmethod
     def _real_tier_manager(tmp_path):
@@ -492,10 +494,11 @@ class TestGCSGTierManagerWiring:
         return TierManager(eat=eat, nvme_path=str(tmp_path), gpu_device=0)
 
     @staticmethod
-    def _make_worker(tier_manager=None, shadow_pool_size=2):
+    def _make_worker(tier_manager=None, shadow_pool_size=2, eat_snapshot=None):
         worker = GCSGWorker.__new__(GCSGWorker)
         worker.guard = GCSGGuard(shadow_pool_size=shadow_pool_size, check_vram=False)
         worker._tier_manager = tier_manager
+        worker._eat_snapshot = eat_snapshot
         worker._n_experts_cached = None
         worker._shadow_pool = {}
         return worker
@@ -602,6 +605,116 @@ class TestGCSGTierManagerWiring:
         entry = mgr.eat.lookup(0, 0)
         assert entry.access_count == 1   # non azzerata/sovrascritta dal seed
         assert len(mgr.eat.get_tier(Tier.DDR4)) == 2 * 2   # le altre 3 combinazioni seeded
+
+    # ── EPM — configure_eat_snapshot() / _seed_eat_entries() prior (issue #27) ──
+
+    def test_configure_eat_snapshot_defaults_to_none(self):
+        """Nessuna leak da altri test — vedi _reset_pending_tier_manager."""
+        assert GCSGWorker._pending_eat_snapshot is None
+
+    def test_configure_eat_snapshot_sets_class_level_pending(self):
+        snap = {"version": 1, "entries": {}}
+        GCSGWorker.configure_eat_snapshot(snap)
+        assert GCSGWorker._pending_eat_snapshot is snap
+
+    def test_configure_eat_snapshot_none_clears_pending(self):
+        GCSGWorker.configure_eat_snapshot({"version": 1, "entries": {}})
+        GCSGWorker.configure_eat_snapshot(None)
+        assert GCSGWorker._pending_eat_snapshot is None
+
+    def test_seed_eat_entries_applies_prior_from_snapshot(self, tmp_path):
+        """Il prior di un run precedente, decayed, sostituisce access_count=0
+        per le entry appena seeded — il caso che l'issue #27 chiede di
+        verificare in isolamento: salva -> riavvia -> l'ordine di
+        _select_shadow_expert_ids() riflette il checkpoint."""
+        source = ExpertAccessTable(capacity=1000, n_slots=4)
+        source.insert(expert_id=0, shard_idx=0)
+        for _ in range(10):
+            source.access(expert_id=0, shard_idx=0)
+        snapshot = source.export_snapshot()
+
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr, eat_snapshot=snapshot)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=self._fake_layers(1, 2))),
+            ),
+        )
+
+        worker._seed_eat_entries()
+
+        assert mgr.eat.lookup(0, 0).access_count == 5   # 10 accessi * decay default 0.5
+        assert mgr.eat.lookup(1, 0).access_count == 0   # non presente nello snapshot
+
+    def test_seed_eat_entries_without_snapshot_unchanged(self, tmp_path):
+        """eat_snapshot=None (default) -> comportamento identico a prima di
+        EPM, access_count=0 ovunque."""
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr, eat_snapshot=None)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=self._fake_layers(1, 2))),
+            ),
+        )
+
+        worker._seed_eat_entries()
+
+        assert mgr.eat.lookup(0, 0).access_count == 0
+        assert mgr.eat.lookup(1, 0).access_count == 0
+
+    def test_seed_eat_entries_prior_selects_hotter_expert(self, tmp_path):
+        """Verifica end-to-end del criterio suggerito dall'issue: il prior
+        cambia l'esito di _select_shadow_expert_ids() rispetto al
+        round-robin di un cold start senza checkpoint."""
+        source = ExpertAccessTable(capacity=1000, n_slots=4)
+        source.insert(expert_id=3, shard_idx=0)
+        for _ in range(20):
+            source.access(expert_id=3, shard_idx=0)
+        snapshot = source.export_snapshot()
+
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=1, eat_snapshot=snapshot)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=self._fake_layers(1, 4))),
+            ),
+        )
+
+        worker._seed_eat_entries()
+
+        assert worker._select_shadow_expert_ids(n_experts=4) == [3]
+
+    def test_seed_eat_entries_malformed_snapshot_does_not_undo_seeding(self, tmp_path):
+        """Uno snapshot malformato viene assorbito dal try/except interno a
+        _seed_eat_entries() — il seeding strutturale, già completato quando
+        load_snapshot() viene chiamato, resta intatto."""
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr, eat_snapshot={"version": 99, "entries": {}})
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=self._fake_layers(1, 2))),
+            ),
+        )
+
+        worker._seed_eat_entries()   # non deve sollevare
+
+        assert len(mgr.eat.get_tier(Tier.DDR4)) == 2
+
+    # ── EPM — export_eat_snapshot() (issue #27) ──────────────────────────────
+
+    def test_export_eat_snapshot_without_tier_manager_returns_none(self):
+        worker = self._make_worker(tier_manager=None)
+        assert worker.export_eat_snapshot() is None
+
+    def test_export_eat_snapshot_returns_eat_snapshot(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        mgr.eat.insert(expert_id=0, shard_idx=0)
+        mgr.eat.access(expert_id=0, shard_idx=0)
+        worker = self._make_worker(tier_manager=mgr)
+
+        snap = worker.export_eat_snapshot()
+
+        assert snap["entries"]["0:0"]["access_count"] == 1
 
     # ── traffico EAT reale nell'hook .gate ──────────────────────────────────
 

@@ -188,6 +188,126 @@ class TestEAT:
         assert eat._slab.free_slots == 4
 
 
+# ── EPM — export_snapshot / load_snapshot (issue #27) ───────────────────────────
+
+class TestEATSnapshot:
+
+    @pytest.fixture
+    def eat(self):
+        return ExpertAccessTable(capacity=1000, n_slots=4)
+
+    def test_export_snapshot_shape(self, eat):
+        eat.insert(expert_id=0, shard_idx=0, tier=Tier.VRAM)
+        eat.access(expert_id=0, shard_idx=0)
+        eat.access(expert_id=0, shard_idx=0)
+
+        snap = eat.export_snapshot()
+
+        assert snap["version"] == 1
+        assert "exported_at" in snap
+        entry = snap["entries"]["0:0"]
+        assert entry["access_count"] == 2
+        assert entry["age_seconds"] >= 0.0
+        assert entry["tier"] == "VRAM"
+
+    def test_export_snapshot_empty_table(self, eat):
+        snap = eat.export_snapshot()
+        assert snap["entries"] == {}
+
+    def test_load_snapshot_applies_decayed_count(self, eat):
+        source = ExpertAccessTable(capacity=1000, n_slots=4)
+        source.insert(expert_id=0, shard_idx=0)
+        for _ in range(10):
+            source.access(expert_id=0, shard_idx=0)
+        snap = source.export_snapshot()
+
+        eat.insert(expert_id=0, shard_idx=0)  # seeding strutturale, come _seed_eat_entries()
+        updated = eat.load_snapshot(snap, decay=0.5)
+
+        entry = eat.lookup(expert_id=0, shard_idx=0)
+        assert updated == 1
+        assert entry.access_count == 5  # 10 accessi * decay 0.5
+
+    def test_load_snapshot_no_decay_requires_explicit_1_0(self, eat):
+        source = ExpertAccessTable(capacity=1000, n_slots=4)
+        source.insert(expert_id=0, shard_idx=0)
+        source.access(expert_id=0, shard_idx=0)
+        snap = source.export_snapshot()
+
+        eat.insert(expert_id=0, shard_idx=0)
+        eat.load_snapshot(snap, decay=1.0)
+
+        assert eat.lookup(expert_id=0, shard_idx=0).access_count == 1
+
+    def test_load_snapshot_ignores_keys_not_yet_seeded(self, eat):
+        source = ExpertAccessTable(capacity=1000, n_slots=4)
+        source.insert(expert_id=0, shard_idx=0)
+        snap = source.export_snapshot()
+
+        updated = eat.load_snapshot(snap)  # nessun insert() prima → nulla da aggiornare
+
+        assert updated == 0
+        assert eat.lookup(expert_id=0, shard_idx=0) is None
+
+    def test_load_snapshot_never_touches_tier(self, eat):
+        """La posizione fisica nel tier non sopravvive al riavvio (VRAM = stato CUDA morto)."""
+        source = ExpertAccessTable(capacity=1000, n_slots=4)
+        source.insert(expert_id=0, shard_idx=0, tier=Tier.VRAM)
+        snap = source.export_snapshot()
+
+        eat.insert(expert_id=0, shard_idx=0, tier=Tier.NVME)
+        eat.load_snapshot(snap)
+
+        assert eat.lookup(expert_id=0, shard_idx=0).tier == Tier.NVME
+
+    def test_load_snapshot_preserves_relative_recency_order(self, eat):
+        source = ExpertAccessTable(capacity=1000, n_slots=4)
+        source.insert(expert_id=0, shard_idx=0)
+        source.insert(expert_id=1, shard_idx=0)
+        source.access(expert_id=1, shard_idx=0)  # expert 1 più recente
+        snap = source.export_snapshot()
+
+        eat.insert(expert_id=0, shard_idx=0)
+        eat.insert(expert_id=1, shard_idx=0)
+        eat.load_snapshot(snap)
+
+        candidates = eat.eviction_candidates(Tier.NVME, n=2)  # meno recenti prima
+        assert [c.expert_id for c in candidates] == [0, 1]
+
+    def test_load_snapshot_rejects_decay_out_of_range(self, eat):
+        with pytest.raises(ValueError):
+            eat.load_snapshot({"version": 1, "entries": {}}, decay=1.5)
+
+    def test_load_snapshot_rejects_unsupported_version(self, eat):
+        with pytest.raises(ValueError):
+            eat.load_snapshot({"version": 99, "entries": {}})
+
+    def test_snapshot_roundtrip_is_json_serializable(self, eat):
+        import json
+
+        eat.insert(expert_id=0, shard_idx=0, tier=Tier.DDR4)
+        eat.access(expert_id=0, shard_idx=0)
+
+        snap = json.loads(json.dumps(eat.export_snapshot()))
+
+        eat2 = ExpertAccessTable(capacity=1000, n_slots=4)
+        eat2.insert(expert_id=0, shard_idx=0)
+        eat2.load_snapshot(snap)
+
+        assert eat2.lookup(expert_id=0, shard_idx=0).access_count == 0  # 1 * decay 0.5 → round(0.5) == 0
+
+    def test_shutdown_clears_table_export_must_happen_first(self, eat):
+        """Documenta l'ordering richiesto: shutdown() svuota la tabella incondizionatamente."""
+        eat.insert(expert_id=0, shard_idx=0)
+        eat.access(expert_id=0, shard_idx=0)
+
+        snap = eat.export_snapshot()  # deve avvenire prima di shutdown()
+        eat.shutdown()
+
+        assert len(eat) == 0
+        assert snap["entries"]["0:0"]["access_count"] == 1
+
+
 # ── Thread safety ──────────────────────────────────────────────────────────────
 
 class TestEATConcurrency:

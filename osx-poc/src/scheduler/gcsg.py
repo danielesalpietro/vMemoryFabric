@@ -789,6 +789,15 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
           hotness aggiornata, ma non è agganciata a nessun trigger
           automatico — richiede prima il profiling di
           promote()/evict() su hardware reale (Sprint 4 sotto-obiettivo 4).
+        - EPM (issue #27, 2026-08-13): opt-in ulteriore, indipendente da
+          tier_manager= — se configure_eat_snapshot()/eat_snapshot= porta
+          un dict da un EAT.export_snapshot() precedente,
+          _seed_eat_entries() lo applica come prior di hotness (access_count
+          decayed) dopo il seeding strutturale, invece di ripartire sempre
+          da access_count=0. export_eat_snapshot() è il simmetrico lato
+          salvataggio, per chi orchestra questo worker. Nessun ripristino
+          di tier fisico: vedi le docstring di ExpertAccessTable.export_
+          snapshot()/load_snapshot() per il perché.
 
     Stato di verifica, dichiarato esplicitamente per lo stesso motivo di
     ogni altra claim in questo file: la logica pura Python (selezione,
@@ -844,9 +853,36 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         """
         cls._pending_tier_manager = tier_manager
 
+    # EPM — Expert Position Memory (2026-08-13, issue #27). Stesso problema
+    # di raggiungibilità di _pending_tier_manager sopra (vLLM costruisce
+    # GCSGWorker da solo, nessun kwarg extra iniettabile), stessa soluzione:
+    # stato a livello di classe impostato PRIMA di LLM(...)/EngineArgs(...).
+    # Il valore è un dict prodotto da ExpertAccessTable.export_snapshot() —
+    # di un processo precedente, tipicamente ricaricato da un file JSON dal
+    # chiamante (l'I/O su disco resta responsabilità dello script, non di
+    # GCSGWorker: né il percorso del file né il "cosa conta come fine run"
+    # sono decisioni che questa classe può prendere onestamente — vedi le
+    # cautele aperte nell'issue). None (default) = comportamento identico a
+    # prima di EPM: _seed_eat_entries() seeda access_count=0 come sempre.
+    _pending_eat_snapshot: Optional[dict] = None
+
+    @classmethod
+    def configure_eat_snapshot(cls, snapshot: Optional[dict]) -> None:
+        """Imposta lo snapshot di hotness (EAT.export_snapshot() di un run
+        precedente) che il PROSSIMO GCSGWorker userà come prior in
+        _seed_eat_entries(). Va chiamato PRIMA di LLM(...)/EngineArgs(...) —
+        vedi il commento sopra _pending_eat_snapshot per perché serve.
+
+        No-op se tier_manager non è wired (nessun EAT su cui applicarlo):
+        _seed_eat_entries() stessa gira solo quando self._tier_manager non è
+        None, vedi load_model().
+        """
+        cls._pending_eat_snapshot = snapshot
+
     def __init__(
         self, *args, guard: Optional[GCSGGuard] = None,
-        tier_manager: Optional[TierManager] = None, **kwargs,
+        tier_manager: Optional[TierManager] = None,
+        eat_snapshot: Optional[dict] = None, **kwargs,
     ) -> None:
         from vllm.worker.worker import Worker   # import locale, vedi docstring classe
         self._base = Worker(*args, **kwargs)
@@ -863,6 +899,8 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         # questo worker da solo, un kwarg esplicito qui non è raggiungibile
         # dall'esterno quando LLM(worker_cls=...) è il chiamante reale.
         self._tier_manager = tier_manager if tier_manager is not None else type(self)._pending_tier_manager
+        # EPM (issue #27) — stesso pattern/fallback di _tier_manager sopra.
+        self._eat_snapshot = eat_snapshot if eat_snapshot is not None else type(self)._pending_eat_snapshot
         self._n_experts_cached: Optional[int] = None
         self._shadow_pool: Dict[int, object] = {}
         self._gate_hook_handles: List[object] = []
@@ -1139,6 +1177,15 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
 
         Idempotente (eat.lookup() prima di ogni insert()): sicuro da
         richiamare più volte nello stesso processo.
+
+        EPM (issue #27): se self._eat_snapshot è stato impostato (via
+        eat_snapshot= al costruttore o configure_eat_snapshot()), dopo il
+        seeding strutturale applica il prior di hotness del run precedente
+        con EAT.load_snapshot() — access_count/recency decayed, MAI tier
+        (vedi docstring EPM in eat.eat). Avvolto nel proprio try/except,
+        separato da quello del chiamante in load_model(): un prior
+        malformato non deve far sembrare fallito il seeding strutturale,
+        che a quel punto è già completato con successo.
         """
         model = self._base.model_runner.model
         layers = model.model.layers
@@ -1158,6 +1205,22 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
             "GCSG: EAT seeded — %d entry (%d expert x %d layer) a Tier.DDR4.",
             seeded, n_experts, n_layers,
         )
+
+        snapshot = getattr(self, "_eat_snapshot", None)
+        if snapshot is not None:
+            try:
+                updated = eat.load_snapshot(snapshot)
+                log.info(
+                    "GCSG: EPM — prior di hotness applicato a %d entry da "
+                    "snapshot (issue #27).", updated,
+                )
+            except Exception as e:
+                log.warning(
+                    "GCSG: EPM — load_snapshot fallito (%s), seeding "
+                    "strutturale già completato resta valido; "
+                    "_select_shadow_expert_ids() degrada ad access_count=0 "
+                    "per le entry non aggiornate dal prior.", e,
+                )
 
     def _select_shadow_expert_ids(self, n_experts: int) -> List[int]:
         """Seleziona quali expert_id popolano lo shadow pool.
@@ -1254,6 +1317,27 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         )
         self._shadow_pool.clear()
         self._load_shadow_pool()
+
+    def export_eat_snapshot(self) -> Optional[dict]:
+        """Espone EAT.export_snapshot() (issue #27) per chi orchestra la
+        lifecycle di questo worker — es. uno script che, a fine run, vuole
+        scriverlo su disco (json.dump) prima di spegnere il worker/EAT, per
+        poi ricaricarlo nel run successivo via configure_eat_snapshot()/
+        eat_snapshot=.
+
+        Deliberatamente NON scrive su disco da sé: né il percorso del file
+        né "cosa conta come fine run" (un processo di produzione lungo vs.
+        uno smoke test — vedi le cautele aperte nell'issue) sono decisioni
+        che GCSGWorker può prendere onestamente al posto del chiamante.
+
+        Returns:
+            dict da EAT.export_snapshot(), o None se non wired a un
+            TierManager (nessun EAT la cui hotness abbia senso esportare).
+        """
+        tier_manager = getattr(self, "_tier_manager", None)
+        if tier_manager is None:
+            return None
+        return tier_manager.eat.export_snapshot()
 
     def _should_pin_transfers(self) -> bool:
         """True su Linux reale (dove il soak test 2026-08-12 ha verificato

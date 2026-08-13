@@ -175,10 +175,92 @@ class ExpertAccessTable:
         self._slab.initialize()
 
     def shutdown(self) -> None:
-        """Shutdown graceful — rilascia Slab Allocator."""
+        """Shutdown graceful — rilascia Slab Allocator.
+
+        NOTE: cancella incondizionatamente la tabella. Chi vuole persistere la
+        hotness tra riavvii (EPM, issue #27) deve chiamare export_snapshot()
+        *prima* di shutdown() — dopo, non c'è più nulla da esportare.
+        """
         self._slab.shutdown()
         with self._lock:
             self._table.clear()
+
+    # ── EPM — Expert Position Memory (issue #27) ─────────────────────────────────
+    #
+    # Checkpoint leggero della hotness, non una policy di scheduling: salva
+    # (access_count, recency) a fine run e li ricarica come prior nel run
+    # successivo. La posizione fisica nel tier NON sopravvive al riavvio (i
+    # tensori VRAM sono stato CUDA del processo morto) — `tier` viaggia nello
+    # snapshot solo a scopo informativo/debug, load_snapshot() non lo tocca
+    # mai. Il chiamante deve trattare il prior come hint di priorità di
+    # prefetch (consumato da GCSGWorker._seed_eat_entries(), vedi
+    # scheduler.gcsg), non come ripristino di stato fisico.
+
+    def export_snapshot(self) -> dict:
+        """Serializza la hotness corrente in un dict JSON-safe.
+
+        `last_access_ts` è su clock monotonic — non comparabile tra processi
+        diversi — quindi viene esportato come `age_seconds` (delta rispetto
+        a "ora") anziché come valore assoluto: il prossimo processo può così
+        ricostruire l'ordine di recency senza assumere continuità del clock.
+
+        Returns:
+            dict con "version", "exported_at" (wall clock, solo informativo)
+            e "entries": {"<expert_id>:<shard_idx>": {access_count,
+            age_seconds, tier}}.
+        """
+        now = time.monotonic()
+        with self._lock:
+            entries = {
+                f"{expert_id}:{shard_idx}": {
+                    "access_count": entry.access_count,
+                    "age_seconds": max(0.0, now - entry.last_access_ts),
+                    "tier": entry.tier.name,
+                }
+                for (expert_id, shard_idx), entry in self._table.items()
+            }
+        return {"version": 1, "exported_at": time.time(), "entries": entries}
+
+    def load_snapshot(self, snapshot: dict, decay: float = 0.5) -> int:
+        """Applica un checkpoint di hotness alle entry già presenti in tabella.
+
+        Non crea entry nuove — richiede che il seeding strutturale (insert())
+        sia già avvenuto, tipicamente in un hook come `_seed_eat_entries()` —
+        e non tocca mai `tier`: vedi nota EPM sopra sul perché la posizione
+        fisica non è ripristinabile. Le chiavi dello snapshot non ancora
+        presenti in tabella vengono ignorate silenziosamente.
+
+        Args:
+            snapshot: dict prodotto da export_snapshot() (di un run precedente).
+            decay:    Fattore in [0, 1] applicato ad access_count, per evitare
+                       che un checkpoint vecchio pesi quanto ore di traffico
+                       fresco. Va scelto esplicitamente — 1.0 ("nessun
+                       decadimento") non è il default, va richiesto a mano.
+
+        Returns:
+            Numero di entry effettivamente aggiornate.
+
+        Raises:
+            ValueError: decay fuori da [0, 1] o versione snapshot non supportata.
+        """
+        if not (0.0 <= decay <= 1.0):
+            raise ValueError(f"decay {decay} fuori range [0, 1]")
+        if snapshot.get("version") != 1:
+            raise ValueError(f"snapshot version non supportata: {snapshot.get('version')!r}")
+
+        now = time.monotonic()
+        updated = 0
+        with self._lock:
+            for key, data in snapshot.get("entries", {}).items():
+                expert_id_str, shard_idx_str = key.split(":", 1)
+                entry = self._table.get((int(expert_id_str), int(shard_idx_str)))
+                if entry is None:
+                    continue
+                entry.access_count = round(data["access_count"] * decay)
+                entry.last_access_ts = now - data["age_seconds"]
+                entry.version += 1
+                updated += 1
+        return updated
 
     # ── stats / iteration ──────────────────────────────────────────────────────
 
