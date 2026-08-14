@@ -49,8 +49,13 @@ import numpy as np
 from eat import ExpertAccessTable, Tier
 from tier import TierManager
 
-N_SHARDS = 20
+N_SHARDS = 100
 BENCH_SHARD_SIZE_BYTES = 4 * 1024 * 1024  # 4 MB — vedi nota sopra
+
+# Shard dedicato al warm-up CUDA in bench_ddr4_to_vram() (vedi GitHub issue #3):
+# fuori dal range [0, N_SHARDS) misurato, cosi' non si sovrappone a nessuno
+# degli shard temporizzati.
+_WARMUP_SHARD_IDX = N_SHARDS
 
 
 def _percentiles(latencies_us: list) -> dict:
@@ -65,9 +70,9 @@ def _percentiles(latencies_us: list) -> dict:
     }
 
 
-def _seed_nvme_shards(nvme_path: Path, eat: ExpertAccessTable) -> None:
+def _seed_nvme_shards(nvme_path: Path, eat: ExpertAccessTable, shard_indices) -> None:
     payload = np.full(BENCH_SHARD_SIZE_BYTES, 0xAB, dtype=np.uint8).tobytes()
-    for shard_idx in range(N_SHARDS):
+    for shard_idx in shard_indices:
         eat.insert(expert_id=0, shard_idx=shard_idx, tier=Tier.NVME)
         path = nvme_path / "0" / f"{shard_idx}.bin"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,7 +86,7 @@ async def bench_nvme_to_ddr4() -> dict:
         nvme_path = Path(tmp)
         eat = ExpertAccessTable(capacity=N_SHARDS * 2, n_slots=N_SHARDS)
         eat.initialize()
-        _seed_nvme_shards(nvme_path, eat)
+        _seed_nvme_shards(nvme_path, eat, range(N_SHARDS))
         mgr = TierManager(eat=eat, nvme_path=str(nvme_path), gpu_device=0)
 
         latencies_us = []
@@ -107,10 +112,21 @@ async def bench_ddr4_to_vram() -> dict:
 
     with tempfile.TemporaryDirectory() as tmp:
         nvme_path = Path(tmp)
-        eat = ExpertAccessTable(capacity=N_SHARDS * 2, n_slots=N_SHARDS)
+        # +1 slot/capacity per lo shard di warm-up dedicato, oltre a quelli misurati.
+        eat = ExpertAccessTable(capacity=(N_SHARDS + 1) * 2, n_slots=N_SHARDS + 1)
         eat.initialize()
-        _seed_nvme_shards(nvme_path, eat)
+        _seed_nvme_shards(nvme_path, eat, [*range(N_SHARDS), _WARMUP_SHARD_IDX])
         mgr = TierManager(eat=eat, nvme_path=str(nvme_path), gpu_device=0)
+
+        # Warm-up: paga il costo one-off di inizializzazione del contesto/
+        # allocator CUDA (torch.from_numpy(...).to(device)) su uno shard MAI
+        # toccato dal loop cronometrato sotto — issue #3. Senza questo, la
+        # prima promote() del loop misurato assorbe quel costo e con pochi
+        # campioni p95/p99 collassano sullo stesso outlier. Shard dedicato
+        # (non shard 0 riciclato): promote() non supporta una transizione
+        # VRAM→VRAM sullo stesso shard.
+        await mgr.promote(expert_id=0, shard_idx=_WARMUP_SHARD_IDX, target_tier=Tier.DDR4)
+        await mgr.promote(expert_id=0, shard_idx=_WARMUP_SHARD_IDX, target_tier=Tier.VRAM)
 
         for shard_idx in range(N_SHARDS):
             await mgr.promote(expert_id=0, shard_idx=shard_idx, target_tier=Tier.DDR4)
