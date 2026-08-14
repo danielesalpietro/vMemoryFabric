@@ -34,6 +34,16 @@ class ExpertAccessTable:
         self._table: dict[_Key, EATEntry] = {}
         self._lock   = threading.RLock()
 
+    @property
+    def slab(self) -> SlabAllocator:
+        """SlabAllocator la cui lifecycle è già gestita da initialize()/shutdown().
+
+        Esposto per il Tier Manager (M2): alloc/free dei DDR4 slot restano
+        di sua competenza, ma devono operare sulla stessa istanza il cui
+        lifecycle EAT già guida — non su una seconda istanza scollegata.
+        """
+        return self._slab
+
     # ── CRUD ───────────────────────────────────────────────────────────────────
 
     def insert(self, expert_id: ExpertID, shard_idx: ShardID,

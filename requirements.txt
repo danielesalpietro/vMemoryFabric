@@ -2,19 +2,19 @@
 # Docker on Windows, single RTX 3090, no PMEM, no io_uring
 
 # ── Core ML stack ─────────────────────────────────────────────────────────────
-torch==2.3.0+cu121
-torchvision==0.18.0+cu121
---extra-index-url https://download.pytorch.org/whl/cu121
+# torch/torchvision moved to requirements-vllm.txt (Sprint 3): vLLM pins them
+# tightly enough that a separate exact pin here causes a pip resolver conflict.
+# requirements-vllm.txt is installed as an overlay right after this file.
 
 # ── vLLM ───────────────────────────────────────────────────────────────────────
-# Deferred: GCSG hooks into vLLM internals are still NotImplementedError stubs
-# (Sprint 3). Pinning now is premature — vllm==0.4.3 requires
-# vllm-flash-attn==2.5.8.post2, no longer published on PyPI. Add back once the
-# hook code exists and we can pick a version that actually satisfies it.
+# See requirements-vllm.txt — installed as overlay (torch+transformers+vllm as
+# one coherent group). Verified 2026-08-08: vllm==0.6.6.post1 / torch==2.5.1+cu124.
 
 # ── Transformers (PT-PEP BERT-small) ──────────────────────────────────────────
-transformers==4.41.2
-tokenizers==0.19.1
+# Ranged, not pinned: exact version supplied by requirements-vllm.txt's overlay
+# install (transformers==4.57.6 there) to stay compatible with vLLM's pin.
+transformers>=4.41,<5
+tokenizers>=0.19,<1
 datasets==2.19.2
 accelerate==0.30.1
 
@@ -23,7 +23,13 @@ onnx==1.16.1
 onnxruntime==1.18.0
 
 # ── GPU monitoring ────────────────────────────────────────────────────────────
-pynvml==11.5.0
+# pynvml (the standalone PyPI package) is deprecated in favor of nvidia-ml-py,
+# which ships the same importable `pynvml` module with NVIDIA's maintained
+# bindings. Installing both is actively dangerous (the deprecated one takes
+# precedence and can error) — nvidia-ml-py was already showing up as a
+# transitive dependency of the vLLM overlay, which is what surfaced the
+# deprecation warning in the first place.
+nvidia-ml-py==13.610.43
 gpustat==1.1.1
 
 # ── Async I/O (replaces io_uring — not available on WSL2/Windows Docker) ──────

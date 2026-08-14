@@ -1,0 +1,1602 @@
+[
+  {
+    "text": "Write a code to check whether two strings are anagrams or not.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a code to delete all the vowels from a given string.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a code to convert a given list of strings to uppercase.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a code to find the maximum in a given list of integers.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a code to generate the multiplication table of a given integer.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a code to merge two given lists of equal size.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a code to compute the mean of an input list of numbers.",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a program to convert the input sentence to Pig Latin.",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a program to write an overwriting if-else logic for the following switch statement",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a function that sorts the given list of numbers in descending order",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a program to create a list of all the numbers from 1 to 10 which are divisible by 3",
+    "domain": "coding"
+  },
+  {
+    "text": "rewrite the following for-loop as a while-loop",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a program to compute the checksum of a given data packet",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a program to parse a given string and return a dictionary with all the words and their frequency",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a program to classify whether the given number is even or odd",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a program to generate the sum of all the elements in a given list",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a program to find all the factors of a given number",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a program to check if a given string is a palindrome",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a program to generate all possible pairs of a given list of numbers",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a program that extracts a given pattern from a given string",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a Python program to split special characters with a given string.",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a regex to match the characters \"CDE\" in any order.",
+    "domain": "coding"
+  },
+  {
+    "text": "Convert the following string to a list of strings.",
+    "domain": "coding"
+  },
+  {
+    "text": "Generate a 5x5 array with all its elements equal to 1.",
+    "domain": "coding"
+  },
+  {
+    "text": "Given a list of numbers, find the index of the greatest value.",
+    "domain": "coding"
+  },
+  {
+    "text": "Classify the following sentence as positive or negative sentiment.",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a web page with a centered title and paragraph in HTML.",
+    "domain": "coding"
+  },
+  {
+    "text": "Create a JavaScript function that finds the shortest word in a string.",
+    "domain": "coding"
+  },
+  {
+    "text": "Find the total number of elements in the following array.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a SQL query to find the names of customers who have ordered products.",
+    "domain": "coding"
+  },
+  {
+    "text": "Classify the following sentence as a question or a statement.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a Python program that tests if a given number is divisible by 3.",
+    "domain": "coding"
+  },
+  {
+    "text": "Edit the following code so it outputs the odd numbers between 1 and 50.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a function to compare two strings and return True if they are anagrams.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a function that takes a list of integers as inputs and returns the sum of the square of all the even numbers.",
+    "domain": "coding"
+  },
+  {
+    "text": "Using the input string, write a code to replace the \"!\" with a \"?\".",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a code to take two string inputs and generate the output string containing alternate characters from each string.",
+    "domain": "coding"
+  },
+  {
+    "text": "Given a list of strings, write a code to find the longest string.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a SQL query to get the total amount from orders table where status is \"complete\".",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a function to get the mean of the given list of numbers.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a Django Model API to store status and published date for a blog post.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a code to compare two lists and find the common elements.",
+    "domain": "coding"
+  },
+  {
+    "text": "Write an algorithm to check if an array contains a given value",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a Java program to print out the first n prime numbers",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a SQL query to find the names of all employees working at a given department",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a function to determine if two strings are anagrams of each other",
+    "domain": "coding"
+  },
+  {
+    "text": "Write a JavaScript code to calculate the factorial of a number",
+    "domain": "coding"
+  },
+  {
+    "text": "Write C++ code to find the maximum subarray sum",
+    "domain": "coding"
+  },
+  {
+    "text": "Write an algorithm to generate the Fibonacci series up to the nth term",
+    "domain": "coding"
+  },
+  {
+    "text": "Connect to a MySQL database and select all rows from Customers where Phone is greater than 1000.",
+    "domain": "coding"
+  },
+  {
+    "text": "Shelby had $20 to take to the book fair. She bought one book for $x and another for $4. She decided to buy as many $4 posters as she could with the money she had left. How many posters can she buy?\nIf we know the answer to the above question is 2, what is the value of unknown variable x?",
+    "domain": "math"
+  },
+  {
+    "text": "A teacher purchased some school supplies that cost $13 and $24. She had the remaining $6 budget from last year and for this year, she was given a $50 budget. How much money remains in her budget after purchasing the school supplies?",
+    "domain": "math"
+  },
+  {
+    "text": "Jake earns thrice what Jacob does. If Jacob earns $x per hour, Jake earns 720 in 5 days working 8 hours a day. What is the value of unknown variable x?",
+    "domain": "math"
+  },
+  {
+    "text": "Berengere and her American exchange student, Emily, are at a bakery in Paris that accepts both euros and American dollars. They want to purchase a cake, but neither of them has enough money. The cost of the cake is 6 euros, and Emily has a 5-dollar bill. If the exchange rate is 1 euro to 1.25 USD, how many euros does Berengere need to contribute towards the cost of the cake?",
+    "domain": "math"
+  },
+  {
+    "text": "If there are 600 boys at a tree planting event and the difference between the number of boys and girls is 400, with the number of girls being greater than the number of boys, what is 60% of the total number of boys and girls at the event?",
+    "domain": "math"
+  },
+  {
+    "text": "Kathryn moved to a new city for the new job she had landed two weeks ago. Her rent was $1200, 1/2 of what she spent on food and travel expenses in a month. Luckily, she found a new friend Shelby, who moved in with her to share the rent. If her salary was $5000 per month, how much money remained after her expenses?",
+    "domain": "math"
+  },
+  {
+    "text": "In the given diagram, the trapezoid PQRS has an area of 12. The length of RS is twice the length of PQ. What is the area of triangle PQS?",
+    "domain": "math"
+  },
+  {
+    "text": "The difference between two numbers is 9, and the sum of the squares of each number is X. The value of the product of the two numbers is 36. What is the value of unknown variable X?",
+    "domain": "math"
+  },
+  {
+    "text": "A spiral notebook costs $15, and a personal planner costs $10. How much would it cost in total to buy 4 spiral notebooks and 8 personal planners at a 20% discount?",
+    "domain": "math"
+  },
+  {
+    "text": "A 1$\\%$ late charge was added to Jenna's bill on the $30^{\\text{th}}$ day past its due date. The resulting total was then increased by 1$\\%$ because she did not pay the bill in the next 30 days either. Her original bill was X$. Exactly how much is the bill now?\nIf we know the answer to the above question is 408.04, what is the value of unknown variable X?",
+    "domain": "math"
+  },
+  {
+    "text": "Amara had 100 pieces of clothing but started donating her clothes to others. She donated 5 to one orphanage home and triple that to another orphanage home. If she decides to throw away 15 of her old clothes, how many pieces of clothing does she have remaining?",
+    "domain": "math"
+  },
+  {
+    "text": "Scott wants to prepare and freeze a large portion of ratatouille. He purchases 5 pounds of eggplants and 4 pounds of zucchini at a rate of $2.00 per pound from the farmers' market. Additionally, he needs 4 pounds of tomatoes that cost $3.50 per pound, 3 pounds of onions priced at $1.00 per pound, and a pound of basil sold for $2.50 per half pound. If this quantity yields 4 quarts, what is the cost per quart?",
+    "domain": "math"
+  },
+  {
+    "text": "The circumference of a particular circle is 18 cm. In square centimeters, what is the area of the circle? Express your answer as a common fraction in terms of $\\pi$.",
+    "domain": "math"
+  },
+  {
+    "text": "The fifth term of a geometric sequence of positive numbers is $11$ and the eleventh term is $5$. What is the eighth term of the sequence? Express your answer in simplest radical form.  [asy]\nsize(150); defaultpen(linewidth(2));\nreal loc = 0;\nfor(int i = 0; i < 11; ++i) {\n\nif(i == 4)\n\nlabel(\"$\\mathbf{\\mathit{11}}$\",(loc,0),(0.8,1.2),fontsize(14));\n\nif(i == 10)\n\nlabel(\"$\\mathbf{\\mathit{5}}$\",(loc,0),(1.2,1.2),fontsize(14));\n\nfill(box((loc,0),(loc+1,0.15)));\n\nloc += 4/3;\n}\n[/asy]",
+    "domain": "math"
+  },
+  {
+    "text": "The length of a rectangle is three times its width. The perimeter is X cm. What is the number of square centimeters in the area of the rectangle?\nIf we know the answer to the above question is 1200, what is the value of unknown variable X?",
+    "domain": "math"
+  },
+  {
+    "text": "There are 20 students in the class. Half of them play basketball. Two-fifths play volleyball and one-tenth play both basketball and volleyball.  How many students in this class do not play either game?",
+    "domain": "math"
+  },
+  {
+    "text": "Nathan is buying decorations for his wedding reception. The reception hall will have x tables. Each table needs a linen tablecloth ($25 to rent), 4 place settings ($10 each to rent), and a centerpiece. Each centerpiece will have 10 roses ($5 each) and 15 lilies ($4 each). How much will the decorations cost?\nIf we know the answer to the above question is 3500, what is the value of unknown variable x?",
+    "domain": "math"
+  },
+  {
+    "text": "What is the largest integer less than $\\log_2 \\frac{2}{1} + \\log_2 \\frac{3}{2} + \\cdots + \\log_2 \\frac{2009}{2008} + \\log_2 \\frac{2010}{2009}$?",
+    "domain": "math"
+  },
+  {
+    "text": "What is the greatest common divisor of $39$ and $91$?",
+    "domain": "math"
+  },
+  {
+    "text": "Jack goes hunting 6 times a month.  The hunting season lasts for 1 quarter of the year.  He catches 2 deers each time he goes hunting and they weigh x pounds each.  He keeps half the weight of deer a year.  How much deer does he keep in pounds?\nIf we know the answer to the above question is 10800, what is the value of unknown variable x?",
+    "domain": "math"
+  },
+  {
+    "text": "In four years, Annika will be x times as old as Hans. If Hans is now 8 years old, how old is Annika now?\nIf we know the answer to the above question is 32, what is the value of unknown variable x?",
+    "domain": "math"
+  },
+  {
+    "text": "How many functions $f : \\mathbb{R} \\to \\mathbb{R}$ satisfy the inequality $f(xy) + f(xz) - f(x) f(yz) \\ge 1$ for all real numbers $x,$ $y,$ and $z$?",
+    "domain": "math"
+  },
+  {
+    "text": "What is the number of digits in the smallest repeating block in the decimal representation of $\\frac{5}{7}$?",
+    "domain": "math"
+  },
+  {
+    "text": "Solve for $n$: $0.03n + 0.08(20 + n) = 12.6$.",
+    "domain": "math"
+  },
+  {
+    "text": "Chastity made 12 angel food cakes to give to friends.  She placed the cakes in boxes, and then walked them out to her car.  But she had forgotten her keys.  So, she placed the boxes of cakes in one stack on the hood of her car, and then she ran back into the house to get her keys.  But before she returned, a black crow came, landed on the stack of cakes, and knocked over half of the stack.  When Chastity returned, she picked up x% of the fallen cakes, which were not damaged, but the rest of the cakes were destroyed.  How many cakes were destroyed?\nIf we know the answer to the above question is 3, what is the value of unknown variable x?",
+    "domain": "math"
+  },
+  {
+    "text": "During her birthday, her parents have decided to give Laura and her 2 younger brothers new cellphones. However, they are confused between the innumerable service providers. Assuming no child wants a provider that another sibling has, and that there are 20 service providers,  in how many ways can the parents grant the children their phones?",
+    "domain": "math"
+  },
+  {
+    "text": "At Kaleb's Restaurant, a group with six adults and two children came in to eat. If each adult meal cost six dollars and each children's meal was $4, and every person ordered a soda for $2  how much was the bill?",
+    "domain": "math"
+  },
+  {
+    "text": "Mike decides to develop a plot of land.  He bought 200 acres for $70 per acre.  After development, he sold half of the acreage for $200 per acre.  How much profit did he make?",
+    "domain": "math"
+  },
+  {
+    "text": "Compute $\\dbinom{16}{5}$.",
+    "domain": "math"
+  },
+  {
+    "text": "Four horizontal lines and four vertical lines are drawn in a plane. In how many ways can four lines be chosen such that a rectangular region is enclosed?",
+    "domain": "math"
+  },
+  {
+    "text": "To get the printer to work, Jerry needs to add a black-and-white cartridge and three color cartridges. If each color cartridge costs $32 and each black-and-white cartridge costs $27, how much does he pay total?",
+    "domain": "math"
+  },
+  {
+    "text": "If Jessica just obtained her driving permit and needs to complete 50 hours of driving with a parent to obtain her driver's license, and it takes her 20 minutes to drive to school, how many school days will it take for Jessica to reach the 50-hour driving requirement if she drives to and from school every day?",
+    "domain": "math"
+  },
+  {
+    "text": "Determine the value of x in the equation $8^{4x-6} = \\left(\\frac{1}{2}\\right)^{x+5}$.",
+    "domain": "math"
+  },
+  {
+    "text": "If Katy read 8 books in June, twice as many in July, and three fewer in August than she did in July, how many books did she read in total during the summer?",
+    "domain": "math"
+  },
+  {
+    "text": "What is the total amount of money that Monika spent during her day, considering that she spent $250 at the mall, watched 3 movies at $24 each, and purchased 20 bags of beans at $1.25 per bag from the farmer's market?",
+    "domain": "math"
+  },
+  {
+    "text": "While working together to complete a 500-piece puzzle, Trevor and Joe started by assembling the border, which consisted of 75 pieces. Trevor managed to place 105 puzzle pieces, while Joe was able to place three times as many pieces as Trevor. How many puzzle pieces are still missing?",
+    "domain": "math"
+  },
+  {
+    "text": "There are 6 people going on an airplane trip.  They each have 5 bags of luggage.  Each of their bags weighs the maximum weight allowed, 50 pounds.  The airplane can hold a total luggage weight of 6000 pounds.  How many more bags at maximum weight can the plane hold?",
+    "domain": "math"
+  },
+  {
+    "text": "Meghan had money in the following denomination: x $100 bills, 5 $50 bills, and 10 $10 bills. He had 550 money altogether. What is the value of unknown variable x?",
+    "domain": "math"
+  },
+  {
+    "text": "It takes 3 ounces of wax to detail Kellan’s car and 4 ounces to detail his SUV. He bought an 11-ounce bottle of vehicle wax, but spilled 2 ounces before using it. How many ounces does he have left after waxing his car and SUV?",
+    "domain": "math"
+  },
+  {
+    "text": "The ratio of coins that Elsa has to that which Amalie has is 10:45. If the total number of coins they have is 440, and Amalie spends 3/4 of what she has on toys, how many will she remain with?",
+    "domain": "math"
+  },
+  {
+    "text": "We have a rectangle of dimensions $x - X by $2x + 5$ such that its area is $8x - 6$. The value of $x$ is 4. What is the value of unknown variable X?",
+    "domain": "math"
+  },
+  {
+    "text": "How many of the 200 smallest positive integers are congruent to 1 (mod 9)?",
+    "domain": "math"
+  },
+  {
+    "text": "If your family collected 144 cans and 20 kilograms of newspapers, and for every 12 cans you recycle you receive $0.50, and for every 5 kilograms of newspapers you receive $1.50, how much money would you receive in total?",
+    "domain": "math"
+  },
+  {
+    "text": "For a list of five positive integers, none greater than 100, the mean is 1.5 times the mode. If 31, X, 98, $x$ and $x$ are the five integers, what is the value of $x$?\nIf we know the answer to the above question is 34, what is the value of unknown variable X?",
+    "domain": "math"
+  },
+  {
+    "text": "Janice bought x juices for $10 in total and two sandwiches for $6 in total. How much would she need to pay, She would only buy 5 if she would only buy one sandwich and one juice. What is the value of unknown variable x?",
+    "domain": "math"
+  },
+  {
+    "text": "Vivian is responsible for making sure her students get 2 15-minute recess breaks a day, a 30-minute lunch and another 20-minute recess break.  How much time do her students spend outside of class?",
+    "domain": "math"
+  },
+  {
+    "text": "A x m long and 8 m wide rectangular floor is to be covered with a square carpet with 4 m sides. How many square meters of the floor are uncovered?\nIf we know the answer to the above question is 64, what is the value of unknown variable x?",
+    "domain": "math"
+  },
+  {
+    "text": "In a bag, there are ten balls, some of which are red and the remaining are yellow. When two balls are randomly drawn simultaneously, the probability of both balls being red is 1/15. How many red balls are in the bag?",
+    "domain": "math"
+  },
+  {
+    "text": "The arithmetic mean of four numbers is 15. Two of the numbers are X and 18 and the other two are equal. The product of the two equal numbers is 256. What is the value of unknown variable X?",
+    "domain": "math"
+  },
+  {
+    "text": "James makes potatoes for a group.  Each person eats 1.5 pounds of potatoes.  He makes potatoes for 40 people.  A 20-pound bag of potatoes costs x.  How much does it cost?\nIf we know the answer to the above question is 15, what is the value of unknown variable x?",
+    "domain": "math"
+  },
+  {
+    "text": "Does the National Institutes of Health Stroke Scale favor left hemisphere strokes?",
+    "domain": "medical"
+  },
+  {
+    "text": "Can a Novel Surgical Approach to the Temporomandibular Joint Improve Access and Reduce Complications?",
+    "domain": "medical"
+  },
+  {
+    "text": "Young-Burgess classification of pelvic ring fractures: does it predict mortality, transfusion requirements, and non-orthopaedic injuries?",
+    "domain": "medical"
+  },
+  {
+    "text": "Is vitamin D deficiency a feature of pediatric celiac disease?",
+    "domain": "medical"
+  },
+  {
+    "text": "Is unsafe sexual behaviour increasing among HIV-infected individuals?",
+    "domain": "medical"
+  },
+  {
+    "text": "Cholestasis associated with small bowel atresia: do we always need to investigate?",
+    "domain": "medical"
+  },
+  {
+    "text": "Are financial incentives cost-effective to support smoking cessation during pregnancy?",
+    "domain": "medical"
+  },
+  {
+    "text": "Can medical students contribute to quality assurance programmes in day surgery?",
+    "domain": "medical"
+  },
+  {
+    "text": "Measurement of head and neck paragangliomas: is volumetric analysis worth the effort?",
+    "domain": "medical"
+  },
+  {
+    "text": "Three-dimensional ultrasound-validated large-core needle biopsy: is it a reliable method for the histological assessment of breast lesions?",
+    "domain": "medical"
+  },
+  {
+    "text": "Can bone thickness and inter-radicular space affect miniscrew placement in posterior mandibular sites?",
+    "domain": "medical"
+  },
+  {
+    "text": "Do general practice selection scores predict success at MRCGP?",
+    "domain": "medical"
+  },
+  {
+    "text": "The Deformity Angular Ratio: Does It Correlate With High-Risk Cases for Potential Spinal Cord Monitoring Alerts in Pediatric 3-Column Thoracic Spinal Deformity Corrective Surgery?",
+    "domain": "medical"
+  },
+  {
+    "text": "Does age moderate the effect of personality disorder on coping style in psychiatric inpatients?",
+    "domain": "medical"
+  },
+  {
+    "text": "Autoxidation products of both carbohydrates and lipids are increased in uremic plasma: is there oxidative stress in uremia?",
+    "domain": "medical"
+  },
+  {
+    "text": "Can 'high-risk' human papillomaviruses (HPVs) be detected in human breast milk?",
+    "domain": "medical"
+  },
+  {
+    "text": "Quaternary cytoreductive surgery in ovarian cancer: does surgical effort still matter?",
+    "domain": "medical"
+  },
+  {
+    "text": "Chemotherapy and survival in advanced non-small cell lung carcinoma: is pneumologists' skepticism justified?",
+    "domain": "medical"
+  },
+  {
+    "text": "Does topical ropivacaine reduce the post-tonsillectomy morbidity in pediatric patients?",
+    "domain": "medical"
+  },
+  {
+    "text": "Is pain a clinically relevant problem in general adult psychiatry?",
+    "domain": "medical"
+  },
+  {
+    "text": "Does concomitant anterior/apical repair during midurethral sling improve the overactive bladder component of mixed incontinence?",
+    "domain": "medical"
+  },
+  {
+    "text": "Does the use of atypical antipsychotics as adjunctive therapy in depression result in cost savings?",
+    "domain": "medical"
+  },
+  {
+    "text": "Can patients be anticoagulated after intracerebral hemorrhage?",
+    "domain": "medical"
+  },
+  {
+    "text": "Diagnostic and therapeutic ureteroscopy: is dilatation of ureteral meatus always necessary?",
+    "domain": "medical"
+  },
+  {
+    "text": "Does managed care enable more low income persons to identify a usual source of care?",
+    "domain": "medical"
+  },
+  {
+    "text": "Knee extensor strength, dynamic stability, and functional ambulation: are they related in Parkinson's disease?",
+    "domain": "medical"
+  },
+  {
+    "text": "Is distance to provider a barrier to care for medicaid patients with breast, colorectal, or lung cancer?",
+    "domain": "medical"
+  },
+  {
+    "text": "Can folic acid protect against congenital heart defects in Down syndrome?",
+    "domain": "medical"
+  },
+  {
+    "text": "Are there mental health differences between francophone and non-francophone populations in manitoba?",
+    "domain": "medical"
+  },
+  {
+    "text": "Does type 1 diabetes mellitus affect Achilles tendon response to a 10 km run?",
+    "domain": "medical"
+  },
+  {
+    "text": "Fragility of the esophageal mucosa: a pathognomonic endoscopic sign of primary eosinophilic esophagitis?",
+    "domain": "medical"
+  },
+  {
+    "text": "Does cup-cage reconstruction with oversized cups provide initial stability in THA for osteoporotic acetabular fractures?",
+    "domain": "medical"
+  },
+  {
+    "text": "Pulmonary valve replacement in adults late after repair of tetralogy of fallot: are we operating too late?",
+    "domain": "medical"
+  },
+  {
+    "text": "Xanthogranulomatous cholecystitis: a premalignant condition?",
+    "domain": "medical"
+  },
+  {
+    "text": "Does TDP-43 type confer a distinct pattern of atrophy in frontotemporal lobar degeneration?",
+    "domain": "medical"
+  },
+  {
+    "text": "Is oncoplastic surgery a contraindication for accelerated partial breast radiation using the interstitial multicatheter brachytherapy method?",
+    "domain": "medical"
+  },
+  {
+    "text": "Diagnostic characteristics of child bipolar I disorder: does the \"Treatment of Early Age Mania (team)\" sample generalize?",
+    "domain": "medical"
+  },
+  {
+    "text": "Estimation of basal metabolic rate in Chinese: are the current prediction equations applicable?",
+    "domain": "medical"
+  },
+  {
+    "text": "Does rugby headgear prevent concussion?",
+    "domain": "medical"
+  },
+  {
+    "text": "Spinal subdural hematoma: a sequela of a ruptured intracranial aneurysm?",
+    "domain": "medical"
+  },
+  {
+    "text": "Can shape analysis differentiate free-floating internal carotid artery thrombus from atherosclerotic plaque in patients evaluated with CTA for stroke or transient ischemic attack?",
+    "domain": "medical"
+  },
+  {
+    "text": "Dementia and aphasia in motor neuron disease: an underrecognised association?",
+    "domain": "medical"
+  },
+  {
+    "text": "Does solid culture for tuberculosis influence clinical decision making in India?",
+    "domain": "medical"
+  },
+  {
+    "text": "Diffusion-weighted echo-planar MR imaging of primary parotid gland tumors: is a prediction of different histologic subtypes possible?",
+    "domain": "medical"
+  },
+  {
+    "text": "Is there a role for endothelin-1 in the hemodynamic changes during hemodialysis?",
+    "domain": "medical"
+  },
+  {
+    "text": "Do risk factors for suicidal behavior differ by affective disorder polarity?",
+    "domain": "medical"
+  },
+  {
+    "text": "Multidisciplinary breast cancer clinics. Do they work?",
+    "domain": "medical"
+  },
+  {
+    "text": "Is the international normalised ratio (INR) reliable?",
+    "domain": "medical"
+  },
+  {
+    "text": "Are there associations of health status, disease activity and damage in SLE patients?",
+    "domain": "medical"
+  },
+  {
+    "text": "PSA repeatedly fluctuating levels are reassuring enough to avoid biopsy?",
+    "domain": "medical"
+  },
+  {
+    "text": "Generally speaking, can I sue Youtube in New York?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does a user have a prima facie right to commence legal action against Youtube in the State of New York?",
+    "domain": "legal"
+  },
+  {
+    "text": "Am I allowed to copy long lists of Amazon listings and use these on my own website?",
+    "domain": "legal"
+  },
+  {
+    "text": "Are users permitted to replicate listings of Amazon products and use these on websites or platforms other than Amazon?",
+    "domain": "legal"
+  },
+  {
+    "text": "Am I allowed to write a review under an alias?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does a user have the right to post content purporting to be created by someone other than such user?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Amazon promise that the price displayed for an item is the actual price of that item?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Amazon purport to claim that the price listed in respect of each item reflects the amount Amazon shall charge for such item?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Amazon take responsibility for items sold by third parties through Amazon?",
+    "domain": "legal"
+  },
+  {
+    "text": "Can Amazon become liable in connection with offerings made by third parties?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Amazon agree to ensure that its services are available at all times?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Amazon provide any undertaking with respect to the availability of the services that it provides?",
+    "domain": "legal"
+  },
+  {
+    "text": "Am I allowed to use source code from Amazons software in my own software?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Amazon permit the replication of, or other unauthorized use of, the source code of its software?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Facebook require users to pay money for its services?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Facebook levy fees or charges in connection with the services it provides to users?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Facebook use only AI to discover and remove harmful content?",
+    "domain": "legal"
+  },
+  {
+    "text": "Are automated systems the sole means by which Facebook identifies and removes problematic content?",
+    "domain": "legal"
+  },
+  {
+    "text": "Can I use the timeline for promoting my business?",
+    "domain": "legal"
+  },
+  {
+    "text": "Are users permitted to utilize the timeline for commercial purposes?",
+    "domain": "legal"
+  },
+  {
+    "text": "When I delete content from Facebook, will Facebook ensure that that content is deleted everywhere?",
+    "domain": "legal"
+  },
+  {
+    "text": "Upon the deletion of content by a user, does Facebook undertake that such content shall no longer exist in any Facebook product or service?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Facebook take responsibility for racist content posted on Facebook?",
+    "domain": "legal"
+  },
+  {
+    "text": "Can Facebook incur liability in connection with racist materials or activities uploaded to, or taking place on, the platform?",
+    "domain": "legal"
+  },
+  {
+    "text": "Except for after I die, can I give someone else control of my Facebook account?",
+    "domain": "legal"
+  },
+  {
+    "text": "Other than upon a users death, is a user entitled to grant another person or persons access rights with respect to such users Facebook account?",
+    "domain": "legal"
+  },
+  {
+    "text": "Can I give someone control over my Verizon account when I die?",
+    "domain": "legal"
+  },
+  {
+    "text": "Is a holder of a Verizon account entitled to grant rights to or in such account to another person or persons upon the holders death?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Verizon own all of the content that it hosts?",
+    "domain": "legal"
+  },
+  {
+    "text": "Are all intellectual property rights to the content contained in services provided by Verizon owned by Verizon?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Verizon need to tell me if it makes changes to the services?",
+    "domain": "legal"
+  },
+  {
+    "text": "Is Verizon obligated to provide users with notice in connection with changes to the services?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Verizon agree to provide customer support for its services?",
+    "domain": "legal"
+  },
+  {
+    "text": "Does Verizon guarantee a certain minimum level of product support to customers?",
+    "domain": "legal"
+  },
+  {
+    "text": "Will Verizon tell me about every change to these terms?",
+    "domain": "legal"
+  },
+  {
+    "text": "Is Verizon obligated to inform users of every modification to the terms of service?",
+    "domain": "legal"
+  },
+  {
+    "text": "As I live in Texas, will Texas law apply to my relationship with Verizon?",
+    "domain": "legal"
+  },
+  {
+    "text": "Will this agreement be governed by Texas law in the case of persons residing in Texas?",
+    "domain": "legal"
+  },
+  {
+    "text": "According to the terms, can I create a service that competes with Zoom?",
+    "domain": "legal"
+  },
+  {
+    "text": "Pursuant to the above, are users permitted to develop services that are competitive with the services offered by Zoom?",
+    "domain": "legal"
+  },
+  {
+    "text": "Except for in school, can people below age 16 use Zoom?",
+    "domain": "legal"
+  },
+  {
+    "text": "Apart from in the context of school subscriptions, are persons below 16 years of age permitted to use Zoom?",
+    "domain": "legal"
+  },
+  {
+    "text": "If I cancel my subscription, will I be refunded for amounts Ive already paid?",
+    "domain": "legal"
+  },
+  {
+    "text": "Upon cancellation, are users entitled to reimbursement in respect of amounts previously paid?",
+    "domain": "legal"
+  },
+  {
+    "text": "Under the license, am I permitted to use Zoom in a life-and-death situation in a hospital?",
+    "domain": "legal"
+  },
+  {
+    "text": "Pursuant to the terms hereunder, does the Zoom license permit using the licensed services in critical or emergency medical contexts?",
+    "domain": "legal"
+  },
+  {
+    "text": "In the event that certain provisions of the agreement are deemed invalid by a judicial decision, will the remaining provisions also be rendered invalid?",
+    "domain": "legal"
+  },
+  {
+    "text": "Once Im able to sue Zoom, can I wait two years before starting the process?",
+    "domain": "legal"
+  },
+  {
+    "text": "Upon a person obtaining the right to take legal action against Zoom, can such person commence that legal action two years after obtaining the right to do so?",
+    "domain": "legal"
+  },
+  {
+    "text": "If I give Reddit a great commercial idea, can I demand payment for it?",
+    "domain": "legal"
+  },
+  {
+    "text": "What substances, which are distinct from acids and bases, form when ions form ionic bonds?",
+    "domain": "science"
+  },
+  {
+    "text": "What is the name for biochemical compounds that consist of one or more chains of small molecules called amino acids?",
+    "domain": "science"
+  },
+  {
+    "text": "What are the ionic compounds that produce negative hydroxide ions when dissolved in water?",
+    "domain": "science"
+  },
+  {
+    "text": "The atomic number of tungsten is 74. therefore, in a neutral atom of tungsten, there are 74 electrons. the atomic number of argon is 18. therefore, in a neutral atom of argon, there are how many electrons?",
+    "domain": "science"
+  },
+  {
+    "text": "What is the apparatus used for carrying out an electrolysis reaction?",
+    "domain": "science"
+  },
+  {
+    "text": "What two ways may light be transmitted?",
+    "domain": "science"
+  },
+  {
+    "text": "Triggered by changes in the environment, migration and hibernation occur as cycles on what temporal basis?",
+    "domain": "science"
+  },
+  {
+    "text": "What pair of tubes that extends toward the ovaries features a fringelike structure that sweeps eggs inside?",
+    "domain": "science"
+  },
+  {
+    "text": "In most animals, what sense is related to balance or equilibrium?",
+    "domain": "science"
+  },
+  {
+    "text": "Terminal pods are located at the end of what?",
+    "domain": "science"
+  },
+  {
+    "text": "What forms when the spores from two parents fuse during sexual reproduction?",
+    "domain": "science"
+  },
+  {
+    "text": "What is the name of the galaxy we live in?",
+    "domain": "science"
+  },
+  {
+    "text": "What are the most common seedless vascular plants?",
+    "domain": "science"
+  },
+  {
+    "text": "In a monogamous pairing, a male individual is generally paired with what other type of individual in a sexual relationship?",
+    "domain": "science"
+  },
+  {
+    "text": "What is a mass spectrometer used to measure?",
+    "domain": "science"
+  },
+  {
+    "text": "What combines sets of genes from two different parents leading to genetically diverse offspring?",
+    "domain": "science"
+  },
+  {
+    "text": "Global warming will raise ocean levels due to melt water from glaciers and the greater volume of what?",
+    "domain": "science"
+  },
+  {
+    "text": "What are groups of young stars loosely held together by gravity called?",
+    "domain": "science"
+  },
+  {
+    "text": "What does a pollinator pick up from its body and carry directly to another plant of the same species?",
+    "domain": "science"
+  },
+  {
+    "text": "What is formed when an oxygen atom picks up a pair of hydrogen ions from a solution?",
+    "domain": "science"
+  },
+  {
+    "text": "What does the driving of turbines by the heating of water to steam accomplish?",
+    "domain": "science"
+  },
+  {
+    "text": "What is a device that changes kinetic energy to electrical energy through electromagnetic induction?",
+    "domain": "science"
+  },
+  {
+    "text": "How many naturally occurring elements are known on earth?",
+    "domain": "science"
+  },
+  {
+    "text": "What are the two types of vesicle transport called?",
+    "domain": "science"
+  },
+  {
+    "text": "What do you call a species that has died out in the past?",
+    "domain": "science"
+  },
+  {
+    "text": "Where does the embryo develop in a plant?",
+    "domain": "science"
+  },
+  {
+    "text": "What is the method of setting or correcting a measuring device by matching it to known measurement standards called?",
+    "domain": "science"
+  },
+  {
+    "text": "What property of warm air causes it to rise above cold air?",
+    "domain": "science"
+  },
+  {
+    "text": "Which branch of biology studies animal behavior?",
+    "domain": "science"
+  },
+  {
+    "text": "What unit of measure is equal to the amount of work a horse can do in 1 minute?",
+    "domain": "science"
+  },
+  {
+    "text": "What organism is characterized by an incomplete digestive system and a single, tentacled opening?",
+    "domain": "science"
+  },
+  {
+    "text": "What term is not the same as energy, but means the energy per unit charge?",
+    "domain": "science"
+  },
+  {
+    "text": "What specific part of the african violet is used to propagate other plants?",
+    "domain": "science"
+  },
+  {
+    "text": "What are fibers that depend on aerobic respiration called?",
+    "domain": "science"
+  },
+  {
+    "text": "Which form of electromagnetic waves have more energy: low frequency wave or high frequency waves?",
+    "domain": "science"
+  },
+  {
+    "text": "Something that has all of the characteristics of life is considered to be what?",
+    "domain": "science"
+  },
+  {
+    "text": "What do the letters in our blood types represent?",
+    "domain": "science"
+  },
+  {
+    "text": "The two stages of photosynthesis are the light reactions and what?",
+    "domain": "science"
+  },
+  {
+    "text": "What do living things need to survive?",
+    "domain": "science"
+  },
+  {
+    "text": "The denser regions of the electron cloud are called what?",
+    "domain": "science"
+  },
+  {
+    "text": "In studying energy, what term do scientists use to refer to the matter and its environment involved in energy transfers?",
+    "domain": "science"
+  },
+  {
+    "text": "To measure what changes that occur in chemical reactions, chemists usually use a related thermodynamic quantity, calledenthalpy?",
+    "domain": "science"
+  },
+  {
+    "text": "A system in what state cannot spontaneously change, and therefore can do no work?",
+    "domain": "science"
+  },
+  {
+    "text": "What is a species that plays an especially important role in it's community called?",
+    "domain": "science"
+  },
+  {
+    "text": "What term that shows how fast a population is growing includes new members added to the population over a given period, as well as old members removed from the population?",
+    "domain": "science"
+  },
+  {
+    "text": "The rings of what planet can be easily seen from earth?",
+    "domain": "science"
+  },
+  {
+    "text": "What planet is a blue green color?",
+    "domain": "science"
+  },
+  {
+    "text": "The simplest class of organic compounds is the what?",
+    "domain": "science"
+  },
+  {
+    "text": "Some meteorites are made of iron and nickel and are thought to be very similar to what part of the earth?",
+    "domain": "science"
+  },
+  {
+    "text": "Which pathway carries somatosensory information from the face, head, mouth, and nasal cavity?",
+    "domain": "science"
+  },
+  {
+    "text": "Fix grammar in this sentence: A notable number of Chinese factories make piratical products by copying foreign products.",
+    "domain": "language"
+  },
+  {
+    "text": "Remove all grammatical errors from this text: They tend to copy other engineers' work and become less creative, which in turn, significantly hamper the engineering design innovation of the whole nation.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar in the sentence: By reducing the plagiarism rate of Chinese institutes and gradually converting the conservative consumption concept of Chinese people, China can really make a big difference.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammaticality of the sentence: Appropriate facilities, efficient technology support and proper use of food are required to increase the food production in order to solve the food shortage problem.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammatical errors: To be more accurate, in the developing countries, government should make a good plan to build irrigation canal and bank based on the analysis of local climate and geography.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammaticality of the sentence: Government should provide stable surroundings for farmers to plant food.",
+    "domain": "language"
+  },
+  {
+    "text": "Improve the grammaticality of this text: Besides the infrastructure construction, another advisable method to increase production is to mechanize the agriculture system.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix disfluencies in the sentence: Armed with machine, farmers can make the most of limited farmland and time.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammatical errors in this sentence: It is effortless to come up with the idea that we can use biological engineering way to change certain properties of plants.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix the grammar mistakes: Government should also make some regulations to urge experts to teach farmers how to farm scientifically.",
+    "domain": "language"
+  },
+  {
+    "text": "Grammar improvements: Having made a good plan to help farmers to produce more food, government must use the food properly.",
+    "domain": "language"
+  },
+  {
+    "text": "Improve the grammaticality: It is an inhuman action to turn food into ethanol to feed cars instead of helping those starving people.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammaticality: Standard of living has become higher and higher.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammatical errors in this sentence: Undergoing this challenge, Vietnam will gain more power to catch up with the developed world.",
+    "domain": "language"
+  },
+  {
+    "text": "Improve the grammaticality of this text: Engineering design processes for innovations are very important to the industry of China.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar errors in this sentence: However, nowadays, there are some problems hamper the engineering design processes for innovations in China.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar in this sentence: The price of the ordinary materials are suitable and almost the same as other countries.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar errors: These problems lead to a result that although there are good products, plastic conduit cannot exert its special functions because the workers do not have the necessary knowledge and still follows the outdated methods.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix all grammatical errors: However, just like plastic conduit, there are many engineering designs which have not developed into perfect innovations in China because of the problems exist now.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammatical errors: In the board sweep of scientific history, scientists have made a lot of discoveries via research.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar errors in this sentence: Over the years, man has come up with many marvelous ideas and technologies which helped to simplify our lives by a huge leap.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammatical errors: They even asked for more cards when they finished giving out what they have.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar in this sentence: The electric car is a large scale project where large amount of money is pumped into doing research in order to improve the car.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar in the sentence: Besides that, each individual part that make up the car is also expensive.",
+    "domain": "language"
+  },
+  {
+    "text": "Remove grammar mistakes: One similarity the two technologies share is that the process is tough.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammatical errors: Besides, researchers have to repeat the same experiment hundreds of times until success.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammatical mistakes in this sentence: Moreover, conventionally generated technology and innovation receive different attitudes from other people.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammaticality: The researchers of the innovation may receive poor feedbacks in the prior market research, or someone even regard the researchers as idiots.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar errors: However the engineer Mizoguchi persisted to research the laptop in a skunkworks environment, and finally he got the triumph and nowadays laptop is becoming essential in our daily life.",
+    "domain": "language"
+  },
+  {
+    "text": "Remove grammar mistakes: As a most important aspect to contribute to the development of science and technology of the nation as well as improve living standard of people, engineering design for innovations plays a significant role in the current Chinese society.",
+    "domain": "language"
+  },
+  {
+    "text": "Remove grammatical mistakes: This phenomenon is partially a result of the social prejudice that the society respects those with power more than intelligentsias.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammatical errors in this sentence: Improving the education system and developing right academic atmosphere are essential and urgent.",
+    "domain": "language"
+  },
+  {
+    "text": "Improve the grammaticality: Only removing the obstacles can engineers develop science and technology and design new things of innovations.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix all grammatical errors: Because the project usually spends a lot of money, one should have a backup, such as a company, to give financial support.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix disfluencies in the sentence: A conventionally generated technology and an innovation that was created in a skunkworks environment differ in organizational structure and time consumption, but similar in the doers and the purpose.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammaticality in this sentence: In some cases, although the idea of the project was brilliant, the executives rejected the proposal due to the economic situation of the company.",
+    "domain": "language"
+  },
+  {
+    "text": "Improve the grammaticality: In contrast, a project which is done in a skunkworks environment does not undergo the company's bureaucracy.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar in the sentence: As a result of the difference in organizational structure, a conventionally generated technology and an innovation that was created in a skunkworks environment also differ in time consumption.",
+    "domain": "language"
+  },
+  {
+    "text": "Improve the grammar of this text: Despite these differences, a conventionally generated technology and an innovation that was created in a skunkworks environment have two similarities.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix disfluencies in the sentence: For instance, hand phone is made in order to communicate with another person in the different place in an easier way.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammatical mistakes in this sentence: A conventionally generated technology and an innovation that was created in a skunkworks environment are different but alike.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar in the sentence: Though they are different in organizational structure and time consumption, but both still have similarities in the doers and the purpose.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar in this sentence: Since a company still have to consider a number of factors when making a decision, bureaucracy in the company will not be gone.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar in the sentence: However, by looking at the efficiency of the skunkworks, it is possible for a company to reduce the bureaucracy in order to come out with more innovations.",
+    "domain": "language"
+  },
+  {
+    "text": "Grammar improvements: Annually, millions of funds are being pumped into the R&D sector to encourage innovations to offer solutions to the pressing challenges Singapore faces.",
+    "domain": "language"
+  },
+  {
+    "text": "Fix grammar errors in this sentence: One problem faced by engineering design in Singapore is the various restrictions due to socio-political system of the country.",
+    "domain": "language"
+  },
+  {
+    "text": "Remove grammar mistakes: In recent years, the core objectives of the country's research and development project have been directed in the area of clean energy and water technology.",
+    "domain": "language"
+  },
+  {
+    "text": "Improve the grammaticality of this sentence: As a result, innovation process is interrupted at the stage of research and development with the absence of supports and attention.",
+    "domain": "language"
+  },
+  {
+    "text": "Remove grammatical mistakes: Aside from the lack of resources for the research and development stage, difficulties may be faced in finding suitable target group for the innovation result within the country.",
+    "domain": "language"
+  },
+  {
+    "text": "Improve the grammaticality of this sentence: The low population of the country disables experimentation on a large scale basic which eventually may cause inaccuracy in the result.",
+    "domain": "language"
+  },
+  {
+    "text": "[ WP ] One day the world wakes up to everyone having a number visible over their head . Your number is 1 .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] Everyone has the last words of their soulmate written on their body . Yours says `` I never loved you. ``",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] A handful of people have been born with a dumb and useless superpower . The government has made sure to not let two of these people make contact with each other because when these two useless powers combine the world will be at risk . One day two of these people accidently meet",
+    "domain": "creative"
+  },
+  {
+    "text": "[ TT ] You and your crew have been sent to start colonizing the moon . When you visit the far side you find signs that this isn ’ t the first time humans have tried to colonize it , and it looks like things ended badly for them .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] The System has appointed you as the newest Regulator , one of the elite . Except you have no idea exactly what you are supposed to be 'regulating ' , and it slowly becomes apparent that neither do any of your co-workers .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] You are the only person in the world who can not spontaneously break into song ( like Disney ) .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] A zombie outbreak has just began and they 're all over your town , write me a story starting from wherever you currently are .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] You are becoming frustrated that nobody is responding to your writing prompts",
+    "domain": "creative"
+  },
+  {
+    "text": "[ PM ] Give me ten prompts . I 'll turn them all into one story .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] `` I never really was welcome here ... was I ? ''",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] They laughed at me when I said my superpower was hydrokinesis . Said that the ability to control water was useless . They forgot that the human body is 60 % water .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ FF ] Beginning at the end .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] Your whole modern life is a lucid dream . Now you wake up into real life , the Middle Ages .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] A mathematician on the brink of insanity has spent years locked in his apartment , attempting to find a formula that proves God exists . As he nears to a breakthrough , God shows up to explain why the proof should n't be made public .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] `` We 've still got time . Not enough , but enough . ''",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] You appear in a small dark room . In the middle of it there is a table , a computer terminal on it and an uncomfortable looking stool . The screen blinks . nº 47525961285641377 `` I wish I could be less fat . '' Allow ? [ y/N ] | This is your life now .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ FF ] Write a poem entitled `` A secret worth telling '' using no more than 20 sentences .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] You chanced upon the meaning of life as a showerthought ; it is as god 's decree that you are now to take his place .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] On her deathbed , your ill mother finally allows you to own the recipe to her famous cookies . It reads : `` 2 cups flour , 1/4 teaspoon salt , and a human heart . ''",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] Your parents have another child , as time goes on you discover that your baby sister does not age . Describe life growing up .",
+    "domain": "creative"
+  },
+  {
+    "text": "You 're a serial killer who 's been captured by the authorities . They ask you to recount your first kill ... .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] You 're practicing CPR on a fake dummy and you do a bit too well . The dummy starts gasping for air .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] Write a review for the latest book by God `` Bible : The newest testament - confusions resolved , mistakes corrected '' .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] You can move freely through time , but are incapable of moving through space",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] You are sentenced to death . After entering the execution room , instead of being executed , you were instead given a new passport and a new identity . Turns out the death sentence had been abolished years ago , and now exists only as a deterrent to violent crime and not actually implemented .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] Every human has their soulmate 's last words to them engraved in their skin from birth .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] A story based on something that happened to you , and the character does what you wish you 'd have done .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ wp ] The last several decades of US politics have been a ploy to harness the energy of the founding fathers spinning in their graves . You 're a newly sworn in Senator being briefed on this for the first time .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] God holds a press event , admits he 's always secretly hated humans .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ CW ] Write a poem wherein , when read forward it is from the perspective of a murder victim . Read backward , it is from the perspective of the killer .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] The world is ending . Tell me the feeling of the superhero , when he understands the villain was right all along .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ IP ] Poseidon 's Trident",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] You have managed to attach your soul to a item . In which on the event of your death , you will respawn in front of it . The downside to this immortality , is that you keep misplacing it and spawning in weird and sometime uncomfortable places .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] You begin to wonder why so many top comments are being removed on Reddit . You suddenly begin to notice a trend in the context of the removed posts ... what they 're hiding startles you deeply .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] There 's someone in my head but it 's not me .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] The Devil appears before you and puts a heavy hand on your shoulder , `` Look , we need to talk about you putting me in every Writing Prompt . ''",
+    "domain": "creative"
+  },
+  {
+    "text": "[ wp ] Every time you feel pain , it never goes away and simply builds up . So if you stubbed your toe , it would stay stubbed . What is the world like ?",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] A corrupt book Critic must write a glowing review for a narrative train wreck after being paid off .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ CW ] God exists , and we have captured it . Write about this in a horror setting .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] A minor character : small-town failed politician , who was never elected to office , comes to terms with the failure of his ambitions during his small-town retirement",
+    "domain": "creative"
+  },
+  {
+    "text": "You are walking down a dark hallway in your home , getting ready for bed . The only speck of light is coming from the porch light through the peephole in your front door . Suddenly , the light slides to dark .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] You 've become infected with a deadly virus and have to come to terms with your imminent death , shown through a series of letters to a loved one .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] Memories ( of the deceased ? ) are sold on the black market .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] In a post-scarcity society , all of humanity 's needs are catered to by an array of increasingly sophisticated AI . One day , Humanity wakes to find all of the AIs are simply gone .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] A plane lands at JFK airport with no flight plan . No records of its serial number exist , and no one on board seems to know where they came from .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] After the fall of humanity and the rise of the apes , a now intelligent George returns to confront the Man in the Yellow Hat .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] Your sacred mission is to rid the world of all shoelaces .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] You are a commercial airliner pilot . The moment before you turn your phone off to begin the flight your SO sends you a deeply concerning text .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] You receive an invitation to a party at a beautiful Spanish villa . Upon entering the ballroom you see , not a group of dancers as you expect , but a single fox staring at you .",
+    "domain": "creative"
+  },
+  {
+    "text": "[ WP ] Two friends are meeting at a high school reunion . They have not seen each other in 10 years . One of them is a congressman , the other one is a recovering heroin addict . The reader does not know which one is which .",
+    "domain": "creative"
+  },
+  {
+    "text": "What geometric shape has 5 sides and 5 angles?",
+    "domain": "general"
+  },
+  {
+    "text": "Generate a pitch for a new and original product.",
+    "domain": "general"
+  },
+  {
+    "text": "Compose a sonnet about the beauty of nature.",
+    "domain": "general"
+  },
+  {
+    "text": "Rewrite the following sentence so that it is in active voice.",
+    "domain": "general"
+  },
+  {
+    "text": "Write a short story about a day in the life of a software engineer.",
+    "domain": "general"
+  },
+  {
+    "text": "What's the difference between a virus and a worm?",
+    "domain": "general"
+  },
+  {
+    "text": "Explain the concept of the blockchain.",
+    "domain": "general"
+  },
+  {
+    "text": "What is the contraction of \"they are\"?",
+    "domain": "general"
+  },
+  {
+    "text": "Create a list of items for a picnic.",
+    "domain": "general"
+  },
+  {
+    "text": "Find the lowest common multiple of two numbers.",
+    "domain": "general"
+  },
+  {
+    "text": "Classify the given article as either positive or negative sentiment.",
+    "domain": "general"
+  },
+  {
+    "text": "Convert the following hexadecimal number to octal.",
+    "domain": "general"
+  },
+  {
+    "text": "Gather some recent data related to the increasing rates of unemployment.",
+    "domain": "general"
+  },
+  {
+    "text": "Indicate how the following characters in the novel reflect the theme of \"the corrupting influence of power\".",
+    "domain": "general"
+  },
+  {
+    "text": "Rewrite the following sentence to avoid any logical fallacies.",
+    "domain": "general"
+  },
+  {
+    "text": "Name two different ways to reduce poverty in a community.",
+    "domain": "general"
+  },
+  {
+    "text": "Generate a sentence that follows the structure of: \"All ____ is based on/with _____\"",
+    "domain": "general"
+  },
+  {
+    "text": "Describe the principle of the Law of Supply.",
+    "domain": "general"
+  },
+  {
+    "text": "Find the area of the given trapezoid.",
+    "domain": "general"
+  },
+  {
+    "text": "Describe the themes present in the given poem.",
+    "domain": "general"
+  },
+  {
+    "text": "Generate a haiku poem.",
+    "domain": "general"
+  },
+  {
+    "text": "Design a logo for a web development company.",
+    "domain": "general"
+  },
+  {
+    "text": "Compare cats and dogs.",
+    "domain": "general"
+  },
+  {
+    "text": "Classify this text as Fiction or Non-fiction.",
+    "domain": "general"
+  },
+  {
+    "text": "Name three fruits that are rich in Vitamin C.",
+    "domain": "general"
+  },
+  {
+    "text": "Translate this sentence from French to English.",
+    "domain": "general"
+  },
+  {
+    "text": "Generate the third term in the sequence 2, 5, 9, 14.",
+    "domain": "general"
+  },
+  {
+    "text": "What is the purpose of Financial Accounting?",
+    "domain": "general"
+  },
+  {
+    "text": "Describe a unique way to cook a steak.",
+    "domain": "general"
+  },
+  {
+    "text": "Summarize the advantages of renewable energy.",
+    "domain": "general"
+  },
+  {
+    "text": "Identify the incorrect word in this sentence.",
+    "domain": "general"
+  },
+  {
+    "text": "Suggest a powerful quote.",
+    "domain": "general"
+  },
+  {
+    "text": "Sort the following list in alphabetical order.",
+    "domain": "general"
+  },
+  {
+    "text": "What is a trade deficit?",
+    "domain": "general"
+  },
+  {
+    "text": "Name one benefit of meditation.",
+    "domain": "general"
+  },
+  {
+    "text": "Name the three main mountain ranges in the United States.",
+    "domain": "general"
+  },
+  {
+    "text": "Assign this task to the design team.",
+    "domain": "general"
+  },
+  {
+    "text": "Provide the lyrics for the song titled “Yesterday”",
+    "domain": "general"
+  },
+  {
+    "text": "Provide a brief summary of the novel \"Never Let Me Go\".",
+    "domain": "general"
+  },
+  {
+    "text": "Edit the following sentence so that it has correct grammar.",
+    "domain": "general"
+  },
+  {
+    "text": "Name something you can do with paper.",
+    "domain": "general"
+  },
+  {
+    "text": "Construct a sentence using the phrase \"every day\".",
+    "domain": "general"
+  },
+  {
+    "text": "What type of fruit would be a good addition to a fruit salad?",
+    "domain": "general"
+  },
+  {
+    "text": "Describe in a few words what makes a good leader.",
+    "domain": "general"
+  },
+  {
+    "text": "Find a rhyming word for the word \"river\".",
+    "domain": "general"
+  },
+  {
+    "text": "What is the scientific name for a beaver?",
+    "domain": "general"
+  },
+  {
+    "text": "Convert the following number from base 10 to hexadecimal: 278",
+    "domain": "general"
+  },
+  {
+    "text": "Give a definition of \"algae\".",
+    "domain": "general"
+  },
+  {
+    "text": "Name a natural process which occurs in food preservation.",
+    "domain": "general"
+  },
+  {
+    "text": "Supply a phrase to complete this proverb: \"It's better to be safe than ____.\"",
+    "domain": "general"
+  }
+]

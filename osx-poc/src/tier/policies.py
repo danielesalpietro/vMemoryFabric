@@ -12,6 +12,7 @@ LRU — fallback se SEE non disponibile o contesto non definito.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from eat.types import EATEntry
@@ -37,7 +38,11 @@ class LRUPolicy:
         Returns:
             Top-n candidati all'eviction ordinati per priorità.
         """
-        raise NotImplementedError("TODO Sprint 2")
+        ordered = sorted(candidates, key=lambda e: e.last_access_ts)
+        return [
+            EvictionCandidate(entry=e, score=e.last_access_ts, policy_used="LRU")
+            for e in ordered[:n]
+        ]
 
 
 class SEEPolicy:
@@ -72,7 +77,27 @@ class SEEPolicy:
         NOTE: se context_vec è None, gamma viene ignorato e il peso
         viene ridistribuito su alpha e beta (LRU ponderata).
         """
-        raise NotImplementedError("TODO Sprint 2 — σ stub; Sprint 3 integra PT-PEP")
+        now = now if now is not None else time.monotonic()
+        age = max(0.0, now - entry.last_access_ts)
+        # Normalizzati a (0, 1] così alpha/beta pesano contributi comparabili
+        # a prescindere dalla scala assoluta di access_count/age — non c'è
+        # una scala "naturale" comune tra un contatore e un tempo in secondi.
+        recency_component = 1.0 / (1.0 + age)
+        freq_component = 1.0 - 1.0 / (1.0 + entry.access_count)
+
+        if context_vec is None:
+            weight_total = self.alpha + self.beta
+            eff_alpha = self.alpha / weight_total
+            eff_beta = self.beta / weight_total
+            return eff_alpha * freq_component + eff_beta * recency_component
+
+        # context_vec fornito ma σ è ancora uno stub (PT-PEP arriva in M3):
+        # i pesi NON vengono ridistribuiti — gamma resta "sprecato" su un
+        # contributo nullo invece di far finta che σ stia facendo qualcosa.
+        sigma = 0.0
+        return (self.alpha * freq_component
+                + self.beta * recency_component
+                + self.gamma * sigma)
 
     def rank(self, candidates: list[EATEntry], n: int,
              context_vec: list[float] | None = None) -> list[EvictionCandidate]:
@@ -80,4 +105,14 @@ class SEEPolicy:
 
         Fallback su LRU se context_vec è None e gamma > 0.
         """
-        raise NotImplementedError("TODO Sprint 2")
+        now = time.monotonic()
+        scored = [
+            EvictionCandidate(
+                entry=e,
+                score=self.score(e, context_vec=context_vec, now=now),
+                policy_used="SEE",
+            )
+            for e in candidates
+        ]
+        scored.sort(key=lambda c: c.score)
+        return scored[:n]

@@ -2,7 +2,7 @@
 
 **OSX** is a system-level framework for managing the lifecycle of experts in Mixture-of-Experts (MoE) large language models. It treats experts as first-class objects governed by a dedicated runtime — with hierarchical memory placement, predictive prefetching, gating-aware scheduling, and adaptive replication.
 
-> *Current release: **Möllstorp** (v0.2.0-dev) — August 8, 2026 — previous: Karlshamn (v0.1.0-dev)*
+> *Current release: **Eketorp** (v0.3.0-dev) — August 8, 2026 — previous: Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev)*
 
 ---
 
@@ -68,7 +68,7 @@ make build
 # 2. Verify hardware and environment
 make smoke
 
-# 3. Run all tests (M1/EAT passes as of Sprint 1; M2/M3 still NotImplementedError — expected)
+# 3. Run all tests (M1/M2/M3 pass as of Sprint 3 — GCSG shadow execution real, see LOGBOOK for the open stall)
 make test
 
 # 4. Interactive shell
@@ -86,11 +86,11 @@ make shell
 | Job | Trigger | Runner | What it runs |
 |-----|---------|--------|---------------|
 | `cpu-tests` | `push`, `pull_request` | `ubuntu-latest` | `pytest tests/ -m "not gpu"` — CPU-only subset of deps, no torch/vLLM/CUDA |
-| `full-gpu-tests` | `workflow_dispatch` only (manual) | `[self-hosted, gpu]` | `docker compose build`, full test suite via the dev image, then `benchmarks/bench_eat.py` — uploaded as the `bench-eat-result` workflow artifact |
+| `full-gpu-tests` | `workflow_dispatch` only (manual) | `[self-hosted, gpu]` | `docker compose build`, full test suite via the dev image, then `benchmarks/bench_eat.py` and `benchmarks/bench_tier.py` — uploaded as the `bench-eat-result` / `bench-tier-result` workflow artifacts |
 
-Tests requiring real CUDA hardware are marked `@pytest.mark.gpu` (see `TestGPUTransfer` in `tests/test_tier.py`) and registered in `pytest.ini`, so `-m "not gpu"` excludes them deterministically instead of relying on a runtime `pytest.skip()`.
+Tests requiring real CUDA hardware are marked `@pytest.mark.gpu` (see `TestGPUTransfer`/`TestTierManagerGPU` in `tests/test_tier.py`) and registered in `pytest.ini`, so `-m "not gpu"` excludes them deterministically instead of relying on a runtime `pytest.skip()`.
 
-Every manual `workflow_dispatch` run of `full-gpu-tests` re-measures M1 on the actual target hardware (`Z8-G4-RTX3090`) — see the M1 technical report for the latest numbers and their evolution across runs.
+Every manual `workflow_dispatch` run of `full-gpu-tests` re-measures M1 and M2 on the actual target hardware (`Z8-G4-RTX3090`) — see the M1/M2 technical reports for the latest numbers and their evolution across runs. This machine doubles as both the dev workstation and the self-hosted runner, so GPU-dependent bugs can be iterated on locally via `docker compose run` before spending a `workflow_dispatch` cycle on the final, recorded verification.
 
 ---
 
@@ -136,7 +136,7 @@ vMemoryFabric/                  (repo root)
     │
     ├── benchmarks/
     │   ├── bench_eat.py      # Sprint 1 (Möllstorp) — implemented
-    │   └── bench_tier.py     # Sprint 2 target
+    │   └── bench_tier.py     # Sprint 2 (Eketorp) — implemented
     │
     ├── scripts/
     │   └── smoke_test.py     # Hardware + env validation — 13/13 passing
@@ -154,10 +154,66 @@ vMemoryFabric/                  (repo root)
 |--------|--------|-------|-------------|
 | 0      | Environment + skeleton | 1–2 | ✅ **Karlshamn** |
 | 1      | M1 — EAT               | 3–4 | ✅ **Möllstorp** |
-| 2      | M2 — Tier Manager      | 5–6 | 🔲 pending  |
-| 3      | M3 — Expert Scheduler  | 7–8 | 🔲 pending  |
+| 2      | M2 — Tier Manager      | 5–6 | ✅ **Eketorp**  |
+| 3      | M3 — Expert Scheduler  | 7–8 | 🟡 in progress (~78%) — **Oskarshamn** |
 | 4      | Integration + benchmarks | 9–12 | 🔲 pending |
 | 5      | PoC delivery + paper   | 13–16 | 🔲 pending |
+| 6      | Telemetry + observability dashboard | TBD | 🔲 pending — **Stockholm** |
+
+Sprint 3 (Oskarshamn) is real, not a stub: GCSG shadow execution runs
+against the real Mixtral-8x7B checkpoint (both the AWQ ModuleList and
+Marlin-packed paths), with a real fix for the CPU-offload/pin_memory crash
+class that blocked it (issues [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16), both **closed**
+2026-08-11) verified end-to-end. The separate, reproducible slowdown under
+certain concurrent batch compositions that blocked full 570-question MMLU
+coverage is also resolved — root-caused to a structural WSL2/CUDA
+pageable-memory limitation (confirmed against vLLM's own upstream issue
+tracker, not a bug in this project's code), not a deadlock. Full 570/570
+MMLU-5shot coverage achieved with real shadow execution active: 72.11% vs.
+a 72.3% hook-only baseline (−0.19pp, inside the <2% target). Full writeup:
+[`reports/gcsg_shadow_execution_report.md`](reports/gcsg_shadow_execution_report.md)
+(also available as `.docx`, EN/IT, in the same directory) — marked
+preliminary/baseline, not a final result.
+
+Still open within Sprint 3, keeping it below 100%: PT-PEP ships as a
+TF-IDF+centroid classifier rather than the originally-planned BERT-small,
+a documented deviation (hit rate 87.2%, past the >70% target, but on a
+same-distribution held-out set, not OOD); AER is trigger-logic-only by
+design, blocked on dual-GPU hardware (#8); the shadow pool's expert
+selection is still a round-robin placeholder, not hotness-driven; and — the
+most significant gap — **M2 (Tier Manager) is not in the path that
+produced the MMLU result above**: `GCSGWorker` reaches VRAM through vLLM's
+own `cpu_offload_gb`, not through `TierManager`/`EAT`. `TierManager` is
+implemented and independently GPU-verified (Sprint 2), but nothing in
+`src/scheduler/` or `scripts/` currently calls it. See the GCSG report's
+own Limitations (§7) and Future Work (§9) sections for the full list.
+
+Sprint 6 (Stockholm) is a new leg, added without reordering or reweighting
+Sprints 0–5 above — those stay exactly as planned. Named deliberately:
+Stockholm is the seat of the Swedish government, and this sprint's job is
+oversight, not operation — a dashboard that *observes* GCSG/EAT/Tier
+Manager state, without sitting in the hot path of any of them.
+
+Two phases, in order, not scoped together:
+
+1. **Single-worker telemetry** — the low-overhead path. `GCSGGuard`,
+   `AERManager`, `PTPEPClassifier`, `TierManager`, and `EAT` already each
+   expose a `.stats()` method returning counters accumulated as a
+   byproduct of work already happening (tokens evaluated, shadow
+   activations, contamination rate, tier promotions, latencies) — zero new
+   instrumentation needed, only an adapter. Exposes these via a
+   `/metrics` endpoint (`prometheus_client`), wired into the
+   already-scaffolded but never-connected `configs/prometheus.yml` and
+   `make metrics-up`/`metrics-down` targets. Scope: one `GCSGWorker`
+   process, one dashboard.
+2. **Multi-worker aggregation** — deferred until there's more than one
+   worker process to aggregate across, which today means issue #8
+   (dual-GPU / AER, blocked on RTX 5080 arrival) landing first. Needs a
+   real design decision this project hasn't made yet (Prometheus
+   multi-target scraping by instance label vs. a pushgateway pattern for
+   short-lived workers) — not started until phase 1 is real and the
+   hardware blocker clears, tracked as a dependency rather than an
+   arbitrary "later."
 
 Non-functional targets (acceptance criteria for PoC):
 
@@ -165,6 +221,29 @@ Non-functional targets (acceptance criteria for PoC):
 - PT-PEP hit rate > 70% on labeled test set
 - GCSG quality degradation < 2% (MMLU-5shot)
 - Shard promotion latency within 1.5× theoretical bandwidth
+
+Live roadmap board: [OSX-PoC Roadmap](https://github.com/users/danielesalpietro/projects/1) (GitHub Project — one card per sprint plus tracked open issues).
+
+---
+
+## Known limitations / open issues
+
+Findings from M1/M2 benchmarking that were deliberately left unresolved, each with the measurement behind it — tracked as GitHub Issues rather than left as LOGBOOK notes, so they survive past whoever wrote the LOGBOOK entry:
+
+| # | Issue | Why it matters |
+|---|-------|-----------------|
+| [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) | Bloom filter ~5-14× slower than a plain dict | Undecided whether it belongs in the EAT hot path at all |
+| [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) | EAT `RLock` p99 degrades ~1360× under contention | M3 adds real concurrent traffic on top of this |
+| [#3](https://github.com/danielesalpietro/vMemoryFabric/issues/3) | `bench_tier.py` DDR4→VRAM p95/p99 skewed by CUDA cold-start | No warm-up iteration before timing |
+| [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) | `BloomFilter.remove_expert()` unimplemented | Evicted shards remain permanent false positives |
+| [#5](https://github.com/danielesalpietro/vMemoryFabric/issues/5) | No CUDA stream pipelining in `GPUTransfer` | Deferred since Sprint 0, needs real compute to overlap with |
+| [#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6) | No `pyproject.toml`/`ruff.toml` | Pre-existing style debt across the whole codebase |
+| [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) | PMEM (EMH-2) integration | Blocked on hardware availability |
+| [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival |
+| [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint`/`test`/`bench` fail on relative paths — container `WORKDIR` (`/workspace`) doesn't match `osx-poc/`'s relative paths | Workaround in use everywhere: `docker compose run --rm osx-dev bash -c "cd osx-poc && ..."` |
+| [#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` uses vLLM's `cpu_offload_gb` directly | `TierManager` is implemented and GPU-verified but nothing in `src/scheduler/` or `scripts/` calls it; see `reports/gcsg_shadow_execution_report.md` §7/§9 |
+
+**Closed:** [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) (2026-08-11) — GCSG shadow-execution crash and the related batch-composition slowdown, both root-caused to WSL2/CUDA pageable-memory offload behavior (structural, upstream-confirmed, not a project bug). Full trail: `reports/gcsg_shadow_execution_report.md`.
 
 ---
 

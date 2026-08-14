@@ -1,16 +1,31 @@
-# OSX-PoC — vLLM extras (Sprint 3)
+# OSX-PoC — vLLM + coupled ML stack overlay (Sprint 3)
 #
-# NOT installed by the base Dockerfile / docker-compose build. This file is a
-# placeholder until the GCSG hooks into vLLM internals (currently
-# NotImplementedError stubs) are actually implemented.
+# Installed AFTER requirements.txt (Dockerfile overlay). This file owns
+# torch/torchvision/transformers/tokenizers/vllm as one coherent group — vLLM
+# pins compatible torch/transformers versions tightly enough that mixing them
+# with independent pins in requirements.txt causes a pip resolver conflict.
 #
-# Status as of 2026-08-07: vllm==0.4.3 does NOT currently install — it pins
-# vllm-flash-attn==2.5.8.post2, which has been removed from PyPI (only 2.6.1
-# and 2.6.2 remain). Do not just bump the version blindly: vLLM 0.4.3 was
-# chosen because the hooks target its internal API, so re-pin only once the
-# hook code exists and you can verify which vLLM version it actually needs.
+# Verified 2026-08-08 (Sprint 3 smoke test, RTX 3090 / driver 610.74):
+#   vllm==0.6.6.post1 installs cleanly — no separate vllm-flash-attn dependency
+#   (bundled since ~0.5.x, confirms vllm==0.4.3's dead pin was the real issue).
+#   torch==2.5.1+cu124 runs fine on this host (driver supports it; wheel bundles
+#   its own CUDA 12.4 runtime libs, independent of the base image's CUDA 12.1.1
+#   devel toolchain).
 #
-# Install manually once ready:
-#   pip install -r requirements-vllm.txt
+# GCSG hook target: ModelRunner.execute_model() via EngineArgs(worker_cls=
+# GCSGWorker) — NOT a monkey-patch on _run_workers(), which runs in the main
+# process and doesn't propagate to the separate worker processes ModelRunner
+# actually executes in. See src/scheduler/gcsg.py.
+#
+# Install:
+#   pip install -r requirements.txt
+#   pip install -r requirements-vllm.txt --extra-index-url https://download.pytorch.org/whl/cu124
 
-vllm==0.4.3
+torch==2.5.1+cu124
+torchvision==0.20.1
+--extra-index-url https://download.pytorch.org/whl/cu124
+
+transformers==4.57.6
+tokenizers==0.22.2
+
+vllm==0.6.6.post1

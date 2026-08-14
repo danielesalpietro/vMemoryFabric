@@ -18,6 +18,216 @@ Releases are named after cities where significant project milestones were reache
 
 
 
+## [Oskarshamn] — v0.4.0-dev — 2026-08-10 (in progress, not yet released)
+
+*Named after Oskarshamn, Sweden, where M3 — Expert Scheduler work is happening.*
+
+### Added
+
+**M3 — GCSG shadow execution, real (not stub)**
+
+- `src/scheduler/gcsg.py` — `GCSGWorker._load_shadow_pool()` now actually populates the shadow pool against the real Mixtral-8x7B-Instruct checkpoint, for both quantization paths: AWQ ModuleList (`_pin_awq_expert_to_gpu()`, direct `.to('cuda')` per expert) and Marlin-packed AWQ (`_build_marlin_shadow_pool()` + new `_PinnedMarlinExperts` proxy class, GPU-resident slices of the shared `w13_qweight`/`w2_qweight`/etc. tensors, built only for layers actually offloaded to CPU — resident layers reuse the original module, zero extra allocation)
+- `_MarlinFusedShadowExpert` — constructor changed from one `(expert_id, num_experts)` per instance to per-layer `(fused, expert_id, num_experts)` entries, since offloaded layers now route through the 2-expert pinned proxy (local index) while resident layers use the original 8-expert tensor (global id)
+- First real, non-zero `GCSGGuard.stats()["shadow_activations"]` this project has ever measured — every prior run had shadow execution stubbed to hook-only
+
+### Fixed
+
+**GCSGWorker — shadow-execution call on a CPU-offloaded expert crashes (issues [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10), [#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16))**
+
+- Root cause: `_load_shadow_pool()` registered shadow experts by reference into vLLM's normal `cpu_offload_gb` mechanism, which wraps only whole decoder layers' `.forward` in an async (`non_blocking=True`) H2D copy — never individual expert submodules. A direct, out-of-sequence call into an expert that happens to be CPU-resident at that moment bypasses the real swap-in path entirely and crashes with `CUDA error: illegal memory access`. Reproduced identically on both the Marlin path (original issue #10) and the AWQ ModuleList path (new issue #16, found while investigating #10) — one shared mechanism, two code paths
+- Fix: pin every shadow-pool expert explicitly GPU-resident at load time (see Added above), verified numerically (`scripts/verify_marlin_pinned_proxy.py`, proxy vs. same-layer original, rtol=1e-2/atol=1e-3, PASS) and end-to-end (`scripts/verify_shadow_pool_pinning_e2e.py`, both quantization paths, PASS)
+- A real allocator-fragmentation hang was hit and fixed mid-implementation: the first attempt built the pinned Marlin proxy for all 32 layers instead of only the 6 offloaded ones (192 small allocations vs. 36, on an already-near-full 24GiB model) — GPU pegged at 100%, 9 minutes with zero progress, confirmed via `nvidia-smi` and killed rather than waited out. Fixed by scoping proxy construction to `w13_qweight.device.type == "cpu"` layers only
+
+**GCSGWorker — 1D vs. 2D `hidden_states` in `_evaluate_gcsg_for_rows()`**
+
+- `hidden_states[row_idx]` collapsed the row dimension to a 1D tensor; `_MarlinFusedShadowExpert` assumes 2D and misreads `hidden_dim` as the row count, crashing several calls later inside vLLM's own `fused_topk` — the error surfaced far from its actual cause. Fix: `hidden_states[row_idx : row_idx + 1]` (slice, preserves 2D shape). Only reachable once shadow execution actually ran past `should_activate_shadow()` for the first time this session — predates this session's other changes entirely, just never exercised before
+
+**`_evaluate_gcsg_for_rows()` — per-row CUDA sync batched into a single per-tensor sync**
+
+- `gating_scores=probs[row_idx].tolist()` / `token_entropy=float(entropy[row_idx])` previously ran inside the per-row loop, forcing a blocking GPU→CPU sync twice per row per layer (32 layers × batch_size per token). Hoisted `.tolist()` above the loop — same data, same downstream logic, 2 syncs per hook call instead of 2×batch_size. Tested directly as a candidate cause of the stall below (a plausible, code-verified hypothesis, not a guess) and **disproven** — `[32:48)` at batch=16 stalled identically with the fix in place. Kept regardless as a real, independent efficiency improvement
+
+**`captured_router_logits` unbounded growth**
+
+- Fired on every `.gate` hook call, every layer, every forward pass, holding live GPU tensor references for the full process lifetime — a real bug (tens of thousands of un-freeable tensors over a full 570-prompt run), fixed with a hard cap (`_MAX_CAPTURED_ROUTER_LOGITS = 1000`). Hypothesized as the cause of a separate reproducible stall (below); re-tested with the cap in place and the stall recurred identically — kept as a legitimate independent fix, explicitly **not** claimed as the stall's resolution
+
+### Known issue — not fixed this release
+
+**Reproducible stall under certain concurrent batch compositions (issues #10/#16, reopened scope)**
+
+Full 570-question MMLU runs, and several smaller batched runs, stall
+reproducibly (GPU pinned near 100%, or 15-25% depending on the run, no
+forward progress for 100s+, in-process `SIGKILL` sometimes doesn't land —
+`docker kill` required) at specific points. Extensively isolated this
+session and **not** explained by: prompt content in isolation (a known
+stall position run alone, batch=1, completes cleanly with hundreds of
+real shadow activations), a generic batch-size ceiling (batch=16 is clean
+for some slices, stalls for others), process reuse (fresh-process re-runs
+stall identically), determinism/race (4/4 identical repeats of a known-
+clean slice), prompt length, subject boundaries, or host memory pressure
+(all directly tested and ruled out — see `LOGBOOK.md`, 2026-08-10
+entries), CUDA Graph interaction (already disabled, `enforce_eager=True`),
+chunked prefill (already disabled), or per-row CPU-GPU sync pressure in
+the GCSG hook (a well-grounded, code-verified candidate — tested directly
+with a real fix in place, disproven). Current best explanation: an
+interaction effect between specific concurrently-scheduled prompts,
+mechanism unidentified. Tracked
+as an open item on issues #10/#16, which stay open on purpose rather than
+being closed against a partial fix.
+
+### Status
+
+**In progress — not released.** Shadow execution is real and verified for
+what it targets (the offload/pin_memory crash class is fixed on both
+quantization paths, numerically and end-to-end). Full-dataset MMLU
+quality comparison against the 72.3% hook-only baseline (Möllstorp-era
+measurement) is blocked by the stall above — partial coverage only via a
+skip-and-continue strategy, with an acknowledged representativeness
+caveat (skipped slices could bias subject coverage). Not marked Released
+like Karlshamn/Möllstorp/Eketorp above, on purpose — the module works,
+but the sprint's own acceptance criterion (GCSG quality degradation < 2%,
+MMLU-5shot) can't be evaluated yet without full coverage.
+
+### Tracking
+
+- Issues #10 and #16 kept open, cross-referenced, updated with the shared-
+  mechanism finding and the real fix — not closed, since the stall above
+  is a distinct, still-open failure surfaced by the same code path
+- Board [OSX-PoC Roadmap](https://github.com/users/danielesalpietro/projects/1) updated: Sprint 3 card moved to In Progress with the real state (not the original stub-scope description), Sprint 6 (Stockholm, telemetry — added mid-sprint, see README) card body filled in, issues #10/#12/#16 added
+
+---
+
+*Next: root-cause the batch-composition stall (issues #10/#16), resume skip-and-continue MMLU coverage, then close out Sprint 3 for real once the acceptance criterion can actually be measured.*
+
+---
+
+\## \[Eketorp] — v0.3.0-dev — 2026-08-08
+
+
+
+\*Named after Eketorp, Öland, Sweden, where M2 — EMH Tier Manager was implemented.\*
+
+
+
+\### Added
+
+
+
+\*\*M2 — EMH Tier Manager (real implementation)\*\*
+
+
+
+\- `src/tier/policies.py` — `LRUPolicy.rank` (ordina per `last\_access\_ts` crescente) e `SEEPolicy.score`/`rank`: quando `context\_vec` è `None`, gamma viene ridistribuito su alpha/beta (LRU pesata, entrambi i termini normalizzati a (0, 1] per restare comparabili a prescindere dalla scala assoluta di access\_count/age); quando `context\_vec` è fornito, σ resta uno stub a 0.0 senza ridistribuire i pesi — comportamento deliberatamente diverso dal caso `None`, non un fallback silenzioso
+
+\- `src/tier/io.py` — `AsyncNVMeIO.read\_shard`/`write\_shard`/`exists`/`delete` via `aiofiles`/`aiofiles.os`. dtype esplicito `uint8` in `read\_shard` (non il default implicito di `np.frombuffer`), coerente col dtype del pool di `SlabAllocator`
+
+\- `src/tier/gpu.py` — `GPUTransfer.to\_vram`/`to\_ddr4`/`vram\_free\_bytes`/`vram\_total\_bytes`/`create\_stream` via `torch.cuda`. Nessuna pipeline multi-stream in M2 — deferred, come già indicato nel docstring del modulo
+
+\- `src/tier/manager.py` — `TierManager` completo: `promote` (NVME→DDR4, DDR4→VRAM, e NVME→VRAM incatenando i due hop sotto lo stesso lock), `evict` (single-hop soltanto — asimmetria intenzionale rispetto a `promote`, documentata esplicitamente nel docstring), `evict\_to\_free\_vram` (ranking SEE/LRU), `prefetch` (`asyncio.gather` con `return\_exceptions=True`: un fallimento su un singolo shard viene loggato, non propagato, così non abortisce il batch), `stats`
+
+\- `src/eat/eat.py` — `ExpertAccessTable.slab` (nuova property read-only): espone la `SlabAllocator` privata la cui lifecycle è già guidata da `initialize()`/`shutdown()`. Unico touch a un file M1 in questo sprint — un accessor puro, nessun cambio a locking, layout o `EATEntry`
+
+
+
+\*\*Benchmarks\*\*
+
+
+
+\- `benchmarks/bench\_tier.py` — P50/P95/P99 reali per NVMe→DDR4 e DDR4→VRAM (quest'ultimo con guardia esplicita su `torch.cuda.is\_available()`: riporta `status: skipped` invece di inventare numeri da un path che non ha toccato GPU reale), JSON output — rimpiazza il placeholder `"status": "pending"`
+
+
+
+\### Design decisions
+
+
+
+\- \*\*Concorrenza: lock per-key, non un redesign dell'RLock di EAT.\*\* Il finding di Möllstorp sulla tail latency dell'RLock sotto contention resta un limite noto e non risolto qui — la regola di Sprint 2 è invece un vincolo di design: EAT viene toccata solo per operazioni sincrone rapide (`lookup`, `update\_tier`), mai mentre un transfer NVMe/GPU è in corso. Questo da solo non bastava: due `promote()` concorrenti sulla stessa key vedrebbero entrambi lo stesso tier di partenza prima dell'`await` sull'I/O, allocando due slot slab per un solo shard logico — un leak reale sotto asyncio, non un edge case teorico, individuato in fase di planning prima di scrivere il codice. Risolto con un `dict[key, asyncio.Lock]` per-key in `TierManager`, creato lazy, che serializza l'intera transizione di tier per una data key. Un test di regressione dedicato (`test\_concurrent\_double\_promote\_no\_slab\_leak`) verifica che due `promote()` concorrenti sulla stessa key producano un solo slot slab allocato
+
+\- \*\*Bloom filter: lasciato invariato.\*\* Il finding di Möllstorp (Bloom filter ~5-14x più lento di un dict semplice) resta parcheggiato — nessuna modifica a `src/eat/bloom.py` o al fast-path di `EAT.lookup()` in questo sprint
+
+\- \*\*Slot ownership: bookkeeping nel TierManager, non in EATEntry.\*\* Nessun campo `slot\_idx` aggiunto a `EATEntry` — `TierManager` traccia da sé quale slot slab (`self.\_slots`) e quale tensor VRAM (`self.\_vram`) appartengono a quale shard, rispettando il layout a 28 byte documentato in M1
+
+\- \*\*DDR4 come staging-only.\*\* Una volta promosso a VRAM, lo slot DDR4 viene liberato immediatamente — nessuna doppia copia residente, bookkeeping più semplice
+
+
+
+\### Fixed
+
+
+
+\*\*`GPUTransfer`/`TierManager` — VRAM non liberata a livello driver dopo evict, trovato solo su hardware reale\*\*
+
+
+
+\- Il primo tentativo di verifica GPU (via `workflow\_dispatch` su `Z8-G4-RTX3090`) ha fatto fallire `test\_evict\_to\_free\_vram\_evicts\_candidate`: `evict\_to\_free\_vram()` continuava a ciclare e sollevava `MemoryError` anche dopo un'eviction riuscita. Causa: `torch.cuda.mem\_get\_info()` (usato da `vram\_free\_bytes()`) riporta la memoria libera a livello driver, non quella che il caching allocator di PyTorch trattiene per riuso dopo un `del tensor` — senza un `torch.cuda.empty\_cache()` esplicito, `vram\_free\_bytes()` restava invariato dopo ogni eviction
+
+\- Il primo fix (aggiungere `GPUTransfer.empty\_cache()` e chiamarlo da `TierManager.evict()`) non bastava: `torch.cuda.empty\_cache()` restituisce al driver solo i blocchi SENZA reference vive, e la variabile locale `tensor` dentro `evict()` continuava a referenziare il tensor anche dopo averlo rimosso da `self.\_vram` — un `del self.\_vram[key]` non è un `del tensor`. Fix definitivo: `self.\_vram.pop(key)` seguito da un `del tensor` esplicito prima di `empty\_cache()`, così l'ultima reference viene rilasciata prima che l'allocator possa restituire il blocco al driver
+
+\- Aggiunto un test di regressione dedicato (`test\_evict\_frees\_vram\_visible\_to\_mem\_get\_info`) che asserisce `vram\_free\_bytes()` aumenti davvero dopo un'eviction, non solo che l'eviction non sollevi eccezioni
+
+\- Bug non riproducibile in nessun test CPU-only o mock — esiste solo con CUDA reale, trovato exattamente eseguendo la verifica GPU che il Möllstorp/Eketorp precedente aveva lasciato in sospeso
+
+
+
+\### Tests
+
+
+
+\- `tests/test\_tier.py` — ogni stub (`pytest.raises(NotImplementedError)` / `pytest.skip("TODO Sprint 2")`) rimpiazzato con asserzioni reali, stesso pattern di riscrittura di `test\_eat.py` in M1. Split CPU/GPU che rispecchia i job CI `cpu-tests`/`full-gpu-tests`: I/O NVMe, policy LRU/SEE, promozione NVME→DDR4, `evict()` single-hop-only, prefetch, e il test di regressione sul double-promote girano ovunque torch sia importabile; tutto ciò che tocca CUDA reale (`GPUTransfer`, DDR4→VRAM, NVME→VRAM incatenato, `evict\_to\_free\_vram`, l'integration test lato VRAM) resta `@pytest.mark.gpu`
+
+\- \*\*Verificato per davvero su hardware reale in questa sessione\*\*, non solo scritto: 28/28 in `test\_tier.py` (inclusi tutti i `@pytest.mark.gpu`), 60/72 nell'intera suite (12 skip sono stub M3 non correlati) — girato due volte, prima direttamente via `docker compose run` contro l'RTX 3090 locale (questa macchina è anche il runner self-hosted `Z8-G4-RTX3090`: nessun round-trip push/workflow\_dispatch necessario per iterare sul bug sopra), poi confermato via un `workflow\_dispatch` reale su CI (`31263503614`, entrambi i job verdi: CPU Tests 35s, Full GPU Tests 45s)
+
+\- 18/18 test non-GPU passati anche via il container leggero `python:3.12-slim` (dependency set identico a `cpu-tests`)
+
+
+
+\### CI/CD
+
+
+
+\- `.github/workflows/ci.yml` — `full-gpu-tests` esegue ora anche `benchmarks/bench\_tier.py` dopo la test suite, caricando il risultato come artifact `bench-tier-result` — stesso schema del passo `bench-eat-result` di M1. \*\*Verificato con un run reale\*\*: `workflow\_dispatch` `31263503614`, entrambi gli artifact scaricati e confrontati (vedi Evaluation sotto)
+
+
+
+\### Evaluation — numeri reali su Z8-G4-RTX3090
+
+
+
+\- \*\*EAT (M1, in-memory) vs TierManager (M2, I/O reale)\*\*: lookup EAT p50≈2.6µs/p95≈2.9µs/p99≈4.7-4.9µs (in linea con Möllstorp, run-to-run entro il ~10% già documentato) contro promote NVMe→DDR4 p50≈5.2ms/p95≈p99≈20.6ms — circa 2000× più lento, atteso: I/O di file reale + overhead asyncio contro un dict in memoria
+
+\- \*\*DDR4→VRAM\*\*: p50≈77ms, ma p95≈p99≈1.3-1.4 secondi — riprodotto identico (stesso ordine di grandezza) sia nel run locale che nel run CI, quindi un effetto sistematico, non rumore. Causa quasi certa: costo one-time di inizializzazione del contesto/allocator CUDA sulla prima vera chiamata GPU del processo — `bench\_tier.py` non ha un'iterazione di warm-up prima di misurare, e con soli 20 campioni quella singola chiamata fredda domina p95/p99. Segnalato onestamente come limite del benchmark attuale, non del codice di `TierManager` — candidato per un refinement futuro (warm-up prima delle misure), non affrontato in questa sessione
+
+
+
+\### Status
+
+
+
+\*\*Verificato su hardware reale.\*\* M2 (Tier Manager) è implementato e verificato per davvero, non solo scritto: 28/28 test di `test\_tier.py` (inclusi tutti i `@pytest.mark.gpu`) passati sia via `docker compose run` diretto contro l'RTX 3090 locale sia via `workflow\_dispatch` su CI (`31263503614`, entrambi i job verdi). 60/72 nell'intera suite (12 skip M3, non correlati). Un bug reale — VRAM non liberata a livello driver dopo evict, vedi Fixed sopra — è stato trovato e corretto proprio grazie a questa verifica: invisibile in ogni test CPU-only/mock, avrebbe fatto ciclare all'infinito `evict\_to\_free\_vram()` in produzione. `benchmarks/bench\_tier.py` ha girato per davvero su hardware target, artifact `bench-tier-result` caricato e confrontato con `bench-eat-result` (vedi Evaluation)
+
+
+
+\### Tracking
+
+
+
+\- Aperte 8 GitHub Issue per i finding lasciati deliberatamente irrisolti tra M1 ed M2, invece di lasciarli solo come note in LOGBOOK.md: \[#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) destino Bloom filter, \[#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) tail latency RLock sotto contention, \[#3](https://github.com/danielesalpietro/vMemoryFabric/issues/3) manca warm-up in `bench\_tier.py`, \[#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) `BloomFilter.remove\_expert()` non implementato, \[#5](https://github.com/danielesalpietro/vMemoryFabric/issues/5) pipeline CUDA stream mancante, \[#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6) manca config ruff/pyproject.toml, \[#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) integrazione PMEM (bloccata da hardware), \[#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) dual-GPU/AER (bloccata da hardware)
+
+\- Board \[OSX-PoC Roadmap](https://github.com/users/danielesalpietro/projects/1) aggiornata: card Sprint 2 spostata a Done col riepilogo reale, card Sprint 3 arricchita coi riferimenti alle issue #1/#2/#5 rilevanti per il kickoff, tutte le 8 issue aggiunte alla board
+
+
+
+\---
+
+
+
+\*Next release: Sprint 3 — M3 (Expert Scheduler): PT-PEP classifier, GCSG guard, AER stub.\*
+
+
+
+\---
+
+
+
 \## \[Möllstorp] — v0.2.0-dev — 2026-08-08
 
 

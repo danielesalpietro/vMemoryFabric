@@ -6,7 +6,7 @@ COMPOSE  = docker compose
 SERVICE  = osx-dev
 RUN      = $(COMPOSE) run --rm $(SERVICE)
 
-.PHONY: build smoke test bench lint typecheck shell clean
+.PHONY: build smoke test bench lint typecheck shell clean gpu-repro-issue10
 
 # ── Setup ──────────────────────────────────────────────────────────────────────
 
@@ -45,6 +45,20 @@ bench-eat:
 
 bench-tier:
 	$(RUN) python benchmarks/bench_tier.py
+
+# ── Diagnostic repros (manual, not wired into CI) ───────────────────────────────
+# Requires the real checkpoint on disk (/data/nvme/models/mixtral-instruct-awq)
+# and a real GPU — not CI-safe (some variants are designed to crash, that's the
+# signal). See LOGBOOK.md 2026-08-10 for the full trail. Each script takes
+# --variant; run without one to see the choices.
+
+gpu-repro-issue10:
+	@echo "issue #10 / path-3 offload crash — diagnostic repros, one variant per run:"
+	@echo "  $(RUN) python scripts/isolate_awq_shadow_call_crash.py"
+	@echo "  $(RUN) python scripts/isolate_awq_offload_variables.py --variant {non-offloaded,pin-memory-forced}"
+	@echo "  $(RUN) python scripts/isolate_marlin_offload_variables.py --variant {non-offloaded,offloaded-unpinned,offloaded-pinned}"
+	@echo "  $(RUN) python scripts/verify_awq_manual_shadow_expert.py"
+	@echo "Run one at a time — CUDA errors are sticky for the rest of a process."
 
 # ── Lint / Typecheck ──────────────────────────────────────────────────────────
 
@@ -93,6 +107,7 @@ help:
 	@echo "  make test-tier    pytest M2 only"
 	@echo "  make test-scheduler pytest M3 only"
 	@echo "  make bench        Benchmark M1 + M2"
+	@echo "  make gpu-repro-issue10  Diagnostic repros, issue #10 offload crash (manual, one at a time)"
 	@echo "  make lint         Ruff linter"
 	@echo "  make typecheck    mypy"
 	@echo "  make shell        Shell interattiva nel container"
