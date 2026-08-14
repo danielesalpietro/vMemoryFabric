@@ -9,8 +9,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from eat import ExpertAccessTable, Tier
 from scheduler import AERManager, DomainLabel, GCSGGuard, PTPEPClassifier
+from scheduler import gcsg as gcsg_module
 from scheduler.gcsg import GatingContext, GCSGWorker
+from tier import TierManager
 
 _FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 _MODEL_PATH   = Path(__file__).resolve().parent.parent / "models" / "ptpep_tfidf_v1.joblib"
@@ -342,6 +345,61 @@ class TestGCSG:
 
         assert worker._shadow_pool == {}
 
+    def test_load_shadow_pool_moves_offloaded_fused_weights_to_gpu_before_quantizing(
+        self, monkeypatch,
+    ):
+        """Bug reale 2026-08-12 (issue #17, sub-goal 6, prima esecuzione mai
+        fatta sotto vero offload — A100, cpu_offload_gb=28): a differenza dei
+        path 2/3, il loop path 1 (FusedMoE fp16 grezzo, non Marlin/AWQ) non
+        pinnava mai esplicitamente w13/w2 in GPU prima di _quantize_int4() —
+        path 1 era sempre stato verificato solo sul modello tiny non
+        offloaded, dove le slice erano già CUDA-resident per costruzione.
+        Sotto offload reale restavano CPU-resident, quantizzate sul posto, e
+        _ShadowExpertINT4 crashava al primo generate() reale: "Expected all
+        tensors to be on the same device, cuda:0 and cpu" nel matmul
+        hidden_states @ w13.T. Verifica solo la decisione di device (.to
+        ('cuda') quando non già CUDA) prima della quantizzazione — la
+        correttezza numerica di _quantize_int4 stessa è verificata altrove."""
+        seen_devices = []
+
+        def _fake_quantize(weight):
+            seen_devices.append(weight.device.type)
+            return weight, 1.0
+
+        monkeypatch.setattr(gcsg_module, "_quantize_int4", _fake_quantize)
+
+        class _FakeOffloadedTensor:
+            def __init__(self, device_type):
+                self.device = SimpleNamespace(type=device_type)
+
+            def to(self, device):
+                assert device == "cuda"
+                return _FakeOffloadedTensor("cuda")
+
+        class _FakeWeightData:
+            def __getitem__(self, expert_id):
+                return _FakeOffloadedTensor("cpu")   # offloaded, come sul checkpoint reale
+
+        class _FakeFusedExperts:
+            num_experts = 8   # hasattr(..., "num_experts") -> is_fused = True
+
+            def __init__(self):
+                self.w13_weight = SimpleNamespace(data=_FakeWeightData())
+                self.w2_weight = SimpleNamespace(data=_FakeWeightData())
+            # niente w13_qweight -> is_marlin_packed = False, dispatch a path 1
+
+        layers = [
+            SimpleNamespace(block_sparse_moe=SimpleNamespace(experts=_FakeFusedExperts()))
+            for _ in range(2)
+        ]
+        worker = self._make_worker(layers, shadow_pool_size=2)
+
+        worker._load_shadow_pool()
+
+        assert set(worker._shadow_pool.keys()) == {0, 1}
+        assert seen_devices, "_quantize_int4 non è mai stato chiamato"
+        assert all(d == "cuda" for d in seen_devices), seen_devices
+
     def test_evaluate_gcsg_for_rows_passes_2d_hidden_states_slice(self):
         """Bug reale 2026-08-10, trovato dal primo run MMLU con shadow
         execution davvero attiva (mai esercitato prima — la shadow execution
@@ -400,6 +458,331 @@ class TestGCSG:
 
     def test_contamination_flag_propagated_to_kvcache(self):
         pytest.skip("TODO Sprint 3 — richiede PagedAttention patch")
+
+
+# ── GCSGWorker ↔ TierManager/EAT wiring (2026-08-12, issue #17) ────────────────
+#
+# Copre la logica pura Python (selezione, seeding, hook di hotness reale,
+# refresh) con lo stesso principio di TestGCSG sopra: GCSGWorker.__new__() +
+# attributi assegnati a mano, bypassando __init__() (import vllm reale). A
+# differenza di TestGCSG, qui il TierManager è REALE (non un fake) — la sua
+# costruzione richiede solo torch importabile, non CUDA vera (stesso motivo
+# per cui TestTierManager, non-gpu-marked, già costruisce TierManager reali
+# in CI cpu-tests). Quello che resta NON testabile qui è la parte
+# effettivamente CUDA-touching: _promote_module_via_tier_manager() (il
+# .to('cuda')/pin_memory() reale dentro TierManager.promote_live_tensor(),
+# via GPUTransfer) — quella richiede hardware reale, vedi il pod.
+
+class TestGCSGTierManagerWiring:
+
+    @pytest.fixture(autouse=True)
+    def _reset_pending_tier_manager(self):
+        """_pending_tier_manager è stato di classe (necessario perché
+        vLLM costruisce GCSGWorker da solo — vedi configure_tier_manager()) —
+        senza reset, un test che lo imposta trapelerebbe negli altri test
+        di questo file e di scheduler.gcsg in generale."""
+        yield
+        GCSGWorker.configure_tier_manager(None)
+
+    @staticmethod
+    def _real_tier_manager(tmp_path):
+        eat = ExpertAccessTable(capacity=1000, n_slots=4)
+        return TierManager(eat=eat, nvme_path=str(tmp_path), gpu_device=0)
+
+    @staticmethod
+    def _make_worker(tier_manager=None, shadow_pool_size=2):
+        worker = GCSGWorker.__new__(GCSGWorker)
+        worker.guard = GCSGGuard(shadow_pool_size=shadow_pool_size, check_vram=False)
+        worker._tier_manager = tier_manager
+        worker._n_experts_cached = None
+        worker._shadow_pool = {}
+        return worker
+
+    # ── configure_tier_manager() — l'unico modo raggiungibile da vLLM ───────
+
+    def test_configure_tier_manager_defaults_to_none(self):
+        """Nessuna leak da altri test — vedi _reset_pending_tier_manager."""
+        assert GCSGWorker._pending_tier_manager is None
+
+    def test_configure_tier_manager_sets_class_level_pending(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        GCSGWorker.configure_tier_manager(mgr)
+        assert GCSGWorker._pending_tier_manager is mgr
+
+    def test_configure_tier_manager_none_clears_pending(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        GCSGWorker.configure_tier_manager(mgr)
+        GCSGWorker.configure_tier_manager(None)
+        assert GCSGWorker._pending_tier_manager is None
+
+    # ── _select_shadow_expert_ids ──────────────────────────────────────────
+
+    def test_select_without_tier_manager_is_round_robin(self):
+        worker = self._make_worker(tier_manager=None, shadow_pool_size=2)
+        assert worker._select_shadow_expert_ids(n_experts=8) == [0, 1]
+
+    def test_select_with_tier_manager_no_traffic_yet_matches_round_robin(self, tmp_path):
+        """Cold start onesto: EAT seeded ma access_count=0 ovunque -> stesso
+        risultato del round-robin, non per caso ma perché sorted() è
+        stabile e range(n_experts) è l'ordine di input — vedi il commento
+        in _select_shadow_expert_ids sul perché NON si usa last_access_ts
+        come tie-break (avrebbe rotto esattamente questa proprietà)."""
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(8):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        assert worker._select_shadow_expert_ids(n_experts=8) == [0, 1]
+
+    def test_select_with_tier_manager_prefers_hottest(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(8):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        for _ in range(5):
+            mgr.eat.access(expert_id=6, shard_idx=0)
+        mgr.eat.access(expert_id=3, shard_idx=0)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        assert worker._select_shadow_expert_ids(n_experts=8) == [6, 3]
+
+    def test_select_with_tier_manager_aggregates_across_layers(self, tmp_path):
+        """Un expert con hotness sparsa su più layer deve battere uno con
+        tutta la hotness concentrata su un solo layer, se il totale è
+        maggiore — vedi la somma per expert_id in _select_shadow_expert_ids."""
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(4):
+            for layer_id in range(3):
+                mgr.eat.insert(expert_id, shard_idx=layer_id, tier=Tier.DDR4)
+        for layer_id in range(3):
+            mgr.eat.access(expert_id=1, shard_idx=layer_id)   # expert 1: 3 totali, sparsi
+        mgr.eat.access(expert_id=2, shard_idx=0)
+        mgr.eat.access(expert_id=2, shard_idx=0)               # expert 2: 2 totali, concentrati
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=1)
+        assert worker._select_shadow_expert_ids(n_experts=4) == [1]
+
+    def test_select_with_tier_manager_no_seed_falls_back(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)   # EAT vuota, nessun seed
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        assert worker._select_shadow_expert_ids(n_experts=8) == [0, 1]
+
+    # ── _seed_eat_entries ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _fake_layers(num_layers, num_experts):
+        return TestGCSG._fake_awq_moduleslist_layers(
+            num_layers=num_layers, num_experts=num_experts, to_succeeds=True,
+        )
+
+    def test_seed_eat_entries_creates_one_per_expert_per_layer(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=self._fake_layers(3, 4))),
+            ),
+        )
+        worker._seed_eat_entries()
+        entries = mgr.eat.get_tier(Tier.DDR4)
+        assert len(entries) == 3 * 4
+        assert all(e.tier == Tier.DDR4 for e in entries)
+
+    def test_seed_eat_entries_idempotent_preserves_existing_traffic(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=self._fake_layers(2, 2))),
+            ),
+        )
+        mgr.eat.insert(expert_id=0, shard_idx=0, tier=Tier.DDR4)
+        mgr.eat.access(expert_id=0, shard_idx=0)   # traffico reale pre-esistente
+
+        worker._seed_eat_entries()
+
+        entry = mgr.eat.lookup(0, 0)
+        assert entry.access_count == 1   # non azzerata/sovrascritta dal seed
+        assert len(mgr.eat.get_tier(Tier.DDR4)) == 2 * 2   # le altre 3 combinazioni seeded
+
+    # ── traffico EAT reale nell'hook .gate ──────────────────────────────────
+
+    def test_evaluate_gcsg_for_rows_feeds_eat_with_real_routing(self, tmp_path):
+        import torch
+        mgr = self._real_tier_manager(tmp_path)
+        mgr.eat.insert(expert_id=0, shard_idx=5, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=0)
+        worker._current_row_request_ids = ["req-0"]
+
+        router_logits = torch.tensor([[10.0, -10.0, -10.0]])   # top-1 = expert 0
+        hidden_states = torch.randn(1, 4096)
+
+        worker._evaluate_gcsg_for_rows(router_logits, hidden_states, layer_id=5)
+
+        assert mgr.eat.lookup(0, 5).access_count == 1
+
+    def test_evaluate_gcsg_for_rows_tracks_real_top1_not_shadow_activation(self, tmp_path):
+        """Il traffico EAT riflette il routing REALE (top-1 del router),
+        indipendentemente da should_activate_shadow()/run_shadow() — deve
+        continuare a fluire anche quando le soglie GCSG non scattano
+        affatto (theta_gate impossibile da superare qui)."""
+        import torch
+        mgr = self._real_tier_manager(tmp_path)
+        mgr.eat.insert(expert_id=1, shard_idx=0, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=0)
+        worker.guard = GCSGGuard(theta_gate=0.999, check_vram=False)
+        worker._current_row_request_ids = ["req-0"]
+
+        router_logits = torch.tensor([[-10.0, 10.0, -10.0]])   # top-1 = expert 1
+        hidden_states = torch.randn(1, 4096)
+
+        worker._evaluate_gcsg_for_rows(router_logits, hidden_states, layer_id=0)
+
+        assert mgr.eat.lookup(1, 0).access_count == 1
+
+    def test_evaluate_gcsg_for_rows_without_tier_manager_untouched(self):
+        """tier_manager=None: nessuna chiamata EAT (non c'è nulla da
+        chiamare), nessuna eccezione — path di default invariato."""
+        import torch
+        worker = self._make_worker(tier_manager=None, shadow_pool_size=0)
+        worker._current_row_request_ids = ["req-0"]
+        router_logits = torch.tensor([[10.0, -10.0, -10.0]])
+        hidden_states = torch.randn(1, 4096)
+        worker._evaluate_gcsg_for_rows(router_logits, hidden_states, layer_id=0)   # non deve sollevare
+
+    # ── refresh_shadow_pool_selection ──────────────────────────────────────
+
+    def test_refresh_without_tier_manager_is_noop(self, caplog):
+        worker = self._make_worker(tier_manager=None)
+        with caplog.at_level(logging.WARNING):
+            worker.refresh_shadow_pool_selection()
+        assert "no-op" in caplog.text
+
+    def test_refresh_before_first_load_is_noop(self, tmp_path, caplog):
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr)
+        assert worker._n_experts_cached is None
+        with caplog.at_level(logging.WARNING):
+            worker.refresh_shadow_pool_selection()
+        assert "prima di _load_shadow_pool" in caplog.text
+
+    def test_refresh_reloads_when_selection_changes(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(4):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        worker._n_experts_cached = 4
+        worker._shadow_pool = {0: object(), 1: object()}   # selezione "corrente" simulata
+
+        calls = []
+        worker._load_shadow_pool = lambda: calls.append(1)
+
+        for _ in range(3):
+            mgr.eat.access(expert_id=3, shard_idx=0)   # rende 3 il più caldo — selezione cambia
+
+        worker.refresh_shadow_pool_selection()
+
+        assert calls == [1]
+
+    def test_refresh_noop_when_selection_unchanged(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(4):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        worker._n_experts_cached = 4
+        worker._shadow_pool = {0: object(), 1: object()}
+
+        calls = []
+        worker._load_shadow_pool = lambda: calls.append(1)
+
+        worker.refresh_shadow_pool_selection()   # nessun traffico -> selezione invariata [0,1]
+
+        assert calls == []
+
+
+# ── Marlin path TierManager wiring (2026-08-12, issue #17) ────────────────────
+#
+# Solo _marlin_pool_shard_key() è pura logica testabile qui — il resto
+# (_build_marlin_tensor_promoter()'s actual transfer, _PinnedMarlinExperts
+# con tensor_promoter reale) richiede torch CUDA vero (GPUTransfer.to_vram()
+# dentro TierManager.promote_live_tensor()), stesso motivo per cui
+# _promote_module_via_tier_manager() del path AWQ non ha un test diretto
+# sopra — verificato su hardware reale (checklist), non qui.
+
+class TestMarlinPoolShardKey:
+
+    def test_deterministic(self):
+        k1 = GCSGWorker._marlin_pool_shard_key(5, [0, 1])
+        k2 = GCSGWorker._marlin_pool_shard_key(5, [0, 1])
+        assert k1 == k2
+
+    def test_order_independent(self):
+        """La composizione del pool conta, non l'ordine in cui è passata
+        — sorted() dentro la funzione."""
+        k1 = GCSGWorker._marlin_pool_shard_key(5, [0, 1])
+        k2 = GCSGWorker._marlin_pool_shard_key(5, [1, 0])
+        assert k1 == k2
+
+    def test_differs_by_layer(self):
+        k1 = GCSGWorker._marlin_pool_shard_key(5, [0, 1])
+        k2 = GCSGWorker._marlin_pool_shard_key(6, [0, 1])
+        assert k1 != k2
+
+    def test_differs_by_pool_composition(self):
+        """Il motivo per cui questa funzione esiste: una composizione
+        diversa allo stesso layer non deve produrre la stessa chiave —
+        vedi la docstring del metodo sul bug di staleness (VRAM di una
+        composizione precedente riusata per errore) che questo evita."""
+        k1 = GCSGWorker._marlin_pool_shard_key(5, [0, 1])
+        k2 = GCSGWorker._marlin_pool_shard_key(5, [2, 6])
+        assert k1 != k2
+
+
+# ── _build_marlin_tensor_promoter — regressione bug reale (2026-08-12) ────────
+#
+# Trovato sul pod, prima verifica hardware del path Marlin:
+# "cannot pin 'torch.cuda.HalfTensor' only dense CPU tensors can be pinned".
+# _build_marlin_shadow_pool() decide "offloaded" controllando SOLO
+# w13_qweight — non tutte le sei tensori Marlin-packed di un layer
+# condividono per forza lo stesso device; alcune (es. w13_scales) possono
+# restare GPU-resident anche quando w13_qweight è offloaded su CPU.
+# Chiamare .pin_memory() incondizionatamente su una già CUDA crashava.
+
+class _FakeCudaTensor:
+    class _Device:
+        type = "cuda"
+    device = _Device()
+
+
+class TestMarlinTensorPromoterDeviceCheck:
+
+    @staticmethod
+    def _make_worker():
+        worker = GCSGWorker.__new__(GCSGWorker)
+        worker._tier_manager = None   # non serve per il ramo testato: lo
+                                       # short-circuit "già CUDA" ritorna
+                                       # prima di toccare _tier_manager
+        return worker
+
+    def test_promoter_returns_already_cuda_tensor_unchanged(self):
+        """Riproduce esattamente lo scenario del bug: un tensore
+        non-dominante già GPU-resident non deve mai arrivare a
+        .pin_memory()."""
+        worker = self._make_worker()
+        promoter = worker._build_marlin_tensor_promoter(layer_id=5, expert_ids=[0, 1])
+
+        fake_cuda_tensor = _FakeCudaTensor()
+        result = promoter("w13_scales", fake_cuda_tensor)   # non il dominante
+
+        assert result is fake_cuda_tensor   # passthrough, nessun crash
+
+    def test_promoter_dominant_name_also_short_circuits_if_already_cuda(self):
+        """Lo stesso controllo si applica anche al tensore dominante
+        (w13_qweight) — anche se nella pratica quello è il segnale usato
+        per decidere 'offloaded', vale la stessa difesa per coerenza."""
+        worker = self._make_worker()
+        promoter = worker._build_marlin_tensor_promoter(layer_id=5, expert_ids=[0, 1])
+
+        fake_cuda_tensor = _FakeCudaTensor()
+        result = promoter("w13_qweight", fake_cuda_tensor)
+
+        assert result is fake_cuda_tensor   # non chiama _tier_manager (None qui) senza crashare
 
 
 # ── AERManager ────────────────────────────────────────────────────────────────

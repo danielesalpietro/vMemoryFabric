@@ -1,0 +1,48 @@
+{
+  "status": "done",
+  "sprint": "2 (nvme_to_ddr4/ddr4_to_vram) + 4 (promote_live_tensor, issue #17)",
+  "module": "TierManager",
+  "note": "shard sintetici da 4194304 byte, non i 256 MB di produzione \u2014 vedi docstring del modulo",
+  "nvme_to_ddr4": {
+    "n_shards": 20,
+    "shard_size_bytes": 4194304,
+    "latency_us": {
+      "p50_us": 1568.7788836658,
+      "p95_us": 6834.737025201321,
+      "p99_us": 6834.737025201321
+    }
+  },
+  "ddr4_to_vram": {
+    "n_shards": 20,
+    "shard_size_bytes": 4194304,
+    "latency_us": {
+      "p50_us": 13269.265182316303,
+      "p95_us": 213210.7182405889,
+      "p99_us": 213210.7182405889
+    }
+  },
+  "promote_live_tensor": {
+    "theoretical_transfer_s_at_bench_size": 0.00048828125,
+    "acceptance_threshold_s_1.5x": 0.000732421875,
+    "pin_False": {
+      "n_shards": 20,
+      "shard_size_bytes": 4194304,
+      "latency_us": {
+        "p50_us": 684.2347793281078,
+        "p95_us": 29831.870924681425,
+        "p99_us": 29831.870924681425
+      },
+      "within_1.5x_theoretical_bandwidth_at_p50": true
+    },
+    "pin_True": {
+      "n_shards": 20,
+      "shard_size_bytes": 4194304,
+      "latency_us": {
+        "p50_us": 194.1290684044361,
+        "p95_us": 82668.07533800602,
+        "p99_us": 82668.07533800602
+      },
+      "within_1.5x_theoretical_bandwidth_at_p50": true
+    }
+  }
+}

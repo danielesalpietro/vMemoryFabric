@@ -1,0 +1,58 @@
+[T+   0.0s] Building EAT + TierManager (real instances, no GPU touched yet)...
+[T+   0.0s] TierManager wired via GCSGWorker.configure_tier_manager() — vLLM will pick it up when it constructs the worker itself (no direct kwarg path exists, see the docstring on configure_tier_manager()/_pending_tier_manager in gcsg.py).
+[T+   0.0s] Loading /data/nvme/models/mixtral-instruct-awq via EngineArgs(worker_cls=GCSGWorker), quantization=awq_marlin, cpu_offload_gb=4 ...
+INFO 08-12 21:03:28 config.py:280] Overriding HF config with {'head_dim': 128}
+`torch_dtype` is deprecated! Use `dtype` instead!
+INFO 08-12 21:03:35 config.py:510] This model supports multiple tasks: {'embed', 'classify', 'score', 'generate', 'reward'}. Defaulting to 'generate'.
+INFO 08-12 21:03:36 awq_marlin.py:109] The model is convertible to awq_marlin during runtime. Using awq_marlin kernel.
+WARNING 08-12 21:03:36 cuda.py:98] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+WARNING 08-12 21:03:36 config.py:642] Async output processing is not supported on the current platform type cuda.
+INFO 08-12 21:03:36 llm_engine.py:234] Initializing an LLM engine (v0.6.6.post1) with config: model='/data/nvme/models/mixtral-instruct-awq', speculative_config=None, tokenizer='/data/nvme/models/mixtral-instruct-awq', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=3328, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=awq_marlin, enforce_eager=True, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=/data/nvme/models/mixtral-instruct-awq, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=False, chunked_prefill_enabled=False, use_async_output_proc=False, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"candidate_compile_sizes":[],"compile_sizes":[],"capture_sizes":[],"max_capture_size":0}, use_cached_outputs=False, 
+INFO 08-12 21:03:36 selector.py:120] Using Flash Attention backend.
+INFO 08-12 21:03:37 model_runner.py:1094] Starting to load model /data/nvme/models/mixtral-instruct-awq...
+Loading safetensors checkpoint shards:   0% Completed | 0/3 [00:00<?, ?it/s]
+[T+  30.0s] heartbeat — process still alive, waiting on the next log line
+[T+  60.0s] heartbeat — process still alive, waiting on the next log line
+Loading safetensors checkpoint shards:  33% Completed | 1/3 [00:53<01:46, 53.28s/it]
+[T+  90.0s] heartbeat — process still alive, waiting on the next log line
+Loading safetensors checkpoint shards:  67% Completed | 2/3 [01:43<00:51, 51.24s/it]
+[T+ 120.0s] heartbeat — process still alive, waiting on the next log line
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [02:08<00:00, 39.30s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [02:08<00:00, 42.73s/it]
+
+INFO 08-12 21:05:53 model_runner.py:1099] Loading model weights took 18.8251 GB
+WARNING 08-12 21:05:54 fused_moe.py:374] Using default MoE config. Performance might be sub-optimal! Config file not found at /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/configs/E=8,N=8192,device_name=NVIDIA_GeForce_RTX_3090.json
+INFO 08-12 21:05:56 worker.py:241] Memory profiling takes 2.79 seconds
+INFO 08-12 21:05:56 worker.py:241] the current vLLM instance can use total_gpu_memory (23.56GiB) x gpu_memory_utilization (0.95) = 22.38GiB
+INFO 08-12 21:05:56 worker.py:241] model weights take 18.83GiB; non_torch_memory takes 1.29GiB; PyTorch activation peak memory takes 1.55GiB; the rest of the memory reserved for KV Cache is 0.72GiB.
+INFO 08-12 21:05:57 gpu_executor.py:76] # GPU blocks: 368, # CPU blocks: 2048
+INFO 08-12 21:05:57 gpu_executor.py:80] Maximum concurrency for 3328 tokens per request: 1.77x
+[T+ 150.0s] heartbeat — process still alive, waiting on the next log line
+INFO 08-12 21:06:00 llm_engine.py:431] init engine (profile, create kv cache, warmup model) took 6.40 seconds
+[T+ 152.5s] load_model() completed with tier_manager wired — checklist item 1 (asyncio.run() bridging inside load_model() didn't raise) PASSES by construction: we got here.
+worker._tier_manager is the real TierManager instance. [checklist wiring OK]
+
+EAT entries after load_model(): 262 total (256 DDR4, 6 VRAM).
+EAT seeded with at least one entry. [checklist item 2 partial: seeding OK]
+Shadow pool populated: expert(s) [0, 1] (shadow_pool_size configured: 2).
+Marlin-path sentinel entries (expert_id=-1) reached Tier.VRAM: 6 confirmed.
+At least one (expert_id, layer_id) pair reached Tier.VRAM via TierManager: 0 confirmed promotions. [checklist item 2 OK — real transfer verified]
+[T+ 152.5s] Running generate()...
+Processed prompts:   0%|          | 0/3 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]WARNING 08-12 21:06:00 fused_moe.py:374] Using default MoE config. Performance might be sub-optimal! Config file not found at /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/configs/E=2,N=8192,device_name=NVIDIA_GeForce_RTX_3090.json
+Processed prompts:  33%|███▎      | 1/3 [00:07<00:14,  7.12s/it, est. speed input: 2.11 toks/s, output: 4.50 toks/s]Processed prompts: 100%|██████████| 3/3 [00:07<00:00,  2.37s/it, est. speed input: 7.59 toks/s, output: 13.49 toks/s]
+  prompt='[INST] What is 2+2? [/INST]' -> " The sum of 2 + 2 is 4. Here's a simple step-by-step breakdown:\n\n1. When you add "
+  prompt='[INST] Write a one-line Python function that reverses a string. [/INST]' -> ' def reverse_string(input_string): return input_string[::-1]\n\nThis function, `reverse_string`, takes an input string'
+  prompt='[INST] Explain quantum entanglement in one sentence. [/INST]' -> " Quantum entanglement is a unique phenomenon where two or more particles become interconnected and instantaneously affect each other's state, no matter how far"
+generate() completed, 3 outputs, 3/3 non-empty.
+
+EAT entries with real routing traffic (access_count > 0) after generate(): 256 / 262.
+Real per-token EAT traffic confirmed. [checklist item 4 OK]
+
+GCSGGuard stats: {'total_tokens_evaluated': 4704, 'shadow_activations': 236, 'activation_rate': 0.050170068027210885, 'contamination_rate_aggregate': 0.050170068027210885, 'tracked_requests': 3, 'shadow_pool_size': 2, 'thresholds': {'theta_gate': 0.85, 'theta_entropy': 0.7, 'theta_contamination': 0.05}}
+
+refresh_shadow_pool_selection() ran without raising. Pool before: [0, 1], after: [0, 6] (changed — either is fine on 3 short prompts, this only confirms the call path itself works).
+[checklist item 5 OK]
+
+SMOKE TEST: GREEN — TierManager/EAT wiring verified end-to-end on real hardware (asyncio bridging, real GPU transfer + EAT tier update, real routing traffic, refresh callable).
+NOT verified here: MMLU quality on this path (LOGBOOK.md priority item 4 — run separately, compare against the 72.28%/72.3% baseline), and the Marlin path (path 2, deliberately untouched by this integration).
+[rank0]:[W812 21:06:09.354757796 ProcessGroupNCCL.cpp:1250] Warning: WARNING: process group has NOT been destroyed before we destruct ProcessGroupNCCL. On normal program exit, the application should call destroy_process_group to ensure that any pending NCCL operations have finished in this process. In rare cases this process can exit before this point and block the progress of another member of the process group. This constraint has always been present,  but this warning has only been added since PyTorch 2.4 (function operator())

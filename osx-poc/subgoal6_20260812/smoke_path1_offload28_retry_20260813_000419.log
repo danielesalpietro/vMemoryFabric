@@ -1,0 +1,69 @@
+[T+   0.0s] Import vllm...
+[T+   5.4s] Loading mistralai/Mixtral-8x7B-Instruct-v0.1 — quantization=None (raw fp16, path 1), cpu_offload_gb=28.0, gpu_memory_utilization=0.95 ...
+[T+   5.4s] This is a ~93GB checkpoint — first download in this project will take real time.
+INFO 08-12 22:04:29 config.py:280] Overriding HF config with {'head_dim': 128}
+`torch_dtype` is deprecated! Use `dtype` instead!
+INFO 08-12 22:04:37 config.py:510] This model supports multiple tasks: {'score', 'embed', 'generate', 'classify', 'reward'}. Defaulting to 'generate'.
+WARNING 08-12 22:04:37 cuda.py:98] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+WARNING 08-12 22:04:37 config.py:642] Async output processing is not supported on the current platform type cuda.
+INFO 08-12 22:04:37 llm_engine.py:234] Initializing an LLM engine (v0.6.6.post1) with config: model='mistralai/Mixtral-8x7B-Instruct-v0.1', speculative_config=None, tokenizer='mistralai/Mixtral-8x7B-Instruct-v0.1', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=512, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=True, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=mistralai/Mixtral-8x7B-Instruct-v0.1, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=False, chunked_prefill_enabled=False, use_async_output_proc=False, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"candidate_compile_sizes":[],"compile_sizes":[],"capture_sizes":[],"max_capture_size":0}, use_cached_outputs=False, 
+/usr/local/lib/python3.12/dist-packages/vllm/transformers_utils/tokenizer_group/tokenizer_group.py:23: FutureWarning: It is strongly recommended to run mistral models with `--tokenizer-mode "mistral"` to ensure correct encoding and decoding.
+  self.tokenizer = get_tokenizer(self.tokenizer_id, **tokenizer_config)
+INFO 08-12 22:04:39 selector.py:120] Using Flash Attention backend.
+INFO 08-12 22:04:40 model_runner.py:1094] Starting to load model mistralai/Mixtral-8x7B-Instruct-v0.1...
+[T+  30.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+INFO 08-12 22:05:07 weight_utils.py:251] Using model weights format ['*.safetensors']
+Loading safetensors checkpoint shards:   0% Completed | 0/19 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:   5% Completed | 1/19 [00:10<03:05, 10.32s/it]
+[T+  60.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  11% Completed | 2/19 [00:20<02:49,  9.97s/it]
+Loading safetensors checkpoint shards:  16% Completed | 3/19 [00:28<02:29,  9.36s/it]
+Loading safetensors checkpoint shards:  21% Completed | 4/19 [00:39<02:26,  9.76s/it]
+[T+  90.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  26% Completed | 5/19 [00:48<02:15,  9.67s/it]
+Loading safetensors checkpoint shards:  32% Completed | 6/19 [00:58<02:05,  9.69s/it]
+Loading safetensors checkpoint shards:  37% Completed | 7/19 [01:07<01:54,  9.56s/it]
+[T+ 120.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  42% Completed | 8/19 [01:18<01:50, 10.02s/it]
+Loading safetensors checkpoint shards:  47% Completed | 9/19 [01:29<01:42, 10.25s/it]
+Loading safetensors checkpoint shards:  53% Completed | 10/19 [01:40<01:35, 10.58s/it]
+[T+ 150.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  58% Completed | 11/19 [01:51<01:24, 10.60s/it]
+Loading safetensors checkpoint shards:  63% Completed | 12/19 [02:05<01:22, 11.75s/it]
+[T+ 180.0s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  68% Completed | 13/19 [02:19<01:14, 12.49s/it]
+Loading safetensors checkpoint shards:  74% Completed | 14/19 [02:30<00:59, 11.96s/it]
+Loading safetensors checkpoint shards:  79% Completed | 15/19 [02:44<00:50, 12.64s/it]
+[T+ 210.7s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  84% Completed | 16/19 [02:59<00:40, 13.36s/it]
+Loading safetensors checkpoint shards:  89% Completed | 17/19 [03:14<00:27, 13.64s/it]
+[T+ 240.7s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+Loading safetensors checkpoint shards:  95% Completed | 18/19 [03:28<00:13, 13.78s/it]
+Loading safetensors checkpoint shards: 100% Completed | 19/19 [03:41<00:00, 13.52s/it]
+Loading safetensors checkpoint shards: 100% Completed | 19/19 [03:41<00:00, 11.64s/it]
+
+INFO 08-12 22:08:52 model_runner.py:1099] Loading model weights took 58.1383 GB
+[T+ 270.7s] heartbeat — process still alive, waiting on the next log line (expected to be slow here — see module docstring)
+WARNING 08-12 22:08:53 fused_moe.py:374] Using default MoE config. Performance might be sub-optimal! Config file not found at /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/configs/E=8,N=14336,device_name=NVIDIA_A100-SXM4-80GB.json
+INFO 08-12 22:08:56 worker.py:241] Memory profiling takes 2.93 seconds
+INFO 08-12 22:08:56 worker.py:241] the current vLLM instance can use total_gpu_memory (79.25GiB) x gpu_memory_utilization (0.95) = 75.29GiB
+INFO 08-12 22:08:56 worker.py:241] model weights take 58.14GiB; non_torch_memory takes 10.66GiB; PyTorch activation peak memory takes 3.12GiB; the rest of the memory reserved for KV Cache is 3.37GiB.
+INFO 08-12 22:08:56 gpu_executor.py:76] # GPU blocks: 1726, # CPU blocks: 2048
+INFO 08-12 22:08:56 gpu_executor.py:80] Maximum concurrency for 512 tokens per request: 53.94x
+INFO 08-12 22:09:01 llm_engine.py:431] init engine (profile, create kv cache, warmup model) took 7.81 seconds
+[T+ 278.0s] load_model() completed. [checklist item 1 OK]
+Shadow pool loaded via path 1: expert(s) [0, 1]. [checklist item 2 OK]
+[T+ 278.0s] Running generate() on 1 short prompt(s), max_tokens=8 — expect this to be slow (heavy offload), that alone is not a failure.
+Processed prompts:   0%|          | 0/1 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts: 100%|██████████| 1/1 [00:10<00:00, 10.23s/it, est. speed input: 1.47 toks/s, output: 0.78 toks/s]Processed prompts: 100%|██████████| 1/1 [00:10<00:00, 10.23s/it, est. speed input: 1.47 toks/s, output: 0.78 toks/s]
+  prompt='[INST] What is 2+2? [/INST]' -> ' The sum of 2 + 2'
+generate() completed, 1/1 non-empty. [checklist item 3 OK]
+
+.gate hooks fired 288 times.
+GCSGGuard stats: {'total_tokens_evaluated': 704, 'shadow_activations': 35, 'activation_rate': 0.04971590909090909, 'contamination_rate_aggregate': 0.04971590909090909, 'tracked_requests': 1, 'shadow_pool_size': 2, 'thresholds': {'theta_gate': 0.85, 'theta_entropy': 0.7, 'theta_contamination': 0.05}}
+Gate hooks fired for real. Shadow activations this run: 35 (activation_rate=5.0% — low or zero on a single short prompt is not a pass/fail signal by itself, same caveat as smoke_test_gcsg_worker.py). [checklist item 4 OK]
+
+Direct shadow-expert forward at REAL scale (expert 0, hidden_size=4096): output shape (4096,), finite, sample values [-0.196533203125, 0.4501953125, 0.338623046875]. [checklist item 5 OK]
+
+SMOKE TEST: GREEN — path 1 (_ShadowExpertINT4) verified end-to-end under real offload (cpu_offload_gb=28.0) on real Mixtral-8x7B dimensions, not just the tiny test model.
+NOT verified here: MMLU quality on this path, whether this offload configuration is remotely production-viable, performance beyond 'did it finish'.
+[rank0]:[W812 22:09:12.676709488 ProcessGroupNCCL.cpp:1250] Warning: WARNING: process group has NOT been destroyed before we destruct ProcessGroupNCCL. On normal program exit, the application should call destroy_process_group to ensure that any pending NCCL operations have finished in this process. In rare cases this process can exit before this point and block the progress of another member of the process group. This constraint has always been present,  but this warning has only been added since PyTorch 2.4 (function operator())

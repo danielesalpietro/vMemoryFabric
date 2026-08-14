@@ -30,7 +30,11 @@ variable-latency slowdown initially mistaken for a deadlock (traced to the
 same pageable-memory mechanism operating correctly but slowly). Both
 findings are cross-checked against vLLM's own upstream issue tracker,
 which confirms the underlying platform limitation is real, structural, and
-currently unaddressed upstream.
+currently unaddressed upstream. **Update (2026-08-12, Sprint 4):** the
+same evaluation reproduced on real Linux (no WSL2) scores 72.28% sliced /
+72.3% single-process — matching the original result within noise on
+different hardware and a different OS/virtualization stack — see §6 and
+§9.
 
 ---
 
@@ -146,6 +150,18 @@ process (`scripts/run_mmlu_in_slices.sh`), with a per-slice watchdog of
 §5's root cause was understood). Results are persisted per-slice to
 `mmlu_results_overnight_20260811.jsonl` so a single slice's timeout or
 failure does not lose the rest of the run.
+
+**Update (2026-08-12, Sprint 4):** slicing was a WSL2-specific mitigation
+for §5's slowdown and an additional, never-root-caused stall observed in
+single-process runs around request 27-31 — not a property of `GCSGWorker`
+itself. On real Linux (RunPod, no WSL2, `pin_memory=True`), the same
+570-question evaluation completed in a single process, single model load,
+without stalling: 570.3s total (106.3s load + 464.0s `generate()`),
+scoring 412/570 (72.3%) — statistically the same result as the sliced run
+on the same platform (412/570, 72.28%) and the original WSL2 run (411/570,
+72.11%). This closes the open question: the process-reuse stall was a
+WSL2 artifact, and slicing is not required on this platform. Full data:
+`LOGBOOK.md`, 2026-08-12 "burn-test" entries.
 
 ---
 
@@ -291,7 +307,8 @@ questions, 57/57 subjects, zero slice failures, unattended overnight
 | Average slice time | 205.0s |
 | Slowest slice | `[32:64)` — 1,784.7s (~29.7 min) — the previously-flagged slow region, now understood per §5 |
 
-Full per-subject breakdown: `mmlu_final_report.md`. Lowest-scoring
+Full per-subject breakdown: `poc_final_report.md` §3.1 (formerly a
+standalone `mmlu_final_report.md`, folded in during Sprint 5). Lowest-scoring
 subjects are STEM-heavy (`abstract_algebra`, `college_physics`,
 `electrical_engineering`, `formal_logic`, `high_school_mathematics`, all
 40.0%) — expected for a 4-bit quantized 8x7B model, not attributed to
@@ -300,11 +317,60 @@ re-broken down per-subject for direct comparison (see §7).
 
 **Note on the shadow-activations figure:** the value above (562,338) is
 the corrected sum across all 18 independent slice processes, each with
-its own `GCSGGuard` state. An earlier draft of `mmlu_final_report.md`
-reported 13,756 — the last slice's own counter, mistaken for a run-wide
+its own `GCSGGuard` state. An earlier draft of the MMLU results report
+(now `poc_final_report.md` §3.1) reported 13,756 — the last slice's own counter, mistaken for a run-wide
 total. No per-slice `total_tokens_evaluated` is logged in the results
 file, so an aggregate activation *rate* cannot be derived from this run;
 a rerun with that field added would be needed.
+
+### 6.1 Cross-hardware / cross-platform reproduction (2026-08-12, Sprint 4)
+
+The same evaluation was repeated on real Linux (RunPod, RTX A5000, no
+WSL2), both sliced (matching this section's method) and single-process
+(§2.6):
+
+| Run | Platform | Correct | Accuracy | Wall time |
+|---|---|---|---|---|
+| Original | WSL2, RTX 3090 | 411/570 | 72.11% | overnight (hours) |
+| Sliced (18×) | Real Linux, RTX A5000 | 412/570 | 72.28% | ~38-40 min |
+| Single-process | Real Linux, RTX A5000 | 412/570 | 72.3% | 9.5 min |
+
+All three agree within noise on a 570-question sample. This is evidence
+the pipeline's quality behavior is stable across GPU generation, driver
+stack, and OS/virtualization layer — not a claim of statistical
+significance (§7 still applies: three runs, not a distribution).
+
+**New finding — shadow-execution activation rate correlates with latency,
+not accuracy.** Per-slice `shadow_activations` vs. per-slice accuracy:
+r=0.04 (no relationship — contamination doesn't selectively degrade
+high-activation slices). Per-slice `shadow_activations` vs. per-slice
+wall time: r=0.95 (strong) — the four slowest slices in the sliced run
+were exactly the four with 3-4× the typical activation count, consistent
+with each shadow activation being an extra forward pass through the INT4
+verification expert. This is a real, previously-unmeasured *performance*
+cost of shadow execution, distinct from the quality-cost figures this
+report otherwise focuses on — see §9. **Refinement, independently
+verified against the raw archived logs:** r=0.95 used each slice's total
+elapsed time, which bundles in the ~99s near-constant model-load cost.
+Isolating just `generate()` duration per slice (from `orchestrator.log`)
+against `shadow_activations` tightens this to **r=0.993** — expected,
+since model load (91.6-106.8s, low variance) is essentially independent
+of content while `generate()` duration (11.0-60.7s) is the part the
+extra shadow forward passes actually drive. Also cross-validated: total
+`shadow_activations` differs by only 23 out of 562K (~0.004%) between the
+sliced run's 18-process sum (562,403) and the single-process run's own
+`GCSGGuard` count (562,380) — same workload, two different process
+topologies, near-identical activation count, further evidence the
+behavior is deterministic rather than an artifact of either run.
+
+**Minor open observation, not investigated further:** the single-process
+run's per-request throughput briefly drops around request ~211-221 (to
+~0.29 it/s) and again, smaller, near ~302-320, both self-recovering
+within ~10-15s with nothing logged by vLLM at this log level. Far milder
+than §5's WSL2 stall (which never self-resolved), and it didn't threaten
+the run, but it's a real, measurable pattern in similar territory to the
+historical trigger zone (request ~27-31) that hasn't been explained.
+Flagged for follow-up if it recurs or grows on a larger run.
 
 ---
 
@@ -318,25 +384,85 @@ M1 technical report's limitations section) rather than left implicit:
   the project's EAT (M1) or Tier Manager (M2). The shadow pool's expert
   selection is a round-robin placeholder (`range(shadow_pool_size)`), not
   guided by real hotness; that integration is EAT/Tier Manager work not
-  yet done. M1's own extended benchmark found its Bloom filter ~5–14×
-  slower than a plain dict on this workload (issue #1) — an open question
-  independent of this report. Dual-GPU/AER (issue #8) was not exercised.
-  "vMemoryFabric is alive" as a claim about the full system is **not**
+  yet done. **Update (2026-08-12, Sprint 4):** that integration now
+  exists mechanically for both quantization paths — `GCSGWorker`'s shadow
+  pool can be routed through `TierManager`/EAT instead of
+  `cpu_offload_gb` (opt-in, `configure_tier_manager()`). AWQ (path 3) is
+  validated end-to-end: a full 570-question MMLU rerun on the
+  TierManager-routed path scored 411/570 (72.1%), matching the original
+  baseline's total exactly, with one 32-question slice landing an exact
+  per-subject match. Marlin (path 2) is verified mechanically on real
+  hardware (checklist smoke test, 6 sentinel EAT entries confirmed
+  reaching Tier.VRAM) but **not yet quality-validated** — no MMLU rerun
+  exists yet on the TierManager-routed Marlin path specifically, only on
+  Marlin via the original `cpu_offload_gb` path (§6). **Update
+  (2026-08-13):** closed. `eval_mmlu_gcsg.py`'s `--wire-tier-manager` had
+  been silently forcing `quantization=awq` — stale from before Marlin was
+  wired, since it predated this integration and assumed `awq_marlin`
+  would exercise the untouched Marlin path by mistake. Added an explicit
+  `--quantization` flag; reran on the same RTX 3090 used for the AWQ
+  rerun. A 32-question slice matched AWQ's per-subject result exactly
+  (`shadow_activations` within 0.01%); the full 570-question
+  single-process run scored 412/570 (72.28%), matching the historical
+  Marlin baseline exactly. Both quantization paths are now fully
+  validated end-to-end on the TierManager-routed integration. Round-robin
+  expert selection is still the placeholder in both cases; hotness-driven
+  selection remains open. The small ~0.7% per-answer divergence noted for
+  AWQ's TierManager-routed rerun (§9 item 2) recurs identically here even
+  with matched quantization — not attributable to the AWQ↔Marlin kernel
+  switch as first suspected; more likely execution-topology (single
+  process vs. 18 slices) or ordinary floating-point variance at this
+  scale, independent of quantization path. Full data: `LOGBOOK.md`,
+  2026-08-12/13 entries ("TierManager wired" through "Marlin path MMLU
+  rerun on 3090 matches baseline exactly");
+  `osx-poc/marlin_mmlu_20260812/mmlu_marlin_singleshot_*.jsonl`. M1's own
+  extended benchmark found its original Bloom filter
+  ~5–14× slower than a plain dict on this workload (issue #1) — **closed
+  2026-08-12**: the Bloom filter was removed from EAT's hot path entirely
+  rather than tuned, since the plain-dict lookup it wrapped was already
+  the correct answer at this scale. Dual-GPU/AER (issue #8) was not
+  exercised. "vMemoryFabric is alive" as a claim about the full system is
+  **not**
   what this report supports; what it supports is narrower and stated in
   the abstract.
-- **Single run, no statistical repetition.** The 72.11% figure is one
-  overnight run. Earlier benchmark work on this same hardware (M1
-  `bench_eat.py`) observed ~32% run-to-run variance on unrelated timing
-  metrics with no code change — accuracy is a different, more discrete
-  metric, but repeated full runs have not been done to establish a
-  confidence interval here.
+- **Still no formal confidence interval, despite now three runs.** The
+  original 72.11% figure was one overnight run; two more full runs on
+  different hardware/OS (§6.1: 72.28% sliced, 72.3% single-process, both
+  real Linux) landed within noise of it. That is evidence of
+  cross-platform stability, not a substitute for repeated runs on fixed
+  hardware to establish a real confidence interval — the three runs
+  differ in platform, not just in random seed. Earlier benchmark work on
+  this same hardware (M1 `bench_eat.py`) observed ~32% run-to-run
+  variance on unrelated timing metrics with no code change — accuracy is
+  a different, more discrete metric, but a proper repeated-runs interval
+  still has not been established.
 - **`pin_memory=True` is diagnostic only.** Used to confirm the mechanism
   in §5, never validated under sustained production-scale load; not
   proposed as a shippable configuration change.
 - **Path 1 (`_ShadowExpertINT4`) untested under offload.** Only paths 2
   (Marlin) and 3 (AWQ) were exercised against the real checkpoint under
   real offload; path 1 is only verified against a tiny, non-offloaded test
-  model.
+  model. **Closed 2026-08-12, Sprint 4 sub-goal 6:** exercised for the
+  first time against real Mixtral-8x7B-Instruct-v0.1 (unquantized,
+  ~93.4GB) dimensions under real offload (A100 SXM 80GB,
+  `cpu_offload_gb=28`). Found and fixed a genuine bug in the process: the
+  fused-FusedMoE build loop never pinned offloaded `w13_weight`/
+  `w2_weight` slices to GPU before quantizing (unlike paths 2/3, which
+  both do this explicitly) — under real offload the slices stayed
+  CPU-resident, and `_ShadowExpertINT4`'s forward crashed on its first
+  real `generate()` call ("Expected all tensors to be on the same
+  device, cuda:0 and cpu"). Fixed with the same device-check-then-pin
+  pattern paths 2/3 already use; retried green: `load_model()` completed
+  (58.14GiB weights resident, cpu_offload_gb=28 covering the rest),
+  shadow pool populated via path 1, `generate()` produced real non-empty
+  output, gate hooks fired (288 calls, 35 shadow activations), and the
+  INT4 forward was verified numerically correct at real
+  `hidden_size=4096` (previously only checked at the tiny model's 1024).
+  This is a mechanics/correctness check, not an MMLU quality claim, and
+  not a production-viability claim for this offload configuration — see
+  §9 item 3. Full data: `LOGBOOK.md`, 2026-08-12 "sub-goal 6 ... verified
+  end-to-end under real offload" entry;
+  `osx-poc/subgoal6_20260812/smoke_path1_offload28_retry_*.log`.
 - **Per-subject shadow-vs-baseline comparison not available.** The 72.3%
   hook-only baseline exists as an aggregate figure from an earlier
   session; a subject-by-subject baseline breakdown to compare against
@@ -354,6 +480,19 @@ M1 technical report's limitations section) rather than left implicit:
   outright crash in a different (UVA/NVFP4) offload path, on a much newer
   vLLM release, closed `not_planned`. This project's wrapper-granularity
   finding (§4) was added there as a comment during this investigation.
+  **Update (2026-08-12):** an independent reporter confirmed the identical
+  failure mode still reproduces on a stack with essentially nothing in
+  common with this project's own — vLLM 0.27.1, PyTorch 2.13.0+cu130, an
+  RTX 5090 (Blackwell, SM120, 24GB), and a different model family entirely
+  (`nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4`, hybrid NemotronH,
+  not Mixtral). Same trigger (`--cpu-offload-gb 4`, Marlin *and* the newer
+  Humming MoE backend both affected), same fix (`--cpu-offload-gb 0`,
+  everything GPU-resident). This is now confirmed across ~20 vLLM releases,
+  three GPU generations (Ampere → Ada → Blackwell), and two unrelated model
+  architectures — strengthens §5's conclusion that this is a structural
+  WSL2 platform limitation, not specific to this project's stack, and that
+  waiting for an upstream fix (rather than the EAT/Tier-Manager-mediated
+  approach in §9) is not a viable path.
 - MoE quantization / precision-degraded expert literature — not yet
   surveyed; to be added before any external submission.
 
@@ -390,13 +529,92 @@ rather than GCSG in isolation:
    (`torch.zeros(1024).pin_memory()` reporting `is_pinned() == True`)
    exists, but was never soak-tested. This needs its own direct
    verification before assuming Tier-Manager-mediated transfer would be
-   materially faster than what vLLM does today.
+   materially faster than what vLLM does today. **Update (2026-08-12):**
+   done. 1000 cycles of pin-allocate/H2D/D2H/byte-compare on 256MB shards
+   (Sprint 4, RunPod, real Linux — not WSL2, where this can't be tested at
+   all): 0 mismatches, no timing degradation (pin-alloc time improved
+   -31% after warm-up, total cycle time flat at -1%). Real pinning is
+   safe and stable under sustained load on this platform. Full data:
+   `LOGBOOK.md`, 2026-08-12 "pinning soak test" entry. **Update
+   (2026-08-12, later the same day):** item 1 itself is now done. Both
+   quantization paths GCSG's shadow pool can use are wired through
+   `TierManager`/EAT (`GCSGWorker.configure_tier_manager()`, opt-in,
+   zero behavior change unless wired): AWQ (path 3) first, verified 5/5
+   on real hardware end-to-end; then Marlin (path 2, a shared per-layer
+   proxy under a sentinel EAT key rather than one entry per expert — see
+   `GCSGWorker._marlin_pool_shard_key()`). The Marlin wiring's first real
+   hardware pass failed
+   (`RuntimeError: cannot pin 'torch.cuda.HalfTensor' only dense CPU
+   tensors can be pinned`, layer 5, experts [0, 1]): root cause was
+   `_build_marlin_shadow_pool()` inferring a whole layer's offload state
+   from a single tensor (`w13_qweight`), when vLLM's `cpu_offload_gb`
+   does not actually offload all of a Marlin-packed layer's tensors as
+   one unit — some (e.g. `w13_scales`) can stay GPU-resident while others
+   are offloaded for the same layer, so the transfer code tried to pin an
+   already-CUDA tensor. Fixed with a device check short-circuit before
+   any pin attempt; retried and passed, with 6 sentinel (`expert_id=-1`)
+   EAT entries confirmed reaching `Tier.VRAM`. Round-robin expert
+   selection (not yet hotness-driven) is the one part of this item still
+   open. Full data: `LOGBOOK.md`, 2026-08-12 "Marlin path (path 2) wired
+   through TierManager" and "Marlin path's first real-hardware test
+   failed" entries; regression logs at
+   `osx-poc/regression_20260812/checklist_marlin_*.log`.
 2. Repeat this same MMLU evaluation on that path once it exists, as the
-   next data point against this report's baseline.
+   next data point against this report's baseline. **Update
+   (2026-08-12):** partially superseded — see §6.1. The evaluation was
+   repeated on real Linux (not the Tier-Manager-routed path, which still
+   doesn't exist) and reproduced within noise (72.28%/72.3% vs. 72.11%),
+   confirming the result isn't an artifact of the original WSL2 run
+   specifically. The Tier-Manager-routed rerun (the original intent of
+   this item) remains open — tracked as issue #17. **Update (2026-08-12,
+   later the same day):** done for AWQ (path 3), the path every number in
+   this report through §6.1 was actually measured on until now. With
+   `TierManager` wired in (item 1, above) and `--wire-tier-manager` set,
+   a full 570-question single-process run scored 411/570 (72.1%) —
+   matching the original WSL2 baseline's total exactly (though not
+   byte-identical per-answer, consistent with §6.1's cross-run noise), and
+   a 32-question slice (`fetta1`) landed an exact per-subject match
+   against the historical baseline. This closes the item for AWQ. **Update
+   (2026-08-13):** now closed for Marlin (path 2) too. Getting there
+   required a small fix first: `eval_mmlu_gcsg.py`'s `--wire-tier-manager`
+   had been silently forcing `quantization=awq`, a leftover from before
+   Marlin was wired at all — added an explicit `--quantization` flag so
+   the combination could be run honestly instead of silently falling back
+   to AWQ. Reran on the same RTX 3090 used for AWQ's rerun: a 32-question
+   slice matched AWQ's per-subject result exactly, and the full
+   570-question single-process run scored 412/570 (72.28%), matching the
+   historical Marlin baseline exactly. Both quantization paths this
+   report covers are now fully validated end-to-end on the
+   TierManager-routed integration — no quality-validation gap remains on
+   the wiring side. Full data: `LOGBOOK.md`, 2026-08-12 "full 570-question
+   single-shot MMLU run, TierManager wired" and 2026-08-13 "Marlin path
+   MMLU rerun on 3090 matches baseline exactly" entries;
+   `osx-poc/marlin_mmlu_20260812/`.
 3. Exercise path 1 (`_ShadowExpertINT4`) under real offload for parity
-   with paths 2/3.
+   with paths 2/3. **Update (2026-08-12, Sprint 4 sub-goal 6):** done —
+   see §7's updated Path 1 bullet for the full result, including a real
+   bug found and fixed (offloaded weights were never pinned to GPU before
+   quantizing). Mechanics/correctness only, same caveat as paths 2/3 had
+   at this stage: no MMLU quality number exists yet for path 1 under
+   offload, and this offload configuration (`cpu_offload_gb=28` on an
+   A100 80GB, ~62% of the model offloaded) is not claimed to be
+   production-viable.
 4. Establish a confidence interval via repeated full runs rather than a
    single overnight pass.
+5. **New (2026-08-12):** quantify and, if worthwhile, reduce the latency
+   cost of shadow execution itself. §6.1 found per-slice wall time
+   strongly tracks activation count (r=0.95) — each activation is an
+   extra forward pass through the INT4 verification expert. The
+   project's `<2%` target has only ever been a *quality* budget; this is
+   a first measurement of the *performance* side, not yet bounded by any
+   stated target or optimized against.
+6. **New (2026-08-12):** the fresh-process-per-slice orchestration
+   (§2.6) was a WSL2-specific workaround for an undiagnosed stall and is
+   confirmed unnecessary on real Linux (§2.6 update) — a single process
+   completed all 570 questions cleanly. On platforms without that
+   constraint, single-process evaluation is simpler and ~4× faster
+   wall-clock (9.5 min vs. ~38-40 min for the same result) purely from
+   avoiding 18× redundant model loads.
 
 ---
 
@@ -413,7 +631,7 @@ rather than GCSG in isolation:
 - MMLU harness: `scripts/eval_mmlu_gcsg.py`,
   `scripts/run_mmlu_in_slices.sh`,
   `scripts/measure_mmlu_prompt_lengths.py`, `scripts/probe_kv_blocks.py`
-- Results: `mmlu_final_report.md`,
+- Results: `poc_final_report.md` (M1/M2/M3 consolidated),
   `mmlu_results_overnight_20260811.jsonl`
 - Full investigation trail: `LOGBOOK.md`, 2026-08-09 through 2026-08-11
   entries

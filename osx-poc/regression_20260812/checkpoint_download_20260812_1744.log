@@ -1,0 +1,34 @@
+[33m⚠️  Warning: 'huggingface-cli download' is deprecated. Use 'hf download' instead.[0m
+Fetching 13 files:   0%|          | 0/13 [00:00<?, ?it/s]Still waiting to acquire lock on .cache/huggingface/.gitignore.lock (elapsed: 0.1 seconds)
+Still waiting to acquire lock on .cache/huggingface/.gitignore.lock (elapsed: 0.1 seconds)
+Still waiting to acquire lock on .cache/huggingface/.gitignore.lock (elapsed: 0.1 seconds)
+Still waiting to acquire lock on .cache/huggingface/.gitignore.lock (elapsed: 0.1 seconds)
+Still waiting to acquire lock on .cache/huggingface/.gitignore.lock (elapsed: 0.1 seconds)
+Downloading '.gitattributes' to '.cache/huggingface/download/wPaCkH-WbT7GsmxMKKrNZTV4nSM=.a6344aac8c09253b3b630fb776ae94478aa0275b.incomplete'
+Downloading 'generation_config.json' to '.cache/huggingface/download/3EVKVggOldJcKSsGjSdoUCN1AyQ=.c533f934c6359393a56a3ea067a0df118c14797e.incomplete'
+Download complete. Moving file to .gitattributes
+Download complete. Moving file to generation_config.json
+Downloading 'quant_config.json' to '.cache/huggingface/download/n3_Vkce3tFwejghHB4qJcndi1Og=.a56ea63389f0ed5959b5518faa8c7cd5ac28b602.incomplete'
+Downloading 'special_tokens_map.json' to '.cache/huggingface/download/ahkChHUJFxEmOdq5GDFEmerRzCY=.451134b2ddc2e78555d1e857518c54b4bdc2e87d.incomplete'
+Download complete. Moving file to quant_config.json
+Download complete. Moving file to special_tokens_map.json
+Downloading 'tokenizer.model' to '.cache/huggingface/download/7iVfz3cUOMr-hyjiqqRDHEwVBAM=.dadfd56d766715c61d2ef780a525ab43b8e6da4de6865bda3d95fdef5e134055.incomplete'
+Downloading 'tokenizer.json' to '.cache/huggingface/download/HgM_lKo9sdSCfRtVg7MMFS7EKqo=.43e6daf936dc0f953cb867ec864adab78f92d9ce.incomplete'
+Downloading 'model-00002-of-00003.safetensors' to '.cache/huggingface/download/D5-QTaCbl9VUFv9Wr0C28eFewRc=.b6f4425f5fd63f65d45081a9d1a127c82cd959fee16ddd903d4a5eaab6418491.incomplete'
+Downloading 'model-00001-of-00003.safetensors' to '.cache/huggingface/download/Y6g195DXbsCiN_Ka1NwH6jyLkvc=.d689115cd6b2639d1e280a9e86a3dd4130762833f5d54ff09304e7b603877ce7.incomplete'
+Downloading 'model-00003-of-00003.safetensors' to '.cache/huggingface/download/NmVQgThqhsRkG2FlXLh-M51MilA=.0164eb61d3ebea8e3f84a3198be56a7413a5b1e6a629468090336f6ce32d7d32.incomplete'
+Downloading 'config.json' to '.cache/huggingface/download/8_PA_wEVGiVa2goH2H4KQOQpvVY=.999dd0b1af8f1fb703e124e63b618488d5e4d4e6.incomplete'
+Downloading 'README.md' to '.cache/huggingface/download/Xn7B-BWUGOee2Y6hCZtEhtFu4BE=.e4f491379c4c5100b53406a8da3b418603cf25af.incomplete'
+Downloading 'model.safetensors.index.json' to '.cache/huggingface/download/yVzAsSxRSINSz-tQbpx-TLpfkLU=.618911d6dd2377c4d9765fa9ad24e1b1368ed772.incomplete'
+Download complete. Moving file to tokenizer.json
+Download complete. Moving file to config.json
+Download complete. Moving file to README.md
+Download complete. Moving file to model.safetensors.index.json
+Fetching 13 files:  62%|██████▏   | 8/13 [00:01<00:00,  5.99it/s]Downloading 'tokenizer_config.json' to '.cache/huggingface/download/vzaExXFZNBay89bvlQv-ZcI6BTg=.1c3fdb37e811d06e1eb663d4e16b32f95d4a53b6.incomplete'
+Download complete. Moving file to tokenizer_config.json
+Download complete. Moving file to tokenizer.model
+Fetching 13 files:  77%|███████▋  | 10/13 [00:20<00:06,  2.00s/it]Download complete. Moving file to model-00003-of-00003.safetensors
+Fetching 13 files:  85%|████████▍ | 11/13 [00:20<00:03,  1.82s/it]Download complete. Moving file to model-00001-of-00003.safetensors
+Fetching 13 files:  92%|█████████▏| 12/13 [00:29<00:02,  2.45s/it]Download complete. Moving file to model-00002-of-00003.safetensors
+Fetching 13 files: 100%|██████████| 13/13 [01:28<00:00,  6.78s/it]Fetching 13 files: 100%|██████████| 13/13 [01:28<00:00,  6.78s/it]
+/data/nvme/models/mixtral-instruct-awq

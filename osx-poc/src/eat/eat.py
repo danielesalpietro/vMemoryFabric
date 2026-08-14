@@ -1,19 +1,28 @@
 """M1 — Expert Access Table (EAT) — core.
 
 Struttura centrale di OSX: mappa (expert_id, shard_idx) → EATEntry.
-Bloom filter 2-livelli per lookup O(1) fast-path.
 RW lock per thread safety; version counter per CAS ottimistico.
 
-Latenza target:
-    Bloom hit  → EATEntry : < 100 ns
-    Bloom miss → None      : < 500 ns (confermato miss)
+Bloom filter 2-livelli RIMOSSO (2026-08-12, issue #1, decisione presa
+non solo misurata): a questa scala (capacity ~16k, la struttura sotto è
+già un dict in-memory O(1)) il fast-negative path del Bloom filter
+misurava consistentemente PIÙ LENTO di un lookup diretto sul dict — vedi
+LOGBOOK.md 2026-08-12 per i numeri (~6.8-8.1x più lento, ri-misurato su
+più run) e la sequenza di decisione. Il Bloom filter proteggeva una
+struttura che non ne aveva bisogno: costava latenza invece di
+risparmiarla. `src/eat/bloom.py` è stato rimosso per intero, non solo
+scollegato — nessun altro punto del codice lo usava (verificato via grep
+prima della rimozione), tenerlo in giro come codice morto "per sicurezza"
+non avrebbe protetto nulla.
+
+Latenza target: lookup diretto su dict sotto RLock, nessun livello
+fast-negative intermedio.
 """
 from __future__ import annotations
 
 import threading
 from collections.abc import Iterator
 
-from .bloom import BloomFilter
 from .slab import SlabAllocator
 from .types import SHARD_SIZE_BYTES, EATEntry, ExpertID, ShardID, Tier
 
@@ -21,15 +30,17 @@ _Key = tuple[ExpertID, ShardID]
 
 
 class ExpertAccessTable:
-    """Thread-safe Expert Access Table con Bloom filter 2-livelli.
+    """Thread-safe Expert Access Table — mappa (expert_id, shard_idx) -> EATEntry.
 
     Args:
-        capacity:   Capacità Bloom (default: 256 expert × 64 shard = 16 384).
+        capacity:   Mantenuto per compatibilità di firma con le versioni
+                    precedenti (era la capacità del Bloom filter, rimosso
+                    2026-08-12 — vedi docstring di modulo) — non usato
+                    internamente, nessuna struttura dimensionata su di esso.
         n_slots:    Numero di slot Slab Allocator.
     """
 
     def __init__(self, capacity: int = 16_384, n_slots: int = 4) -> None:
-        self._bloom  = BloomFilter(capacity=capacity)
         self._slab   = SlabAllocator(n_slots=n_slots)
         self._table: dict[_Key, EATEntry] = {}
         self._lock   = threading.RLock()
@@ -70,18 +81,16 @@ class ExpertAccessTable:
                 raise KeyError(f"shard già presente: {key}")
             entry = EATEntry(expert_id=expert_id, shard_idx=shard_idx, tier=tier)
             self._table[key] = entry
-            self._bloom.add(expert_id, shard_idx)
             return entry
 
     def lookup(self, expert_id: ExpertID, shard_idx: ShardID) -> EATEntry | None:
-        """Recupera un EATEntry — fast path via Bloom filter.
+        """Recupera un EATEntry — lookup diretto sul dict (2026-08-12: nessun
+        fast-negative path Bloom davanti, vedi docstring di modulo).
 
         Returns:
             EATEntry se presente, None altrimenti.
         """
         with self._lock:
-            if not self._bloom.may_contain_shard(expert_id, shard_idx):
-                return None
             return self._table.get((expert_id, shard_idx))
 
     def update_tier(self, expert_id: ExpertID, shard_idx: ShardID, new_tier: Tier) -> None:
@@ -99,8 +108,13 @@ class ExpertAccessTable:
     def evict(self, expert_id: ExpertID, shard_idx: ShardID) -> EATEntry | None:
         """Rimuove uno shard dalla EAT (eviction dal Tier Manager).
 
-        NOTE: il Bloom filter non supporta cancellazione — la entry rimane
-        nel BF come falso positivo fino al prossimo rebuild.
+        Nota storica: fino al 2026-08-12 issue #4 tracciava il fatto che
+        il Bloom filter non supportava cancellazione (entry evicted
+        restavano falsi positivi permanenti) — risolto quel giorno con un
+        Counting Bloom Filter, poi il Bloom filter stesso è stato rimosso
+        del tutto poche ore dopo (issue #1: misurato più lento di un
+        lookup diretto a questa scala). Questo metodo ora fa solo
+        `dict.pop()`, senza alcuna struttura ausiliaria da tenere in sync.
         """
         with self._lock:
             return self._table.pop((expert_id, shard_idx), None)
@@ -129,6 +143,28 @@ class ExpertAccessTable:
         with self._lock:
             candidates = [e for e in self._table.values() if e.tier == tier]
             candidates.sort(key=lambda e: e.last_access_ts)
+            return candidates[:n]
+
+    def hottest_candidates(self, tier: Tier, n: int) -> list[EATEntry]:
+        """Top-n entry più "calde" nel tier dato — complemento di
+        eviction_candidates() (2026-08-12, issue #17).
+
+        eviction_candidates() ordina per last_access_ts crescente (più
+        vecchio prima → chi merita di essere evictato). Questo ordina per
+        (access_count, last_access_ts) decrescente (più acceduto, e tra
+        pari il più recente, prima → chi merita di essere promosso/tenuto).
+        Nessun peso SEE/semantico qui — quello vive nella policy del Tier
+        Manager; questo è il segnale grezzo recency+frequency di EAT su
+        cui una policy più sofisticata può costruire, stesso livello di
+        "primitiva" di eviction_candidates().
+
+        Usata da GCSGWorker (M3) per selezionare quali expert entrano
+        nello shadow pool quando è wired a un TierManager, al posto del
+        placeholder round-robin — vedi scheduler.gcsg._select_shadow_expert_ids.
+        """
+        with self._lock:
+            candidates = [e for e in self._table.values() if e.tier == tier]
+            candidates.sort(key=lambda e: (e.access_count, e.last_access_ts), reverse=True)
             return candidates[:n]
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
@@ -162,5 +198,4 @@ class ExpertAccessTable:
             return {
                 "total_entries": len(self._table),
                 "by_tier": by_tier,
-                "bloom_shard_count": len(self._bloom),
             }
