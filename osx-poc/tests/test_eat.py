@@ -96,7 +96,10 @@ class TestEAT:
 
         entry = eat.lookup(expert_id=0, shard_idx=0)
         assert entry.tier == Tier.VRAM
-        assert entry.version == 1
+        # seqlock_write() incrementa version due volte (dispari a inizio
+        # mutazione, pari a fine) — vedi EATEntry.seqlock_write()
+        assert entry.version == 2
+        assert entry.write_in_progress is False
 
     def test_update_tier_missing_raises(self, eat):
         with pytest.raises(KeyError):
@@ -273,7 +276,119 @@ class TestEATConcurrency:
             t.join()
 
         entry = eat.lookup(expert_id=0, shard_idx=0)
-        assert entry.version == n_threads * updates_per_thread
+        # seqlock_write(): 2 bump per update_tier() (dispari a inizio,
+        # pari a fine) — vedi EATEntry.seqlock_write()
+        assert entry.version == 2 * n_threads * updates_per_thread
+        assert entry.write_in_progress is False
+
+
+# ── Seqlock su EATEntry (issue #23, Opzione C+D: version riusato come segnale) ─
+
+class TestEATEntrySeqlock:
+
+    def test_initial_state_not_write_in_progress(self):
+        entry = EATEntry(expert_id=0, shard_idx=0)
+        assert entry.version == 0
+        assert entry.write_in_progress is False
+
+    def test_seqlock_write_marks_write_in_progress(self):
+        entry = EATEntry(expert_id=0, shard_idx=0)
+        with entry.seqlock_write():
+            assert entry.write_in_progress is True
+            assert entry.version == 1
+            entry.access_count = 42
+        assert entry.write_in_progress is False
+        assert entry.version == 2
+        assert entry.access_count == 42
+
+    def test_seqlock_write_bumps_version_even_on_exception(self):
+        """version deve tornare pari anche se il blocco protetto solleva —
+        altrimenti un lettore lock-free vedrebbe write_in_progress=True
+        per sempre dopo un errore a metà scrittura."""
+        entry = EATEntry(expert_id=0, shard_idx=0)
+        with pytest.raises(ValueError):
+            with entry.seqlock_write():
+                raise ValueError("boom")
+        assert entry.write_in_progress is False
+        assert entry.version == 2
+
+    def test_touch_uses_seqlock(self):
+        entry = EATEntry(expert_id=0, shard_idx=0)
+        entry.touch()
+        assert entry.version == 2
+        assert entry.write_in_progress is False
+        entry.touch()
+        assert entry.version == 4
+
+
+# ── Locking strategies (issue #23: A=single, B=striped, C=lockfree_read) ───────
+
+class TestEATLockingStrategies:
+
+    def test_unknown_strategy_raises(self):
+        with pytest.raises(ValueError):
+            ExpertAccessTable(capacity=100, n_slots=1, locking_strategy="bogus")
+
+    @pytest.mark.parametrize("strategy", ["single", "striped", "lockfree_read"])
+    def test_crud_roundtrip(self, strategy):
+        eat = ExpertAccessTable(capacity=1000, n_slots=4, locking_strategy=strategy, n_shards=4)
+
+        entry = eat.insert(expert_id=0, shard_idx=0, tier=Tier.NVME)
+        assert eat.lookup(expert_id=0, shard_idx=0) is entry
+
+        eat.update_tier(expert_id=0, shard_idx=0, new_tier=Tier.VRAM)
+        assert eat.lookup(expert_id=0, shard_idx=0).tier == Tier.VRAM
+
+        touched = eat.access(expert_id=0, shard_idx=0)
+        assert touched.access_count == 1
+
+        assert eat.evict(expert_id=0, shard_idx=0) is not None
+        assert eat.lookup(expert_id=0, shard_idx=0) is None
+        assert len(eat) == 0
+
+    @pytest.mark.parametrize("strategy", ["single", "striped", "lockfree_read"])
+    def test_bulk_ops_span_shards(self, strategy):
+        """Entry su expert_id diversi finiscono su shard diversi con
+        locking_strategy="striped" — i metodi bulk devono comunque vederle
+        tutte (snapshot rilassato ma completo, non parziale)."""
+        eat = ExpertAccessTable(capacity=1000, n_slots=4, locking_strategy=strategy, n_shards=4)
+        for expert_id in range(8):
+            eat.insert(expert_id=expert_id, shard_idx=0, tier=Tier.DDR4)
+        eat.access(expert_id=3, shard_idx=0)
+        eat.access(expert_id=3, shard_idx=0)
+
+        assert len(eat.get_tier(Tier.DDR4)) == 8
+        assert len(eat) == 8
+        assert eat.stats()["total_entries"] == 8
+        assert eat.hottest_candidates(Tier.DDR4, n=1)[0].expert_id == 3
+        assert len(eat.eviction_candidates(Tier.DDR4, n=8)) == 8
+
+    def test_concurrent_insert_no_race_striped(self):
+        """Stesso scenario di TestEATConcurrency.test_concurrent_insert_no_race,
+        ma con locking_strategy="striped" — deve restare senza race condition."""
+        eat = ExpertAccessTable(capacity=20_000, n_slots=4, locking_strategy="striped", n_shards=8)
+        n_threads = 8
+        inserts_per_thread = 1_250
+        errors: list[Exception] = []
+        lock = threading.Lock()
+
+        def worker(thread_idx: int) -> None:
+            try:
+                for i in range(inserts_per_thread):
+                    shard_idx = thread_idx * inserts_per_thread + i
+                    eat.insert(expert_id=0, shard_idx=shard_idx)
+            except Exception as exc:  # pragma: no cover - failure path
+                with lock:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        assert len(eat) == n_threads * inserts_per_thread
 
 
 # ── Benchmark smoke (non pytest-bench, solo ordine di grandezza) ───────────────

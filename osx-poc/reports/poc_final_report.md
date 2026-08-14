@@ -73,7 +73,40 @@ issues #1/#4 (both were about lookup latency, i.e., the Bloom filter's
 actual job) and isn't flagged as a problem; it's the expected price of a
 threadsafe insert path.
 
-### 1.2 `RLock` contention (issue #2 — open, deliberately, not redesigned)
+### 1.2 `RLock` contention (issue #2 — resolved 2026-08-13, Sprint 5/Berg)
+
+**Update 2026-08-13, superseding the "open, deliberately" framing below:**
+implementing the fix turned out to be cheap enough not to wait for real
+production contention first. `ExpertAccessTable` now takes a
+`locking_strategy` (`single`/`striped`/`lockfree_read`, issue #23),
+`lockfree_read` promoted to the production default. A fifth measurement —
+this time from real target hardware, `Z8-G4-RTX3090` via `full-gpu-tests`
+(`workflow_dispatch` run #150) — was added specifically because this
+issue's history (below) is four numbers that don't agree with each other,
+and a claim of "fixed" needed something more than a sixth sandbox run to
+be credible:
+
+| Environment | single p99 | striped p99 | lockfree_read p99 | Improvement (single→lockfree_read) |
+|---|---|---|---|---|
+| Sandbox CI (this session, §contention) | 1119µs | 611µs | 1.3µs | ~860× |
+| Z8-G4-RTX3090, real hardware (§contention) | 758µs | 442µs | 1.1µs | ~700× |
+
+Unlike the four-way discrepancy below, sandbox and real hardware **agree**
+here — both show the same ~700-900× order-of-magnitude improvement and the
+same single > striped > lockfree_read ordering. A same-key "churn" scenario
+(`bench_churn_by_strategy()`, writer and reader hitting the same entries —
+closer to the traffic pattern this section's own §1.2 note below already
+flagged as more realistic than the disjoint-key `contention` benchmark)
+quantifies the race `lockfree_read` deliberately accepts (`EATEntry.touch()`'s
+two non-atomic field writes) instead of leaving it theoretical: 10/119,038
+reads (~0.0084%) sandbox, 10/410,829 (~0.0024%) on Z8 — rare, present in
+both environments, zero on `single`/`striped` in both. A seqlock on the
+existing `version` field (`EATEntry.write_in_progress`) makes this
+detectable by a caller instead of silent. Issues #2 and #23 are closed.
+
+**Original analysis, kept for the record (superseded above, not deleted —
+this project's own convention is to keep contradicted numbers rather than
+overwrite them):**
 
 Three independent measurements of the same synthetic scenario (4 readers +
 1 writer, 20,000 writes), from three different environments, none of them
@@ -325,8 +358,18 @@ run-topology differences — every pairing nets to ±0 or ±1 out of 570.
   the paper's Evaluation section opening — four targets, one table, honest
   about which one (#1) is weaker evidence than the others.
 - §3.0's five-way MMLU invariance is the strongest single Evaluation claim.
-- §1.2's three-way (now four-way) `RLock` contention discrepancy is a
-  genuine open question — cite it as a limitation, not a solved problem.
+- §1.2's `RLock` contention fix (issue #2/#23, 2026-08-13) is now a real
+  Evaluation result, not a limitation: selectable locking strategy,
+  ~700-900× p99 improvement confirmed on both sandbox and real hardware,
+  the underlying race in the fastest option quantified rather than
+  hand-waved (~0.002-0.008% torn-read rate under stress, via a seqlock).
+  The four-way pre-fix measurement discrepancy is still worth a footnote
+  as a methodology note (cross-host benchmark variance), but the framing
+  changes from "unresolved question" to "measured, fixed, and the fix
+  itself independently confirmed across environments" — arguably a
+  *stronger* Evaluation/Methodology story than a clean single-run number
+  would have been, precisely because it shows the discipline of not
+  trusting one measurement.
 - §3.2's shadow-activation/latency correlation (r=0.993) belongs in
   Evaluation as a real latency-vs-quality tradeoff finding.
 - No equivalent MMLU number exists yet for path 1 (`_ShadowExpertINT4`) —
