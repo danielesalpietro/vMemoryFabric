@@ -235,7 +235,7 @@ sezione Evaluation.
   mirata. Non chiudere B3 senza aver letto FineMoE integralmente.
 - **Figure pulite** — il diagramma di architettura oggi è ASCII nel README,
   serve una figura vettoriale vera; grafici latenza/accuratezza a partire
-  dai dati grezzi già presenti (`gpu_telemetry_20260812.csv`, i vari
+  dai dati grezzi già presenti (`logs/sprint4_tekniska/misc/gpu_telemetry_20260812.csv`, i vari
   `mmlu_*.jsonl`, `bench_tier_pod_*.log`) invece delle sole tabelle markdown.
 - **Bibliografia** (`.bib`).
 

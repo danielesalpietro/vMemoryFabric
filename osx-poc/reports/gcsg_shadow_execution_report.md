@@ -148,7 +148,7 @@ process (`scripts/run_mmlu_in_slices.sh`), with a per-slice watchdog of
 2700s and an external `timeout` of 3000s (raised from an original
 250s/300s that was killing legitimate slow-but-completing slices before
 §5's root cause was understood). Results are persisted per-slice to
-`mmlu_results_overnight_20260811.jsonl` so a single slice's timeout or
+`logs/sprint4_tekniska/mmlu/mmlu_results_overnight_20260811.jsonl` so a single slice's timeout or
 failure does not lose the rest of the run.
 
 **Update (2026-08-12, Sprint 4):** slicing was a WSL2-specific mitigation
@@ -415,7 +415,7 @@ M1 technical report's limitations section) rather than left implicit:
   scale, independent of quantization path. Full data: `LOGBOOK.md`,
   2026-08-12/13 entries ("TierManager wired" through "Marlin path MMLU
   rerun on 3090 matches baseline exactly");
-  `osx-poc/marlin_mmlu_20260812/mmlu_marlin_singleshot_*.jsonl`. M1's own
+  `logs/sprint4_tekniska/marlin_mmlu/mmlu_marlin_singleshot_*.jsonl`. M1's own
   extended benchmark found its original Bloom filter
   ~5–14× slower than a plain dict on this workload (issue #1) — **closed
   2026-08-12**: the Bloom filter was removed from EAT's hot path entirely
@@ -462,7 +462,7 @@ M1 technical report's limitations section) rather than left implicit:
   not a production-viability claim for this offload configuration — see
   §9 item 3. Full data: `LOGBOOK.md`, 2026-08-12 "sub-goal 6 ... verified
   end-to-end under real offload" entry;
-  `osx-poc/subgoal6_20260812/smoke_path1_offload28_retry_*.log`.
+  `logs/sprint4_tekniska/subgoal6/smoke_path1_offload28_retry_*.log`.
 - **Per-subject shadow-vs-baseline comparison not available.** The 72.3%
   hook-only baseline exists as an aggregate figure from an earlier
   session; a subject-by-subject baseline breakdown to compare against
@@ -558,7 +558,7 @@ rather than GCSG in isolation:
    open. Full data: `LOGBOOK.md`, 2026-08-12 "Marlin path (path 2) wired
    through TierManager" and "Marlin path's first real-hardware test
    failed" entries; regression logs at
-   `osx-poc/regression_20260812/checklist_marlin_*.log`.
+   `logs/sprint4_tekniska/regression/checklist_marlin_*.log`.
 2. Repeat this same MMLU evaluation on that path once it exists, as the
    next data point against this report's baseline. **Update
    (2026-08-12):** partially superseded — see §6.1. The evaluation was
@@ -589,7 +589,7 @@ rather than GCSG in isolation:
    the wiring side. Full data: `LOGBOOK.md`, 2026-08-12 "full 570-question
    single-shot MMLU run, TierManager wired" and 2026-08-13 "Marlin path
    MMLU rerun on 3090 matches baseline exactly" entries;
-   `osx-poc/marlin_mmlu_20260812/`.
+   `logs/sprint4_tekniska/marlin_mmlu/`.
 3. Exercise path 1 (`_ShadowExpertINT4`) under real offload for parity
    with paths 2/3. **Update (2026-08-12, Sprint 4 sub-goal 6):** done —
    see §7's updated Path 1 bullet for the full result, including a real
@@ -632,7 +632,7 @@ rather than GCSG in isolation:
   `scripts/run_mmlu_in_slices.sh`,
   `scripts/measure_mmlu_prompt_lengths.py`, `scripts/probe_kv_blocks.py`
 - Results: `poc_final_report.md` (M1/M2/M3 consolidated),
-  `mmlu_results_overnight_20260811.jsonl`
+  `logs/sprint4_tekniska/mmlu/mmlu_results_overnight_20260811.jsonl`
 - Full investigation trail: `LOGBOOK.md`, 2026-08-09 through 2026-08-11
   entries
 - Issues: [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10),

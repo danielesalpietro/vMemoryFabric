@@ -89,7 +89,7 @@ README prose:
   re-measured cleanly. Recording that honestly rather than listing it as
   "met" on the same footing as the other three.
 - **M1 (§1):** two real regression-pod benchmark rounds
-  (`regression_20260812/bench_eat_*.log`) gave EAT-vs-dict lookup/insert
+  (`logs/sprint4_tekniska/regression/bench_eat_*.log`) gave EAT-vs-dict lookup/insert
   numbers, confirming the p50 delta is noise (consistent with the
   removal-day "~0.07µs" finding) but surfacing a p99 gap (~1.5-2.0×) that
   no prior report had called out as distinct from the p50 story.
@@ -105,7 +105,7 @@ README prose:
 - **M2 (§2):** both `bench_tier.py` regression rounds (not just the one
   previously cited), plus the soak-test pinning numbers (1000/1000,
   0 mismatches, -31% pin-alloc drift) folded in from
-  `LogBook_20260812_1344/soak_test_pinning/`.
+  `logs/sprint4_tekniska/logbook_20260812_1344/soak_test_pinning/`.
 
 A2 (Sprint 5 plan) is now done: one document,
 `osx-poc/reports/poc_final_report.md`, covers M1/M2/M3 and supersedes the
@@ -221,7 +221,7 @@ as every other recorded run today (562,338/562,354/562,380/562,403, all
 inside 0.02% of each other).
 
 Diffed per-subject against the closer real-Linux baseline
-(`LogBook_20260812_1344/mmlu_sliced_run/mmlu_results.jsonl`, 412/570,
+(`logs/sprint4_tekniska/logbook_20260812_1344/mmlu_sliced_run/mmlu_results.jsonl`, 412/570,
 72.28%) anyway, on principle, rather than stopping at the aggregate
 match:
 
@@ -247,7 +247,7 @@ root-caused further — the accuracy-parity question both runs exist to
 answer is answered either way (aggregate matches, divergence is small
 and consistent in magnitude across both quantization paths).
 
-### Files brought back (`osx-poc/marlin_mmlu_20260812/`)
+### Files brought back (`logs/sprint4_tekniska/marlin_mmlu/`)
 
 `mmlu_marlin_fetta1_...jsonl`, `mmlu_marlin_singleshot_...jsonl`, and
 both raw run logs.
@@ -457,7 +457,7 @@ the GPU. Fixed with the standard `ps aux | grep '[s]moke_test...'`
 bracket trick (breaks self-match by making the grep process's own argv
 not literally contain the unbracketed pattern).
 
-### Files brought back (`osx-poc/subgoal6_20260812/`)
+### Files brought back (`logs/sprint4_tekniska/subgoal6/`)
 
 `probe_kv_blocks_offload24_...log`, `probe_kv_blocks_offload28_...log`,
 `smoke_path1_offload28_FAILED_devicemismatch_...log` (kept, not
@@ -488,7 +488,7 @@ confirmation.
 No new findings — this round's value is confirming round 1 wasn't a
 fluke, on a pod that's about to stop existing. All 8 log files (4 from
 each round; round 1's failed Marlin attempt kept deliberately) are in
-`osx-poc/regression_20260812/`.
+`logs/sprint4_tekniska/regression/`.
 
 ### Before retiring this pod
 
@@ -554,7 +554,7 @@ zero, same conclusion as the sandbox's ~0.07µs, actually tighter here.
 
 ### Files brought back before this (non-persistent) pod goes away
 
-`osx-poc/regression_20260812/`: `pytest_regression_20260812_222841.log`,
+`logs/sprint4_tekniska/regression/`: `pytest_regression_20260812_222841.log`,
 `checklist_awq_20260812_222932.log`,
 `checklist_marlin_FAILED_20260812_223255.log` (kept, not discarded — the
 failure is the useful part of this record),
@@ -745,7 +745,7 @@ asserted).
 ### Telemetry: `nvidia-smi --query-gpu=... -l 2`, one continuous log, not per-test
 
 Started before the first rerun, stopped after the last — 983 samples
-(~33 minutes) in `osx-poc/gpu_telemetry_20260812.csv`. One log with the
+(~33 minutes) in `logs/sprint4_tekniska/misc/gpu_telemetry_20260812.csv`. One log with the
 whole session's timeline is more useful than five separate short ones:
 timestamps let any window be sliced out after the fact, and it settles a
 question that came up mid-run — does polling `nvidia-smi` every 2s add
@@ -792,7 +792,7 @@ time to heat-soak the die the way the 570-question run did.
   statistics on n=20 are noisy, already flagged as such in the previous
   entry).
 
-### Pod configuration captured (`osx-poc/pod_config_20260812/`)
+### Pod configuration captured (`logs/sprint4_tekniska/pod_config/`)
 
 - GPU: RTX 3090, driver `610.43.02`, CC 8.6, 24,576 MiB, 350 W power
   limit — full `nvidia-smi -q` output in `nvidia_smi_full.txt`.
@@ -815,12 +815,12 @@ checkable data point rather than an assumption.
 
 ### Files brought back before this (non-persistent) pod goes away
 
-- `osx-poc/gpu_telemetry_20260812.csv` — full session telemetry
-- `osx-poc/pod_config_20260812/` — GPU/CPU/OS/package snapshot
-- `osx-poc/smoke_test_rerun2_20260812_213944.log`
-- `osx-poc/mmlu_tier_manager_pod_fetta1_rerun2_20260812_215033.jsonl`
-- `osx-poc/mmlu_tier_manager_pod_singleshot_rerun3_20260812_215416.jsonl`
-- `osx-poc/bench_tier_pod_rerun2_20260812_221103.log`
+- `logs/sprint4_tekniska/misc/gpu_telemetry_20260812.csv` — full session telemetry
+- `logs/sprint4_tekniska/pod_config/` — GPU/CPU/OS/package snapshot
+- `logs/sprint4_tekniska/smoke_test/smoke_test_rerun2_20260812_213944.log`
+- `logs/sprint4_tekniska/mmlu/mmlu_tier_manager_pod_fetta1_rerun2_20260812_215033.jsonl`
+- `logs/sprint4_tekniska/mmlu/mmlu_tier_manager_pod_singleshot_rerun3_20260812_215416.jsonl`
+- `logs/sprint4_tekniska/bench_tier_pod/bench_tier_pod_rerun2_20260812_221103.log`
 
 ---
 
@@ -1120,7 +1120,7 @@ This re-frames the earlier finding: the divergence against the
 `awq_marlin` baselines isn't instability introduced by this session's
 work — it's a **stable, reproducible** difference. Cross-checked the two
 `awq_marlin` baselines against each other where visible (worst-10 lists
-in `LogBook_20260812_1344/mmlu_burn_singleshot/burn_singleshot.log` vs.
+in `logs/sprint4_tekniska/logbook_20260812_1344/mmlu_burn_singleshot/burn_singleshot.log` vs.
 the sliced run's aggregated per-subject data) and they agree with each
 other too (e.g. `electrical_engineering` 30.0% in both). Working
 hypothesis, still not root-caused: the divergence tracks the
@@ -1129,7 +1129,7 @@ hypothesis, still not root-caused: the divergence tracks the
 anything in `TierManager`/EAT's own logic. Consistent with, not proof of.
 
 Also re-diffed against the closer real-Linux baseline
-(`LogBook_20260812_1344/mmlu_sliced_run/mmlu_results.jsonl`, 412/570,
+(`logs/sprint4_tekniska/logbook_20260812_1344/mmlu_sliced_run/mmlu_results.jsonl`, 412/570,
 72.28%, same hardware class as today, not the WSL2 one used first): 5
 subjects off by 1 each, net -1 (412→411) — same order of magnitude as
 the WSL2 comparison, same conclusion.
@@ -1164,9 +1164,9 @@ actually asks for.
 
 ### Files brought back before this (non-persistent) pod goes away
 
-- `osx-poc/mmlu_tier_manager_pod_singleshot_rerun_20260812_210821.jsonl`
+- `logs/sprint4_tekniska/mmlu/mmlu_tier_manager_pod_singleshot_rerun_20260812_210821.jsonl`
   — the determinism-check rerun
-- `osx-poc/bench_tier_pod_20260812_212555.log` — the valid
+- `logs/sprint4_tekniska/bench_tier_pod/bench_tier_pod_20260812_212555.log` — the valid
   `bench_tier.py` run (post-pod-checkout-pull); the stale pre-pull run's
   output was not kept, it's missing data, not a different result
 
@@ -1206,7 +1206,7 @@ warning and no fallback — the one item the Z8 run structurally couldn't
 close.
 
 Fetta1 (`[32:64]`, `--wire-tier-manager`, same pod) also came back an
-exact per-subject match against `mmlu_results_overnight_20260811.jsonl`'s
+exact per-subject match against `logs/sprint4_tekniska/mmlu/mmlu_results_overnight_20260811.jsonl`'s
 same range (24/32 both ways, all four sub-scores identical:
 `business_ethics` 6/8, `clinical_knowledge` 7/10, `college_biology` 9/10,
 `college_chemistry` 2/4) — second slice in a row with zero divergence,
@@ -1223,8 +1223,8 @@ came close to firing.
 
 ### Accuracy: 411/570 (72.1%) — same total as one baseline, but not the same answers
 
-Diffed `mmlu_tier_manager_pod_singleshot_20260812_195140.jsonl`'s
-per-subject breakdown against `mmlu_results_overnight_20260811.jsonl`
+Diffed `logs/sprint4_tekniska/mmlu/mmlu_tier_manager_pod_singleshot_20260812_195140.jsonl`'s
+per-subject breakdown against `logs/sprint4_tekniska/mmlu/mmlu_results_overnight_20260811.jsonl`
 (summed across its 18 slice entries — itself 411/570, 72.11%, the
 historical WSL2 baseline, not the 72.28%/72.3% real-Linux number from
 this project's other baseline runs, which don't have a full-570
@@ -1289,10 +1289,10 @@ cross-validated as reproducible rather than a one-off.
 
 ### Files brought back before the (non-persistent) pod goes away
 
-- `osx-poc/mmlu_tier_manager_pod_20260812_194757.jsonl` — fetta1 result
-- `osx-poc/mmlu_tier_manager_pod_singleshot_20260812_195140.jsonl` —
+- `logs/sprint4_tekniska/mmlu/mmlu_tier_manager_pod_20260812_194757.jsonl` — fetta1 result
+- `logs/sprint4_tekniska/mmlu/mmlu_tier_manager_pod_singleshot_20260812_195140.jsonl` —
   full 570-question result, per-subject breakdown
-- `osx-poc/mmlu_tier_manager_pod_singleshot_20260812_195140.log` — full
+- `logs/sprint4_tekniska/mmlu/mmlu_tier_manager_pod_singleshot_20260812_195140.log` — full
   raw run log (timestamps, heartbeat, generate() progress, GCSGGuard
   stats)
 
@@ -1312,12 +1312,12 @@ the hardware that actually matters for it.
 
 ### Fetta0 re-checked from the raw file, not just the summary
 
-`osx-poc/mmlu_tier_manager_fetta0_20260812_183539.jsonl` was pushed
+`logs/sprint4_tekniska/mmlu/mmlu_tier_manager_fetta0_20260812_183539.jsonl` was pushed
 alongside the `--wire-tier-manager` flag (commit `f7d72ce`, other
 session) — checked it directly rather than trusting the earlier relayed
 numbers: `correct: 21/32`, `per_subject_correct` = `{abstract_algebra: 4,
 anatomy: 7, astronomy: 9, business_ethics: 1}`, `tier_manager_wired: true`.
-Diffed against `mmlu_results_overnight_20260811.jsonl`'s own first entry
+Diffed against `logs/sprint4_tekniska/mmlu/mmlu_results_overnight_20260811.jsonl`'s own first entry
 (the historical Marlin baseline) directly, both files in this checkout:
 identical range, identical `correct`, identical `per_subject_correct` —
 byte-for-byte, not approximately. Upgrades the previous entry's "relayed,
@@ -1385,7 +1385,7 @@ through the integrated path before this.
 ### Result: slice `[0:32)`, byte-for-byte match against the historical baseline
 
 Compared directly against the same slice range in
-`mmlu_results_overnight_20260811.jsonl` (the run behind the published
+`logs/sprint4_tekniska/mmlu/mmlu_results_overnight_20260811.jsonl` (the run behind the published
 72.11%/72.28%/72.3% numbers, Marlin path):
 
 | Subject | Baseline (Marlin, 08-11) | Today (AWQ + TierManager) |
@@ -1426,7 +1426,7 @@ Run on the Z8 (WSL2/Docker), not the pod — no rebuild/download needed
 (branch already checked out via the local bind-mount, checkpoint already
 present at the expected path, 23GB). Reported by the other session, not
 independently re-verified against raw log files here (none were pushed
-this time, unlike the earlier `LogBook_20260812_1344/` archive) — recorded
+this time, unlike the earlier `logs/sprint4_tekniska/logbook_20260812_1344/` archive) — recorded
 as relayed, per the same discipline as always, and cross-checked for
 internal consistency against the design instead.
 
@@ -1724,7 +1724,7 @@ to check on the pod, in rough priority order:**
 
 ## 2026-08-12 — Tekniska, continued: independent verification of the archived Sprint 4 data — correlation refines to r=0.993, plus a new micro-slowdown observation
 
-Cross-checked every headline number in `LogBook_20260812_1344/` against the
+Cross-checked every headline number in `logs/sprint4_tekniska/logbook_20260812_1344/` against the
 raw archived files directly (not the `SUMMARY.md`), since that's the
 discipline this project has used throughout — pasted/summarized numbers
 get re-derived from source before being trusted.
@@ -1816,7 +1816,7 @@ same checkpoint, same run. Recorded as a second, faster confirmation of
 the same result, not a replacement measurement.
 
 Session data (soak test log, both MMLU run logs+results, environment
-snapshot) archived locally under `LogBook_20260812_1344/` before pod
+snapshot) archived locally under `logs/sprint4_tekniska/logbook_20260812_1344/` before pod
 shutdown, alongside this commit's `osx-poc/scripts/verify_pin_memory_soak.py`
 (the soak-test script itself, written same day, not yet committed until
 now).
@@ -3075,7 +3075,7 @@ excluded.
   `scripts/dump_prompts_at_positions.py`,
   `scripts/dump_full_prompts_at_stalls.py` — kept in-tree per this
   project's convention, alongside their output
-  (`prompts_dump.txt`/`prompts_full_dump.txt`, gitignored-worthy scratch
+  (`logs/sprint4_tekniska/misc/prompts_dump.txt`/`logs/sprint4_tekniska/misc/prompts_full_dump.txt`, gitignored-worthy scratch
   output, committed anyway for continuity into the next session).
 - Issues #10 and #16 **left open deliberately** — the real fix (GPU
   pinning) is shipped and verified for what it targeted (the original
