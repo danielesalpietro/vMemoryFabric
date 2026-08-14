@@ -53,7 +53,10 @@ class GPUTransfer:
         Returns:
             torch.Tensor su GPU (dtype uint8).
         """
-        raise NotImplementedError("TODO Sprint 2")
+        if stream is not None:
+            with torch.cuda.stream(stream):
+                return torch.from_numpy(data).to(self._device, non_blocking=True)
+        return torch.from_numpy(data).to(self._device)
 
     # ── device → host (eviction VRAM → DDR4) ──────────────────────────────────
 
@@ -66,18 +69,35 @@ class GPUTransfer:
         Returns:
             numpy array uint8 in DDR4.
         """
-        raise NotImplementedError("TODO Sprint 2")
+        return tensor.detach().cpu().numpy()
 
     # ── utils ──────────────────────────────────────────────────────────────────
 
     def vram_free_bytes(self) -> int:
         """VRAM libera corrente su device (bytes)."""
-        raise NotImplementedError("TODO Sprint 2")
+        free, _total = torch.cuda.mem_get_info(self._device_id)
+        return free
 
     def vram_total_bytes(self) -> int:
         """VRAM totale su device (bytes). Atteso: 24 GB per RTX 3090."""
-        raise NotImplementedError("TODO Sprint 2")
+        _free, total = torch.cuda.mem_get_info(self._device_id)
+        return total
 
     def create_stream(self) -> torch.cuda.Stream:
         """Crea un nuovo CUDA stream per trasferimenti asincroni."""
-        raise NotImplementedError("TODO Sprint 2")
+        return torch.cuda.Stream(device=self._device)
+
+    def empty_cache(self) -> None:
+        """Rilascia al driver CUDA i blocchi liberati dal caching allocator
+        di PyTorch.
+
+        torch.cuda.mem_get_info() (usato da vram_free_bytes()) riporta la
+        memoria libera a livello driver, non quella già liberata da un
+        `del tensor` ma ancora trattenuta in cache dall'allocator di
+        PyTorch per riuso. Senza questa chiamata dopo un'eviction,
+        vram_free_bytes() resta invariato e un ciclo evict_to_free_vram()
+        che si affida a quel numero per decidere quando fermarsi continua
+        a evictare oltre il necessario — bug reale, trovato eseguendo i
+        test su hardware reale (mai riprodotto in nessun mock/CPU test).
+        """
+        torch.cuda.empty_cache()
