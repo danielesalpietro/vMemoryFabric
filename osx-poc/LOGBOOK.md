@@ -5,6 +5,66 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-09 — Issue #2 follow-up: re-measuring EAT contention under a more realistic access pattern
+
+**Release:** none — investigation only, no module shipped.
+
+### What we set out to do
+
+GitHub issue #2 (opened during Möllstorp, deferred twice — once as a "Sprint 2
+candidate", once left explicitly unchanged in Eketorp) closed with a warning
+rather than a fix: re-measure under traffic closer to what M3 will actually
+generate before picking a locking strategy (reader-writer lock, sharded
+locking, or something else) for the RLock's ~1,360× p99 tail-latency blowup
+under contention. The original `bench_contention()` (`benchmarks/bench_eat.py`)
+had the writer inserting brand-new keys from a range disjoint from the one
+readers were looking up — real contention on the lock, zero contention on the
+data itself. That's not the shape of M3's real traffic: TierManager's
+promote/evict cycle churns the *same* shard repeatedly while PT-PEP keeps
+checking its hotness.
+
+### What we did
+
+Added `bench_contention_churn()` alongside the original (kept, not replaced,
+for a like-for-like comparison): same 4-reader/1-writer setup, but the writer
+now evicts and re-inserts shards from the same 5,000-key prefill range the
+readers are querying, instead of writing into a disjoint range. Wired into
+`main()`'s output as a second `contention_churn` section.
+
+### Result
+
+Both patterns show real tail-latency degradation — the RLock-fairness problem
+isn't an artifact of the original benchmark's disjoint-key design:
+
+| | contention (original) | contention_churn (new) |
+|---|---|---|
+| p50 reader | 26.7 µs | 24.1 µs |
+| p95 reader | 1,683 µs | 718 µs |
+| p99 reader | 5,456 µs | 1,783 µs |
+| p99/p50 | ~204× | ~74× |
+
+The exact ~1,360× figure from the original Möllstorp measurement didn't
+reproduce on this host — plausibly a different OS-scheduler/Docker-on-Windows
+environment than whichever run produced that number, not a contradiction of
+it. The mechanism is confirmed real under both access patterns regardless:
+still several milliseconds of tail latency against a single-digit-µs median.
+
+### Why this matters
+
+This is the data issue #2 asked for before choosing a fix. It doesn't decide
+RWLock vs. sharded locking on its own — that's still open — but it does
+settle the "is this real or a disjoint-key benchmark artifact" question the
+issue left hanging: it's real, and it survives a workload shape closer to
+what M3 actually generates. Logged against issue #2 rather than acted on
+immediately — same reasoning as Möllstorp's original decision not to
+optimize a component in isolation before the system stressing it is in
+place, which for the *lock design specifically* (as opposed to the Bloom
+filter question) still hasn't fully landed: M3 exists on `Sprint-3-Oskarshamn`
+but isn't merged to `develop`, so this benchmark still can't drive EAT with
+literal production traffic — only a closer synthetic approximation of it.
+
+---
+
 ## 2026-08-08 — Möllstorp, continued: technical report, real-hardware benchmarking, honest negative results
 
 **Release:** [Möllstorp] v0.2.0-dev — same release as below, later the same day.
