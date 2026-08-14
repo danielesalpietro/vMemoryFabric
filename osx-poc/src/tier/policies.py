@@ -11,11 +11,10 @@ SEE — Semantic Expert Eviction:
 LRU — fallback se SEE non disponibile o contesto non definito.
 """
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import List, Optional
-import time
 
-from eat.types import EATEntry, ExpertID, ShardID, Tier
+from dataclasses import dataclass
+
+from eat.types import EATEntry
 
 
 @dataclass
@@ -28,7 +27,7 @@ class EvictionCandidate:
 class LRUPolicy:
     """Eviction LRU pura — fallback sicuro, nessuna dipendenza esterna."""
 
-    def rank(self, candidates: List[EATEntry], n: int) -> List[EvictionCandidate]:
+    def rank(self, candidates: list[EATEntry], n: int) -> list[EvictionCandidate]:
         """Ordina i candidati per last_access_ts crescente (meno recenti prima).
 
         Args:
@@ -58,8 +57,8 @@ class SEEPolicy:
         self._lru  = LRUPolicy()   # fallback interno
 
     def score(self, entry: EATEntry,
-              context_vec: Optional[list[float]] = None,
-              now: Optional[float] = None) -> float:
+              context_vec: list[float] | None = None,
+              now: float | None = None) -> float:
         """Calcola SEE score per una entry.
 
         Args:
@@ -75,8 +74,8 @@ class SEEPolicy:
         """
         raise NotImplementedError("TODO Sprint 2 — σ stub; Sprint 3 integra PT-PEP")
 
-    def rank(self, candidates: List[EATEntry], n: int,
-             context_vec: Optional[list[float]] = None) -> List[EvictionCandidate]:
+    def rank(self, candidates: list[EATEntry], n: int,
+             context_vec: list[float] | None = None) -> list[EvictionCandidate]:
         """Ordina i candidati per SEE score (più bassi = evict first).
 
         Fallback su LRU se context_vec è None e gamma > 0.

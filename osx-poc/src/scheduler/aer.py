@@ -9,7 +9,6 @@ Sarà attivato con l'arrivo della RTX 5080 (dual-GPU setup).
 L'interfaccia è definita ora per garantire compatibilità futura.
 """
 from __future__ import annotations
-from typing import Dict, Optional
 
 
 class AERManager:
@@ -19,7 +18,7 @@ class AERManager:
     In single-GPU, replication_factor è sempre 1.
     """
 
-    def __init__(self, device_ids: Optional[list[int]] = None) -> None:
+    def __init__(self, device_ids: list[int] | None = None) -> None:
         self._device_ids = device_ids or [0]  # dev: solo device 0
 
     def replication_factor(self, expert_id: int) -> int:

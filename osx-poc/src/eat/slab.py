@@ -10,11 +10,12 @@ Caratteristiche target:
 - Metadata in DDR4; payload in numpy array (placeholder per PMEM).
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Dict, Optional
+
+from dataclasses import dataclass
+
 import numpy as np
 
-from .types import SHARD_SIZE_MB, SHARD_SIZE_BYTES
+from .types import SHARD_SIZE_BYTES
 
 
 @dataclass
@@ -37,9 +38,9 @@ class SlabAllocator:
         self._n_slots    = n_slots
         self._shard_size = shard_size
         # Placeholder: in produzione sarà mmap PMEM / numpy su DDR4
-        self._pool: Optional[np.ndarray] = None
+        self._pool: np.ndarray | None = None
         self._free_slots: list[int] = list(range(n_slots))
-        self._alloc_map: Dict[int, SlotMetadata] = {}  # slot_idx → metadata
+        self._alloc_map: dict[int, SlotMetadata] = {}  # slot_idx → metadata
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
 

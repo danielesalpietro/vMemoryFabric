@@ -1,10 +1,9 @@
 """Tipi fondamentali per M1 — EAT."""
 from __future__ import annotations
+
+import time
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Optional
-import time
-
 
 ExpertID = int   # 0..N_experts-1  (2 bytes in layout finale)
 ShardID  = int   # 0..N_shards-1   (1 byte in layout finale)
@@ -42,7 +41,7 @@ class EATEntry:
     tier:           Tier            = Tier.UNKNOWN
     access_count:   int             = 0             # 4 bytes
     last_access_ts: float           = field(default_factory=time.monotonic)  # 8 bytes
-    semantic_vec_ptr: Optional[int] = None          # 8 bytes (futuro: indice vettore)
+    semantic_vec_ptr: int | None = None          # 8 bytes (futuro: indice vettore)
     version:        int             = 0             # 4 bytes (CAS counter)
 
     def touch(self) -> None:

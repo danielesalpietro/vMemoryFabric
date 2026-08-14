@@ -9,16 +9,15 @@ Latenza target:
     Bloom miss → None      : < 500 ns (confermato miss)
 """
 from __future__ import annotations
+
 import threading
-import time
-from typing import Dict, Iterator, Optional, Tuple
+from collections.abc import Iterator
 
 from .bloom import BloomFilter
 from .slab import SlabAllocator
-from .types import EATEntry, ExpertID, SHARD_SIZE_BYTES, ShardID, Tier
+from .types import SHARD_SIZE_BYTES, EATEntry, ExpertID, ShardID, Tier
 
-
-_Key = Tuple[ExpertID, ShardID]
+_Key = tuple[ExpertID, ShardID]
 
 
 class ExpertAccessTable:
@@ -32,7 +31,7 @@ class ExpertAccessTable:
     def __init__(self, capacity: int = 16_384, n_slots: int = 4) -> None:
         self._bloom  = BloomFilter(capacity=capacity)
         self._slab   = SlabAllocator(n_slots=n_slots)
-        self._table: Dict[_Key, EATEntry] = {}
+        self._table: dict[_Key, EATEntry] = {}
         self._lock   = threading.RLock()
 
     # ── CRUD ───────────────────────────────────────────────────────────────────
@@ -64,7 +63,7 @@ class ExpertAccessTable:
             self._bloom.add(expert_id, shard_idx)
             return entry
 
-    def lookup(self, expert_id: ExpertID, shard_idx: ShardID) -> Optional[EATEntry]:
+    def lookup(self, expert_id: ExpertID, shard_idx: ShardID) -> EATEntry | None:
         """Recupera un EATEntry — fast path via Bloom filter.
 
         Returns:
@@ -87,7 +86,7 @@ class ExpertAccessTable:
             entry.tier = new_tier
             entry.version += 1
 
-    def evict(self, expert_id: ExpertID, shard_idx: ShardID) -> Optional[EATEntry]:
+    def evict(self, expert_id: ExpertID, shard_idx: ShardID) -> EATEntry | None:
         """Rimuove uno shard dalla EAT (eviction dal Tier Manager).
 
         NOTE: il Bloom filter non supporta cancellazione — la entry rimane
@@ -96,7 +95,7 @@ class ExpertAccessTable:
         with self._lock:
             return self._table.pop((expert_id, shard_idx), None)
 
-    def access(self, expert_id: ExpertID, shard_idx: ShardID) -> Optional[EATEntry]:
+    def access(self, expert_id: ExpertID, shard_idx: ShardID) -> EATEntry | None:
         """Registra un accesso (touch) e restituisce la entry aggiornata."""
         with self._lock:
             entry = self._table.get((expert_id, shard_idx))
@@ -147,7 +146,7 @@ class ExpertAccessTable:
     def stats(self) -> dict:
         """Metriche per Prometheus / Grafana."""
         with self._lock:
-            by_tier: Dict[str, int] = {}
+            by_tier: dict[str, int] = {}
             for entry in self._table.values():
                 by_tier[entry.tier.name] = by_tier.get(entry.tier.name, 0) + 1
             return {

@@ -12,7 +12,6 @@ from eat import EATEntry, ExpertAccessTable, Tier
 from eat.bloom import BloomFilter
 from eat.slab import SlabAllocator
 
-
 # ── BloomFilter ────────────────────────────────────────────────────────────────
 
 class TestBloomFilter:

@@ -14,7 +14,7 @@ Target latenza DDR4 → VRAM (256 MB shard):
     Target streaming : < 2 ms first-layer-visible con pipeline
 """
 from __future__ import annotations
-from typing import Optional
+
 import numpy as np
 
 try:
@@ -40,7 +40,7 @@ class GPUTransfer:
     # ── host → device (promozione DDR4 → VRAM) ────────────────────────────────
 
     def to_vram(self, data: np.ndarray,
-                stream: Optional["torch.cuda.Stream"] = None) -> "torch.Tensor":
+                stream: torch.cuda.Stream | None = None) -> torch.Tensor:
         """Trasferisce uno shard da DDR4 a VRAM.
 
         NOTE: senza pinned memory, il driver CUDA esegue una copia intermedia
@@ -57,7 +57,7 @@ class GPUTransfer:
 
     # ── device → host (eviction VRAM → DDR4) ──────────────────────────────────
 
-    def to_ddr4(self, tensor: "torch.Tensor") -> np.ndarray:
+    def to_ddr4(self, tensor: torch.Tensor) -> np.ndarray:
         """Trasferisce uno shard da VRAM a DDR4 (eviction write-back).
 
         Args:
@@ -78,6 +78,6 @@ class GPUTransfer:
         """VRAM totale su device (bytes). Atteso: 24 GB per RTX 3090."""
         raise NotImplementedError("TODO Sprint 2")
 
-    def create_stream(self) -> "torch.cuda.Stream":
+    def create_stream(self) -> torch.cuda.Stream:
         """Crea un nuovo CUDA stream per trasferimenti asincroni."""
         raise NotImplementedError("TODO Sprint 2")

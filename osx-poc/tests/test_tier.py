@@ -2,13 +2,11 @@
 
 Coverage target: > 90%.
 """
+from unittest.mock import MagicMock
+
 import pytest
-import asyncio
-from unittest.mock import MagicMock, AsyncMock
-
 from eat import ExpertAccessTable, Tier
-from tier import TierManager, SEEPolicy, LRUPolicy, AsyncNVMeIO, GPUTransfer
-
+from tier import AsyncNVMeIO, GPUTransfer, LRUPolicy, SEEPolicy, TierManager
 
 # ── AsyncNVMeIO ────────────────────────────────────────────────────────────────
 

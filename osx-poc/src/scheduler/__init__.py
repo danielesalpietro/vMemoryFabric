@@ -14,9 +14,9 @@ Vincolo dev: tutto su RTX 3090 24 GB.
     Shadow expert pool (INT4) + expert BF16 attivi devono stare in 24 GB.
     Con Mixtral 8×7B 4-bit: ~14-16 GB model + ~4-6 GB shadow pool.
 """
-from .ptpep import PTPEPClassifier, DomainLabel
-from .gcsg import GCSGGuard, ShadowExecutionResult
 from .aer import AERManager
+from .gcsg import GCSGGuard, ShadowExecutionResult
+from .ptpep import DomainLabel, PTPEPClassifier
 
 __all__ = ["PTPEPClassifier", "DomainLabel", "GCSGGuard",
            "ShadowExecutionResult", "AERManager"]
