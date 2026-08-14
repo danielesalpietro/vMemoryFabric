@@ -52,8 +52,34 @@ non da decisioni di design.
 
 ### A1. Triage dei restanti issue aperti
 
-Rimangono aperti dopo la chiusura di §0: #2, #3, #5, #6, #7, #8, #12, #18.
-Per ciascuno, decisione esplicita fix-vs-documenta, non lasciata implicita:
+Rimangono aperti dopo la chiusura di §0: #3, #5, #6, #7, #8, #12, #18.
+Per ciascuno, decisione esplicita fix-vs-documenta, non lasciata implicita.
+
+**Aggiornamento 2026-08-13 — #2 non è più "documenta come limitazione
+nota":** la decisione sotto (presa 2026-08-12, un giorno prima) è stata
+superata da un fix reale, non solo da una nuova misura. Issue
+[#23](https://github.com/danielesalpietro/vMemoryFabric/issues/23) ha
+prodotto quattro strategie di locking selezionabili su
+`ExpertAccessTable` (`locking_strategy="single"|"striped"|"lockfree_read"`,
+Opzioni A/B/C, più un seqlock su `EATEntry.version` per l'Opzione D) —
+`lockfree_read` è ora il **default** di produzione (nessun chiamante
+esistente lo overridava). Misurato su `bench_eat.py` §contention (chiavi
+disgiunte) e nuovo §churn (stesse chiavi, pattern realistico M2/M3): p99
+reader passa da ~1000µs (single, comportamento pre-fix) a ~1-2µs
+(lockfree_read); il torn-read che l'Opzione C accetta deliberatamente è
+stato misurato, non solo teorizzato: 10/119038 letture (~0.008%) sotto
+churn concorrente, zero su single/striped nello stesso run. Dettagli e
+numeri completi nel branch `claude/rlock-data-quality-9pcxzq`.
+**Rimisurato su hardware reale 2026-08-13** (Z8/`Z8-G4-RTX3090` via
+`full-gpu-tests`, [run #150](https://github.com/danielesalpietro/vMemoryFabric/actions/runs/31726685030)):
+a differenza dei numeri di contention pre-esistenti su #2 (più versioni
+incoerenti tra loro a seconda dell'host, vedi nota su deviazione hardware
+Sprint 4 sotto), qui sandbox CI e Z8 raccontano la stessa storia — p99
+reader `lockfree_read` ~700-900x più veloce di `single` su entrambi gli
+host, torn-read confermati solo su `lockfree_read` (rari, ~0.002-0.008%,
+zero su single/striped). Nessuna riconciliazione necessaria. **#2 e #23
+sono chiuse su GitHub** (state_reason: completed), coerente con la
+regola §0 ("nessun issue si considera chiuso finché non lo è su GitHub").
 
 **Da sistemare prima della delivery** (piccoli, ma pesano sulla prima
 impressione di un reviewer esterno che clona il repo e prova a farlo
@@ -69,10 +95,13 @@ girare):
 **Da documentare come limitazione nota, non da fixare in questo sprint**
 (rientra nel §7 "Limitations" del paper così com'è):
 
-- [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) — RLock
+- ~~[#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) — RLock
   contention: già deciso 2026-08-12 di lasciarlo aperto deliberatamente,
-  nessuna traffic reale lo esercita ancora. Nel paper diventa "known
-  limitation, not yet triggered by production traffic", non un bug nascosto.
+  nessuna traffic reale lo esercita ancora.~~ **Superato 2026-08-13** — vedi
+  addendum in cima a §2/A1: fix reale implementato (issue #23), non più solo
+  documentazione di una limitazione. Nel paper diventa "measured and fixed
+  during Sprint 5" con i numeri del nuovo benchmark §churn, non "known
+  limitation".
 - [#5](https://github.com/danielesalpietro/vMemoryFabric/issues/5) — CUDA
   stream pipelining: future work esplicito.
 - [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7),
