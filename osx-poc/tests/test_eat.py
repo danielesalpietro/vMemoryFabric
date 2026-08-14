@@ -1,6 +1,9 @@
 """Test M1 — Expert Access Table.
 
-Sprint 1 (Möllstorp): BloomFilter, SlabAllocator ed EAT sono implementati.
+Sprint 1 (Möllstorp): SlabAllocator ed EAT sono implementati. Bloom
+filter (era qui, TestBloomFilter) rimosso 2026-08-12 insieme a
+src/eat/bloom.py — issue #1, misurato consistentemente più lento di un
+lookup diretto sul dict a questa scala, vedi LOGBOOK.md.
 
 Coverage target: > 95% (misurata con pytest-cov).
 """
@@ -8,37 +11,9 @@ import threading
 import time
 
 import pytest
+
 from eat import EATEntry, ExpertAccessTable, Tier
-from eat.bloom import BloomFilter
 from eat.slab import SlabAllocator
-
-# ── BloomFilter ────────────────────────────────────────────────────────────────
-
-class TestBloomFilter:
-
-    def test_add_and_may_contain_expert(self):
-        bf = BloomFilter(capacity=1000)
-        bf.add(expert_id=0, shard_idx=0)
-        assert bf.may_contain_expert(0) is True
-        assert bf.may_contain_expert(999) is False
-
-    def test_may_contain_shard_miss(self):
-        bf = BloomFilter(capacity=1000)
-        assert bf.may_contain_shard(expert_id=999, shard_idx=0) is False
-
-    def test_false_positive_rate_within_spec(self):
-        """FP rate < 1% (+ margine statistico) su 10.000 lookup negativi."""
-        bf = BloomFilter(capacity=10_000, error_rate=0.01)
-        for expert_id in range(5_000):
-            bf.add(expert_id=expert_id, shard_idx=0)
-
-        false_positives = sum(
-            1 for expert_id in range(5_000, 15_000)
-            if bf.may_contain_shard(expert_id, 0)
-        )
-        fp_rate = false_positives / 10_000
-        assert fp_rate < 0.02  # 1% target + margine per varianza statistica
-
 
 # ── SlabAllocator ──────────────────────────────────────────────────────────────
 
@@ -165,6 +140,39 @@ class TestEAT:
 
         candidates = eat.eviction_candidates(Tier.DDR4, n=2)
         assert [c.expert_id for c in candidates] == [0, 2]
+
+    def test_hottest_candidates_by_access_count(self, eat):
+        eat.insert(expert_id=0, shard_idx=0, tier=Tier.DDR4)
+        eat.insert(expert_id=1, shard_idx=0, tier=Tier.DDR4)
+        eat.insert(expert_id=2, shard_idx=0, tier=Tier.DDR4)
+
+        eat.access(expert_id=1, shard_idx=0)
+        eat.access(expert_id=1, shard_idx=0)
+        eat.access(expert_id=2, shard_idx=0)
+
+        candidates = eat.hottest_candidates(Tier.DDR4, n=2)
+        assert [c.expert_id for c in candidates] == [1, 2]
+
+    def test_hottest_candidates_tie_break_by_recency(self, eat):
+        eat.insert(expert_id=0, shard_idx=0, tier=Tier.DDR4)
+        eat.insert(expert_id=1, shard_idx=0, tier=Tier.DDR4)
+
+        eat.access(expert_id=0, shard_idx=0)   # stesso access_count (1) per entrambi...
+        eat.access(expert_id=1, shard_idx=0)   # ...ma expert 1 acceduto più di recente
+
+        candidates = eat.hottest_candidates(Tier.DDR4, n=2)
+        assert [c.expert_id for c in candidates] == [1, 0]
+
+    def test_hottest_candidates_ignores_other_tiers(self, eat):
+        eat.insert(expert_id=0, shard_idx=0, tier=Tier.VRAM)
+        eat.insert(expert_id=1, shard_idx=0, tier=Tier.DDR4)
+        eat.access(expert_id=0, shard_idx=0)
+
+        candidates = eat.hottest_candidates(Tier.DDR4, n=5)
+        assert [c.expert_id for c in candidates] == [1]
+
+    def test_hottest_candidates_empty_tier(self, eat):
+        assert eat.hottest_candidates(Tier.VRAM, n=5) == []
 
     def test_len_empty(self, eat):
         assert len(eat) == 0   # dict vuoto

@@ -62,6 +62,2592 @@ place, which for the *lock design specifically* (as opposed to the Bloom
 filter question) still hasn't fully landed: M3 exists on `Sprint-3-Oskarshamn`
 but isn't merged to `develop`, so this benchmark still can't drive EAT with
 literal production traffic — only a closer synthetic approximation of it.
+## 2026-08-13 — Berg, continued: M1/M2 folded in, renamed to `poc_final_report.md`
+
+Requested explicitly by the project owner: extend the just-updated MMLU
+report to also cover M1 (EAT) and M2 (Tier Manager), and give it a title
+that actually matches its contents — "MMLU Final Report" stopped being
+accurate the moment it also had to hold EAT/TierManager benchmark data.
+Renamed `osx-poc/mmlu_final_report.md` → `osx-poc/reports/poc_final_report.md`
+(moved into `reports/` alongside `gcsg_shadow_execution_report.md`, matching
+that directory's existing convention rather than sitting alone at
+`osx-poc/` root next to raw log/data files). Updated the three places that
+referenced the old filename by bare name: `gcsg_shadow_execution_report.md`
+(×3) and `sprint5_berg_plan.md` (×3). This entry and the one below it
+(which describe work done against the old filename) are left as written —
+this project's own convention is to record corrections/renames going
+forward, not rewrite prior entries.
+
+New content, all recomputed from raw sources rather than re-describing
+README prose:
+
+- **§0, new:** the 4 non-functional acceptance criteria evaluated together
+  for the first time, each with its actual supporting number next to it.
+  Three are solid; PT-PEP's <3ms p99 target is flagged as *nominally* met
+  only — the sole number ever recorded against it is a single isolated
+  3.71ms failure that then passed cleanly in the next run, never
+  re-measured cleanly. Recording that honestly rather than listing it as
+  "met" on the same footing as the other three.
+- **M1 (§1):** two real regression-pod benchmark rounds
+  (`regression_20260812/bench_eat_*.log`) gave EAT-vs-dict lookup/insert
+  numbers, confirming the p50 delta is noise (consistent with the
+  removal-day "~0.07µs" finding) but surfacing a p99 gap (~1.5-2.0×) that
+  no prior report had called out as distinct from the p50 story.
+- **M1 §1.2, the interesting one:** issue #2's contention ratio already
+  existed in two disagreeing forms (~1360× original, ~61-91× sandbox
+  re-measurement). Computing the same ratio from the regression-pod logs
+  (already collected for other purposes, never used for this) gives a
+  **third and fourth data point** — ~348×/~413× — that don't match either
+  prior figure. Recorded as a fourth data point in an unresolved question,
+  consistent with the 2026-08-12 decision to leave #2 open rather than
+  chase a root cause that real (single-threaded) traffic doesn't yet
+  motivate investigating.
+- **M2 (§2):** both `bench_tier.py` regression rounds (not just the one
+  previously cited), plus the soak-test pinning numbers (1000/1000,
+  0 mismatches, -31% pin-alloc drift) folded in from
+  `LogBook_20260812_1344/soak_test_pinning/`.
+
+A2 (Sprint 5 plan) is now done: one document,
+`osx-poc/reports/poc_final_report.md`, covers M1/M2/M3 and supersedes the
+README-roadmap-table/scattered-report reconstruction it was meant to
+replace.
+
+---
+
+## 2026-08-13 — Berg, continued: `mmlu_final_report.md` consolidated across Sprint 3+4
+
+`mmlu_final_report.md` was still frozen at its original Sprint 3 snapshot
+(411/570, 72.11%, the `cpu_offload_gb` hook path only) — none of Sprint 4's
+MMLU work had ever been folded into it, even though the file's own title
+says "Final". Missing: the two cross-hardware `cpu_offload_gb` reruns on
+real Linux/RTX A5000 (412/570 both sliced and single-process), the
+TierManager-wired AWQ rerun (411/570, issue #17 sub-goal 3), the
+TierManager-wired Marlin rerun (412/570, closes #17's last open gap), the
+shadow-activations/latency correlation (r=0.95, refined to r=0.993), and
+the promotion-latency benchmark.
+
+Rewrote it from the raw `.jsonl` files directly rather than re-describing
+README/LOGBOOK's prose — which turned out to be imprecise on one point:
+"4 individual answers flipped (2 up, 2 down)" never said which baseline the
+AWQ-wired rerun was diffed against. Recomputing `per_subject_correct`
+diffs directly resolved it: the WSL2-baseline-vs-AWQ-wired pair (both
+411/570) differs on exactly `college_mathematics`, `elementary_mathematics`,
+`high_school_european_history`, `high_school_world_history` — net zero,
+confirmed by direct computation. The separate 4-subject Marlin divergence
+LOGBOOK's 2026-08-13 entry already named (`college_physics`,
+`electrical_engineering`, `high_school_macroeconomics`,
+`machine_learning`) was independently re-derived the same way and matches
+exactly.
+
+New section (§0) leads with a consolidated 5-run table instead of the
+numbers staying scattered: all five full-570 runs — WSL2 baseline,
+A5000 unwired ×2, TierManager-wired AWQ, TierManager-wired Marlin — land
+within 0.7pp of each other across every axis that varies between them
+(platform, hardware generation, quantization backend, data path). Flagged
+this invariance as the strongest single Evaluation-section claim for the
+paper (Sprint 5 plan §B2), stronger stated once than as five separate
+numbers a reader has to reassemble themselves.
+
+Still open: same consolidation treatment for M1/M2 into a PoC Final Report
+(Sprint 5 plan §A2) — this session only covered the MMLU slice, prioritized
+because it's the input the paper's Evaluation section needs first.
+
+---
+
+## 2026-08-13 — Berg: Sprint 5 kickoff (PoC delivery + paper)
+
+Sprint 4 (Tekniska) closed 100% the day before. Before planning any new
+work, ran a consistency check between README/CHANGELOG's claimed-closed
+issues and GitHub's actual state — not assumed, checked directly via the
+API. Found a real gap: [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1),
+[#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4), and
+[#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17) were all
+documented as closed (2026-08-12/13) but still showed **OPEN** on GitHub —
+only #10/#16 were actually closed there. Closed all three for real now,
+each with a comment pointing at the commits that actually resolved them
+(5cd88eb, 64f6bdc for #1/#4; b9871cf/6727a04/3e6c751/256a293 for #17).
+Lesson for the rest of this sprint: an issue isn't closed until GitHub says
+so, not when a LOGBOOK entry says so.
+
+Full plan for the sprint: `osx-poc/reports/sprint5_berg_plan.md`. Two
+tracks, run in parallel:
+
+- **PoC delivery**, targeted at external stakeholders/reviewers, not just
+  internal close-out — triage the remaining open issues (#2/#3/#5/#6/#7/#8/
+  #12/#18) into fix-before-delivery (#3, #6, #12, #18 — all small, all the
+  kind of thing an outside reviewer trips on first) vs. documented-limitation
+  (#2, #5, #7, #8 — already blocked on hardware or a deliberate prior
+  decision), a consolidated PoC Final Report replacing the scattered
+  README/report/LOGBOOK reconstruction, a real end-to-end repro script, and
+  a tagged release.
+- **Paper**, targeting a real venue (OSDI/EuroSys/MLSys 2027, per the
+  existing README citation — specific venue/deadline still to be picked,
+  first open question). `gcsg_shadow_execution_report.md` already has a
+  paper-shaped skeleton (Abstract/Motivation/Setup/Design/Root-cause
+  analysis/Evaluation/Limitations/Related Work/Conclusions) — this is
+  adaptation and expansion, not a from-scratch draft. Real new work: an
+  actual related-work literature survey (what exists today only cites
+  upstream vLLM bug confirmations, not the MoE-serving literature), real
+  figures instead of the README's ASCII architecture diagram, and a LaTeX
+  writing setup (`osx-poc/paper/` doesn't exist yet, checked).
+
+Nothing implemented yet beyond the issue-tracker fix above — this entry is
+the planning kickoff, mirroring the 2026-08-11 "Tekniska: Sprint 4 kickoff"
+entry's role for that sprint.
+
+---
+
+## 2026-08-13 — Tekniska, continued: Marlin path MMLU rerun on the 3090, exact aggregate match — and a correction to the "it's the AWQ/awq_marlin kernel switch" hypothesis
+
+Back on RTX 3090-class hardware (`eu-cz-1` MooseFS backend — same volume as
+the original pod, checkpoint already cached, no download needed) for the
+one remaining real-data question: does the Marlin path (path 2), now
+wired through TierManager (`b9871cf`/`6727a04`), hold accuracy when
+actually run against MMLU, not just the mechanical smoke-test checklist.
+
+### Step 1 — fetta1 `[32:64)`: exact per-subject match
+
+`--wire-tier-manager --quantization awq_marlin`: **24/32 (75.0%)**,
+identical per-subject breakdown to the earlier AWQ+TierManager run on
+this same slice (`business_ethics` 6/8, `clinical_knowledge` 7/10,
+`college_biology` 9/10, `college_chemistry` 2/4). `shadow_activations`
+25,111 vs. AWQ's 25,108 — 0.01% apart.
+
+### Step 2 — full 570-question single-shot: exact aggregate match, small per-subject divergence
+
+**412/570 (72.3%)** — matches the historical single-shot Marlin baseline
+number exactly. `shadow_activations` 562,350, within the same tight band
+as every other recorded run today (562,338/562,354/562,380/562,403, all
+inside 0.02% of each other).
+
+Diffed per-subject against the closer real-Linux baseline
+(`LogBook_20260812_1344/mmlu_sliced_run/mmlu_results.jsonl`, 412/570,
+72.28%) anyway, on principle, rather than stopping at the aggregate
+match:
+
+```
+college_physics:              baseline 5/10 vs today 4/10
+electrical_engineering:       baseline 3/10 vs today 4/10
+high_school_macroeconomics:   baseline 8/10 vs today 7/10
+machine_learning:             baseline 5/10 vs today 6/10
+```
+
+**Correcting the prior entry's hypothesis.** The 2026-08-12 single-shot
+AWQ+TierManager entry found a similar 4-5-subject, ~0.7%, net-near-zero
+divergence against baseline and guessed the cause was the
+`awq`-vs-`awq_marlin` kernel switch (forced by `--wire-tier-manager` on
+that path). **This run uses the identical `awq_marlin` kernel as the
+baseline it's compared against, and shows the same class of divergence
+anyway** — same magnitude (4 subjects, 1 question each, net ~0), same
+overall accuracy match. That rules out the kernel-switch hypothesis as
+the (sole) explanation. More likely: run-topology (single continuous
+process vs. 18 separate sliced processes) or ordinary floating-point
+non-determinism at this scale, independent of quantization choice. Not
+root-caused further — the accuracy-parity question both runs exist to
+answer is answered either way (aggregate matches, divergence is small
+and consistent in magnitude across both quantization paths).
+
+### Files brought back (`osx-poc/marlin_mmlu_20260812/`)
+
+`mmlu_marlin_fetta1_...jsonl`, `mmlu_marlin_singleshot_...jsonl`, and
+both raw run logs.
+
+### Sprint 4 status
+
+Sub-goals 1, 3, 4, 6 done and hardware-verified (both AWQ and Marlin
+paths now have real MMLU numbers, not just mechanical checklists). Still
+open: sub-goal 5 (EAT contention analysis under real traffic).
+
+---
+
+## 2026-08-12/13 — Tekniska, continued: sub-goal 7 (close-out) done — Sprint 4 (Tekniska) complete, all 7 sub-goals closed
+
+Last item: regenerate the GCSG report's `.docx` (EN/IT) exports, which had
+gone stale relative to `gcsg_shadow_execution_report.md` (kept current all
+session — Marlin wiring/bug, path 1 real-offload results).
+
+Regenerated both via `pandoc ... --reference-doc=<existing docx>` (the
+existing files as the style template, so fonts/table styles stay
+consistent with prior versions), then hand-fixed several **generic
+pandoc-template OOXML ordering bugs** that the reference-doc merge
+reintroduces on every run, unrelated to this document's actual content:
+`nsid` hex values under 8 characters in `numbering.xml` (padded with
+leading zeros), `pStyle` appearing after `numPr` inside `pPr` instead of
+before it (schema requires `pStyle` first), `jc` appearing after
+`tblLook` inside `tblPr` instead of before it, and `doNotTrackMoves`/
+`footnotePr` landing in the wrong relative position in `settings.xml`'s
+long, strictly-ordered `CT_Settings` sequence — for `settings.xml`
+specifically, simplest fix was swapping in the already-valid settings.xml
+from the prior docx rather than chasing the ordering by hand (it's global
+document settings, no content). Both final files pass full XSD schema
+validation (`scripts/office/validate.py`, bundled with the `docx` skill)
+with zero errors, and heading styles (`Heading1`/`2`/`3`, 19 total,
+matching the markdown's 19 `#` headings) were confirmed present directly
+in the XML.
+
+**Note for future sessions:** `soffice`/LibreOffice is broken in this
+sandbox for visual PDF-render verification — fails with "source file
+could not be loaded" (exit 81) on *any* input, including a trivial `.txt`
+file, so it's not specific to docx or to this content. Root cause (via
+`strace`): the conversion process connects to its own freshly-created
+`SingleOfficeIPC` Unix socket and then exits without ever loading the
+document — looks like a LibreOffice headless bootstrap defect in this
+specific container image, not something fixable by profile/environment
+flags. Used XSD schema validation instead (doesn't need `soffice`) plus a
+`pandoc`-based round-trip (docx → markdown) to confirm content survived
+intact. If a future session needs an actual visual render, this will need
+investigating properly (or a different container/environment) rather than
+retried the same way.
+
+IT is a full translation of the current EN content (not a stale prior
+version) — both reports now describe the same, current state of Sprint 4.
+
+### Sprint 4 (Tekniska) — final status: complete, 7/7 sub-goals
+
+1. Wiring (AWQ + Marlin through TierManager/EAT) — done, both verified on
+   real hardware.
+2. Pinning strategy — done, soak-tested safe on real Linux.
+3. Integrated-path MMLU rerun — done for AWQ (TierManager-routed, matches
+   baseline); Marlin's TierManager-routed path has mechanical verification
+   only, no MMLU number yet (tracked in issue #17, not blocking sprint
+   close).
+4. Promotion latency — done, measured on real hardware, meets the 1.5×
+   criterion on P50.
+5. M1 debt re-analysis — done: #1 closed (Bloom filter removed), #4 moot
+   (same removal), #2 decided (left open deliberately, no real contention
+   to fix yet).
+6. Path 1 parity under real offload — done, real bug found and fixed,
+   verified at production model scale.
+7. Close-out — done (this entry).
+
+README and the GCSG report were kept in sync with each sub-goal's real
+result throughout, not just at the end — cross-checked against raw logs
+before each doc update, per this project's established discipline.
+
+---
+
+## 2026-08-12/13 — Tekniska, continued: issue #2 (RLock contention) decided — left open, deliberately, not redesigned; Sprint 4 sub-goal 5 now closed
+
+Decision requested and given explicitly by the project owner after the
+re-measurement in the entry below ("sub-goal 5 started"): what to do with
+issue #2 now that (a) today's numbers (~61-91× p99 degradation) don't
+match the originally-cited ~1360× figure, gap unexplained, and (b) real
+`GCSGWorker` traffic today is single-threaded, so the contention scenario
+issue #2 measures (4 readers + 1 writer) isn't produced by anything
+running in this project yet.
+
+**Decision: leave the `RLock` as-is, do not redesign it now.** There is
+no real production contention to fix — doing speculative concurrency
+engineering against a scenario that doesn't exist yet would be exactly
+the kind of premature work this project's own conventions argue against.
+Issue #2 stays open (not closed won't-fix, not silently forgotten) but
+re-scoped explicitly: from "in progress" to blocked on real concurrent
+EAT access actually existing — a future multi-worker or async-server
+setup would produce it, nothing today does. Both the original ~1360×
+figure and today's ~61-91× re-measurement stay recorded side by side,
+neither overwriting the other, since the cause of the gap was never
+identified (see the entry below for the three unconfirmed hypotheses).
+
+This closes sub-goal 5 (M1 debt re-analysis: #1 closed by removal, #4
+moot by the same removal, #2 now explicitly decided-and-deferred rather
+than an open question). README updated (`osx-poc/../README.md` Sprint 4
+paragraph, sub-goal 5 bullet, and the #2/#17 rows in the known-limitations
+table).
+
+### Sprint 4 status after this: 6 of 7 sub-goals closed
+
+Only sub-goal 7 (close-out) remains, and what's left in it is now purely
+mechanical: regenerating the GCSG report's `.docx` (EN/IT) exports to
+match the markdown source, which has been kept current all session
+(Marlin results, path 1 results, this decision).
+
+---
+
+## 2026-08-12/13 — Tekniska, continued: sub-goal 6 (path 1, `_ShadowExpertINT4`) verified end-to-end under real offload — two pod swaps, one caught GPU-architecture blocker, one real device-mismatch bug found and fixed
+
+Three different pods this stretch before landing on one that actually
+worked:
+
+1. **RTX PRO 6000 Blackwell (sm_120)** — deployed for the 96GB VRAM.
+   `probe_kv_blocks.py` never got past engine init: `RuntimeError: CUDA
+   error: no kernel image is available for execution on the device`.
+   Confirmed root cause, not guessed: the project's pinned
+   `torch==2.5.1+cu124` reports `torch.cuda.get_arch_list()` =
+   `[sm_50...sm_90]` — no `sm_120` at all. PyTorch 2.5.1 (Oct 2024)
+   predates official Blackwell workstation-GPU support in stable wheels.
+   Not a project bug, not fixable by tuning `cpu_offload_gb` — the
+   RoPE embedding setup fails before offload logic is even reached.
+   Retired this pod; upgrading the whole project's pinned torch/vllm
+   stack to chase one GPU's architecture was judged out of scope here.
+2. **A100 SXM 80GB (sm_80)** — inside the project's supported arch
+   range. This is the pod that actually ran the test.
+
+### Storage: same "the big number isn't your quota" lesson, twice more
+
+Both replacement pods showed `df`-reported multi-petabyte `/data/nvme`
+free space (`1.8P`/`2.3P` total, hundreds of TB "free") — the shared
+MooseFS backend pool, not a per-pod quota, same as the original
+EU-RO-1 pod's `851T`. Asked for the real number from the RunPod
+dashboard both times rather than trusting `df`: RTX PRO 6000's volume
+was **128GB** (`vMemoryFabric_96GB_vRAM_volume`), the A100's was a
+**separate** 128GB volume (`universal_white_lion_volume`, different
+mount hostname — Network Volumes are datacenter-locked, confirmed
+again here since neither carried over when the DC changed pod-to-pod).
+`HF_HOME` redirected to `/data/nvme/hf_cache` on each new pod (default
+cache path is the 50GB container disk, same fix as every prior pod).
+
+### Step 3 (`probe_kv_blocks.py`) — starting value matters, tune per-GPU not copy-paste
+
+24GB VRAM's old default (`--cpu-offload-gb 78`) was never applicable
+here. Other session pre-computed sane starting points per GPU instead
+of reusing 78 blindly: **12GB** for the RTX PRO 6000 (96GB VRAM, never
+got far enough to test), **24GB** for the A100 (80GB VRAM) — came back
+`# GPU blocks: 0` (too little offloaded, model ate the whole KV-cache
+budget). Stepped up to **28GB**: `num_gpu_blocks=1489,
+total_tokens_capacity=23824` — accepted, well above the target
+positive-and-reasonable bar (compare: 3090 configs this sprint ran
+397-764 blocks).
+
+### Step 4 first attempt — real bug, not the sentinel-key issue anyone guessed
+
+```
+RuntimeError: Expected all tensors to be on the same device, but found
+at least two devices, cuda:0 and cpu! (mat2 in wrapper_CUDA_mm)
+```
+
+Checklist items 1-2 passed (load_model + shadow pool populated via path
+1 — the INT4 build itself doesn't crash under offload). Item 3
+(`generate()`) failed immediately: traceback pointed straight at
+`gcsg.py:452`, `_ShadowExpertINT4.__call__`'s `hidden_states @ w13.T`.
+Root cause, fixed by the other session (`3e6c751`): `w13` — the
+INT4-dequantized shadow weight — was built directly from the source
+`w13_weight`, which under real `cpu_offload_gb` can itself be
+CPU-resident; nothing ever moved the dequantized result to GPU, because
+the only prior test of this path (the tiny model, never offloaded) had
+every source weight on GPU already, so the gap never had a chance to
+show. Exactly the class of bug this script's docstring predicted it
+existed to catch.
+
+### Step 4 retry (`3e6c751`/`ad2cbc1` pulled): green, full checklist
+
+```
+generate() completed, 1/1 non-empty: ' The sum of 2 + 2'
+.gate hooks fired 288 times, shadow_activations=35 (5.0%)
+Direct shadow-expert forward at hidden_size=4096: finite, correct shape
+SMOKE TEST: GREEN
+```
+
+First real-hardware, real-dimension (`hidden_size=4096`, not the tiny
+model's 1024) verification of path 1 end-to-end. Closes the mechanical
+half of sub-goal 6 — not an MMLU quality claim, not a statement that
+`cpu_offload_gb=28` on a raw fp16 93GB checkpoint is anywhere near
+production-viable, both explicitly out of scope per the script's own
+docstring.
+
+### A live-monitoring bug caught mid-session, worth remembering
+
+First attempt at a 60s-interval progress Monitor used
+`pgrep -f smoke_test_gcsg_path1_real_offload` to check whether the
+remote process was still alive — classic self-match footgun: `pgrep -f`
+matches its own argv, which contains the search string verbatim, so it
+always reports a hit regardless of the target process's real state.
+Caught by direct `ps`/`nvidia-smi` cross-check when the monitor kept
+saying `RUNNING` well after the process had actually exited and freed
+the GPU. Fixed with the standard `ps aux | grep '[s]moke_test...'`
+bracket trick (breaks self-match by making the grep process's own argv
+not literally contain the unbracketed pattern).
+
+### Files brought back (`osx-poc/subgoal6_20260812/`)
+
+`probe_kv_blocks_offload24_...log`, `probe_kv_blocks_offload28_...log`,
+`smoke_path1_offload28_FAILED_devicemismatch_...log` (kept, not
+discarded), `smoke_path1_offload28_retry_...log` (the green run).
+
+---
+
+## 2026-08-12 — Tekniska, continued: 4-test regression pass, round 2 — all green again, pod being retired
+
+Reran the same 4-test sequence a second time on this pod, back to back,
+while a replacement pod (RTX PRO 6000 + a dedicated 128GB disk for
+sub-goal 6's ~93GB unquantized checkpoint) gets provisioned. This pod and
+an earlier one are being shut down and destroyed once everything useful
+is confirmed off of them — this entry plus the recovered logs are that
+confirmation.
+
+- Test 1 (pytest): **112 passed, 3 skipped, 0 failed** (115 collected —
+  2 more than round 1's 113, the two new regression tests from the
+  Marlin pin-memory fix, `6727a04`, now included).
+- Test 2 (AWQ checklist): green, 5/5, identical to round 1.
+- Test 3 (Marlin checklist): green, 5/5, same 6 sentinel
+  (`expert_id=-1`) entries confirmed at `Tier.VRAM` as round 1's retry —
+  the fix holds on a second independent run, not a one-off.
+- Test 4 (`bench_eat.py`): `eat_vs_baseline_delta_us` hit_p50 0.019µs /
+  miss_p50 0.010µs — matches round 1 almost exactly (0.019/0.010 vs.
+  round 1's 0.019/0.010).
+
+No new findings — this round's value is confirming round 1 wasn't a
+fluke, on a pod that's about to stop existing. All 8 log files (4 from
+each round; round 1's failed Marlin attempt kept deliberately) are in
+`osx-poc/regression_20260812/`.
+
+### Before retiring this pod
+
+Confirmed clean before shutdown: `git status` on the pod's checkout was
+clean (no uncommitted work), all round-2 logs pulled from `/tmp` and
+committed here. Nothing else identified as needing rescue.
+
+---
+
+## 2026-08-12 — Tekniska, continued: 4-test regression pass on the pod, Marlin path (path 2) verified on real hardware for the first time — caught and fixed a real crash on the way
+
+Ran the 4-test sequence the other session laid out (`af6b51f`, then
+`6727a04` mid-sequence), one at a time, stopping to report before
+continuing per their instruction — real value this time: it actually
+caught something.
+
+### Test 1 — full pytest, GPU-marked included: green
+
+`110 passed, 3 skipped, 0 failed` (6.76s). Skips dropped from the
+sandbox's 18 to 3, all pre-existing TODO/blocked markers unrelated to
+GPU availability (one references issue #10, already closed — the skip
+marker itself just hasn't been revisited, not this session's job to fix).
+
+### Test 2 — AWQ path checklist: green, unchanged
+
+Same 5/5 result as every prior run today — Bloom filter removal
+(`64f6bdc`) didn't touch this path, as expected.
+
+### Test 3 — Marlin path checklist, first time ever on real hardware: FAILED, then fixed, then green
+
+First attempt:
+
+```
+GCSG: impossibile pinnare gli expert Marlin [0, 1] (layer 5, offloaded) in GPU
+(cannot pin 'torch.cuda.HalfTensor' only dense CPU tensors can be pinned)
+FAIL: worker._shadow_pool is empty
+```
+
+Reported the full output rather than just the failing assertion, per the
+other session's own instruction ("qui è dove un bug nel wiring Marlin si
+manifesterebbe — riporta l'intero output"). Root cause, confirmed by the
+other session reading the code against this exact error (commit
+`6727a04`): `_build_marlin_shadow_pool()` decides "offloaded" by checking
+only `w13_qweight` — the other five Marlin-packed tensors on the same
+layer don't necessarily share that device (`cpu_offload_gb` doesn't treat
+the module as one indivisible unit). The non-dominant-tensor promotion
+branch called `.pin_memory()` unconditionally on tensors that could
+already be CUDA-resident. The AWQ path already guarded this
+(`p.device.type != "cuda"` filter); the newer Marlin path didn't. Not the
+sentinel-key bug both sessions initially suspected — simpler and more
+fundamental.
+
+Pulled the fix, reran from Test 3 (not from 1 — already green, no reason
+to redo): **green**, 5/5, plus the Marlin-specific line the checklist
+prints when it finds them: **"Marlin-path sentinel entries (expert_id=-1)
+reached Tier.VRAM: 6 confirmed."** First time path 2's TierManager wiring
+has run successfully against real hardware at all.
+
+### Test 4 — `bench_eat.py`, confirms the Bloom filter removal: green
+
+`eat_vs_baseline_delta_us`: hit_p50 0.019µs, miss_p50 0.010µs — near
+zero, same conclusion as the sandbox's ~0.07µs, actually tighter here.
+
+### Files brought back before this (non-persistent) pod goes away
+
+`osx-poc/regression_20260812/`: `pytest_regression_20260812_222841.log`,
+`checklist_awq_20260812_222932.log`,
+`checklist_marlin_FAILED_20260812_223255.log` (kept, not discarded — the
+failure is the useful part of this record),
+`checklist_marlin_retry_20260812_224026.log` (the green rerun),
+`bench_eat_20260812_224334.log`.
+
+---
+
+## 2026-08-12 — Tekniska, continued: Marlin path's first real-hardware test failed — real bug found and fixed, NOT the one anyone suspected
+
+Pre-96GB-test regression pass (4 scripted tests, one at a time, stop on
+first failure). Tests 1-2 green (110 passed/3 skipped pytest on real
+hardware — GPU-marked tests ran for real for the first time; AWQ-path
+checklist unchanged). **Test 3 — the Marlin checklist, first-ever
+hardware run of today's Marlin wiring — failed.**
+
+### The failure
+
+```
+GCSG: impossibile pinnare gli expert Marlin [0, 1] (layer 5, offloaded)
+in GPU (cannot pin 'torch.cuda.HalfTensor' only dense CPU tensors can be
+pinned) — path Marlin escluso dallo shadow pool.
+Shadow pool populated: expert(s) [] (shadow_pool_size configured: 2).
+FAIL: worker._shadow_pool is empty
+```
+
+### Root cause — not the sentinel-key risk flagged in the previous entry
+
+`_build_marlin_shadow_pool()` decides whether a layer is "offloaded" by
+checking **only** `w13_qweight.data.device.type`. Implicit, never-verified
+assumption: that the other five Marlin-packed tensors per layer
+(`w2_qweight`/`w13_scales`/`w2_scales`/`w13_qzeros`/`w2_qzeros`) share the
+same device. They don't, on real hardware — vLLM's `cpu_offload_gb`
+evidently doesn't offload a module's tensors as one indivisible unit;
+`w13_scales` (or another of the five) stayed GPU-resident while
+`w13_qweight` was correctly offloaded to CPU for the same layer.
+`_build_marlin_tensor_promoter()`'s non-dominant branch called
+`.pin_memory()` unconditionally — a CPU-only operation — on whatever it
+was handed, crashing on the already-CUDA tensor exactly as the error
+says.
+
+The AWQ path's equivalent function (`_promote_module_via_tier_manager()`)
+already guards against exactly this — it filters
+`p.device.type != "cuda"` before processing each parameter individually,
+never assuming module-level "offloaded" applies uniformly. The Marlin
+promoter never got the same guard. Root-caused by reading the code
+against the error message, not by guessing — the other session's
+initial hypothesis (the sentinel-key/`_marlin_pool_shard_key` design)
+was reasonable given what was flagged as the risky part in the previous
+entry, but the actual bug was one layer more basic and unrelated to it;
+worth recording that the first guess was wrong, not just the fix.
+
+### Fix
+
+`_promoter()` now checks `cpu_slice.device.type == "cuda"` first and
+returns the tensor unchanged if so — before touching either the
+dominant-tensor `TierManager.promote_live_tensor()` branch or the
+non-dominant `.pin_memory()` branch. Note: the dominant-tensor branch
+was actually already safe by construction —
+`GPUTransfer.to_vram()` (called via `promote_live_tensor()`) already
+round-trips a CUDA-resident input through `.cpu()` before any pinning
+attempt (see `tier/gpu.py`) — only the non-dominant plain-copy branch
+lacked that defense. Added the short-circuit uniformly anyway, for
+consistency and because it's cheap.
+
+2 new regression tests (`TestMarlinTensorPromoterDeviceCheck`) reproduce
+the exact scenario with a fake CUDA-tagged tensor object, confirming the
+promoter now short-circuits instead of calling `.pin_memory()`. 97
+passed / 18 skipped total (up from 95), zero failures.
+
+### Not yet done
+
+- Re-running the Marlin checklist (test 3) on the pod to confirm the fix
+  actually resolves it — nothing in this entry has touched a GPU with
+  the fix applied.
+- Tests 3 (rerun) and 4 (`bench_eat.py`) from the regression pass, per
+  the "stop on first failure" instruction — resume from test 3.
+- The 96GB path-1 real-offload test stays queued behind this passing.
+
+---
+
+## 2026-08-12 — Tekniska, continued: Marlin path (path 2) wired through TierManager — implemented, unit-tested, NOT yet run on real hardware
+
+Second decision agreed with the user in the same batch as issue #1
+("Marlin path — wire ora"): now that the AWQ path has passed the full
+hardware checklist twice with perfect determinism, wire the path every
+published MMLU number actually uses.
+
+### The structural problem this path has that AWQ doesn't
+
+`_PinnedMarlinExperts` builds ONE proxy per layer shared by the WHOLE
+shadow pool (all `expert_ids` together) — not one per expert, explicitly
+to avoid doubling VRAM cost (see its own docstring). That means there's
+no single real `expert_id` to key an EAT entry on without either
+fabricating false per-expert semantics for pooled data, or doubling the
+proxy count (undoing the exact optimization that avoided the 2026-08-10
+CUDA-allocator-fragmentation hang this class is named for in its own
+`ATTENZIONE` docstring — not a path to touch carelessly).
+
+### Fix: sentinel key + composition-aware shard_idx
+
+- **`_PinnedMarlinExperts.__init__`** gained an optional `tensor_promoter`
+  callable — `None` (default) is byte-identical to the pre-existing
+  `.to(device)` behavior, zero risk to the already-validated path.
+- **`GCSGWorker._build_marlin_tensor_promoter(layer_id, expert_ids)`**
+  builds that callable when `self._tier_manager` is wired: routes ONE
+  dominant tensor per layer (`w13_qweight`) through
+  `TierManager.promote_live_tensor()`, the other five
+  (`w2_qweight`/`w13_scales`/`w2_scales`/`w13_qzeros`/`w2_qzeros`) move
+  with the same pinning decision but aren't tracked individually in EAT
+  — same "dominant tensor only" pattern already used for the AWQ path,
+  same reasoning (`SHARD_SIZE_MB`/EAT's whole design targets chunky
+  weight tensors, not scale/zero-point arrays).
+- **EAT key**: `expert_id=-1` (sentinel — never a real expert_id, always
+  ≥0), `shard_idx` = `_marlin_pool_shard_key(layer_id, expert_ids)` —
+  encodes BOTH `layer_id` and the pool's composition
+  (`hash(tuple(sorted(expert_ids)))`), not just `layer_id`. Caught this
+  before writing it, not after: `promote_live_tensor()` is idempotent by
+  key (correct for AWQ's real per-expert keys, where a given expert_id
+  always owns the same data) — a key that varied only by `layer_id`
+  would let a future `refresh_shadow_pool_selection()` call that changes
+  the pool's composition silently reuse a *stale* VRAM tensor from the
+  previous composition at the same layer, since the same key would now
+  represent physically different data. `refresh_shadow_pool_selection()`
+  isn't auto-triggered yet (sub-goal 4 still pending on that), so this
+  wouldn't have bitten today's testing — but it would have on the very
+  first real use of that method with Marlin wired, silently, without an
+  error. Fixed the key design instead of documenting the gap and moving
+  on.
+
+### Verified here (unit tests, no GPU needed)
+
+4 new tests for `_marlin_pool_shard_key()` — deterministic, order-independent
+(pool composition, not list order, is what should matter — `sorted()`
+inside the function), differs by layer, differs by pool composition (the
+actual property the whole design exists for). 95 passed / 18 skipped
+total (up from 91 after the Bloom filter removal above — 4 net new).
+
+**Deliberately not unit-tested**: `_build_marlin_tensor_promoter()`'s
+actual transfer behavior — same reason `_promote_module_via_tier_manager()`
+(AWQ path) never got one either: it needs real `torch.Tensor.pin_memory()`/
+`.to('cuda')` through `GPUTransfer.to_vram()`, not fakeable without CUDA.
+Hardware verification is the checklist script's job, extended for this.
+
+### `scripts/smoke_test_gcsg_tier_manager.py` extended for Marlin too
+
+Added `--quantization {awq,awq_marlin}` (was AWQ-only, hardcoded).
+Fixed a real bug in the checklist itself before it could produce a false
+failure: item 2's VRAM-promotion check only looked up EAT entries by
+real `shadow_expert_ids` — which is correct for AWQ but would find
+*nothing* for Marlin, since Marlin's promoted entries live under the
+`expert_id=-1` sentinel, not real expert IDs. Added a second check for
+sentinel entries so the same script script correctly validates either
+path instead of reporting AWQ-shaped success criteria as a failure on
+Marlin. Caught this reading the script against the new code before
+running anything, not after a false-negative on the pod.
+
+### Not yet done
+
+- Running `smoke_test_gcsg_tier_manager.py --quantization awq_marlin` on
+  real hardware — nothing in this entry has touched a GPU. This is now
+  the priority item for the next pod/Z8 session before trusting Marlin's
+  transfer the way AWQ's is trusted.
+- A real MMLU comparison on the Marlin+TierManager path — the existing
+  72.28%/72.3%/411-570 numbers are all either pre-TierManager Marlin or
+  post-TierManager AWQ, never both integration and the Marlin path at
+  once.
+- Sub-goal 6 (path 1 parity, design-only so far), issue #2 (contention,
+  still genuinely open), sub-goal 7 close-out.
+
+---
+
+## 2026-08-12 — Tekniska, continued: full re-test pass on the pod with GPU telemetry and pod configuration captured
+
+With time left on this pod session, reran the entire test sequence from
+today a second/third time (`pin_memory()`, `smoke_test_gcsg_tier_manager.py`,
+fetta1 `[32:64]`, the full 570-question single-shot run, `bench_tier.py`)
+back to back, this time with a continuous `nvidia-smi` telemetry logger
+running alongside and a full pod configuration snapshot captured
+up-front. Purpose: more data points on determinism, plus actual GPU
+utilization/power/thermal numbers instead of just pass/fail, plus a
+record of this specific pod's hardware+environment (this is at least the
+third distinct pod this sprint — different DC each time, per the earlier
+entries — despite that, results keep landing in the same place, worth
+having the config on file to make that claim checkable later rather than
+asserted).
+
+### Telemetry: `nvidia-smi --query-gpu=... -l 2`, one continuous log, not per-test
+
+Started before the first rerun, stopped after the last — 983 samples
+(~33 minutes) in `osx-poc/gpu_telemetry_20260812.csv`. One log with the
+whole session's timeline is more useful than five separate short ones:
+timestamps let any window be sliced out after the fact, and it settles a
+question that came up mid-run — does polling `nvidia-smi` every 2s add
+measurable overhead to the workload being measured? Checked directly:
+at the same progress checkpoint (`T+810s` heartbeat), the untelemetered
+first single-shot run (previous entry) was at 485/570; this run's own
+untelemetered-vs-telemetered comparison (rerun 3 of the full run, with
+telemetry active) was at 486/570 at the identical elapsed time — no
+detectable slowdown. Total run time also matched: 924.3s telemetered vs.
+927.2s untelemetered, well inside run-to-run noise. `nvidia-smi` polling
+is a lightweight NVML query, not a CUDA operation — doesn't contend for
+GPU compute/memory bandwidth, and the numbers confirm it.
+
+**Peak/average during the full 570-question run** (`T+19:54:19` to
+`T+20:09:51`, 466 samples): **100% max GPU utilization, 77.3% average**;
+**23,701 MiB max VRAM used** (of 24,576 total — ~96.4%, consistent with
+`gpu_memory_utilization=0.95` reserving nearly the whole card up front);
+**343.9 W max power draw, 299.5 W average** (of a 350 W limit — running
+close to the card's ceiling for most of the run, not power-throttled
+based on the profile); **64°C max temperature** — comfortably within
+normal operating range, no thermal throttling signal.
+
+**During the smoke test** (lighter workload, 3 short prompts): 100% max
+utilization still reached briefly (model load + a few forward passes
+spike it even for a short run), but max VRAM 23,112 MiB, max power
+343.4 W, **max temp only 52°C** — the shorter, lighter run didn't have
+time to heat-soak the die the way the 570-question run did.
+
+### Determinism: 3rd (smoke test, fetta1) / 4th (full run) / 2nd (bench_tier) data point, all consistent
+
+- `smoke_test_gcsg_tier_manager.py`: green again, 5/5, same
+  `[0,1] → [2,6]` pool-selection change after traffic as every prior run.
+- Fetta1 `[32:64]`: **24/32 again**, same per-subject breakdown, same
+  `shadow_activations` (25,108) as both prior fetta1 runs.
+- Full 570-question single-shot: **411/570 again**, `shadow_activations`
+  562,354 again — third time landing on the exact same numbers as the
+  first two runs (previous entry established byte-for-byte identity
+  between runs 1 and 2; this is run 3, same result).
+- `bench_tier.py`'s `promote_live_tensor`: both `pin=False` (620.7µs P50)
+  and `pin=True` (207.8µs P50) still comfortably pass the 732.4µs
+  1.5x-bandwidth threshold — P50s moved a little from the first run
+  (684.2µs/194.1µs) but well within normal small-sample variance for a
+  20-shard synthetic benchmark; P95/P99 moved more (expected, tail
+  statistics on n=20 are noisy, already flagged as such in the previous
+  entry).
+
+### Pod configuration captured (`osx-poc/pod_config_20260812/`)
+
+- GPU: RTX 3090, driver `610.43.02`, CC 8.6, 24,576 MiB, 350 W power
+  limit — full `nvidia-smi -q` output in `nvidia_smi_full.txt`.
+- Kernel: `Linux 783e01336285 6.8.0-134-generic` (Ubuntu 22.04 base,
+  `os_release.txt`/`uname.txt`).
+- Full `pip freeze` (`pip_freeze.txt`) and `lscpu`/`free -h`/`df -h`
+  snapshots.
+- Git state at capture time: `dfa9a9d` (this pod's checkout, before
+  today's later pulls).
+
+This is a third distinct pod configuration this sprint (different DC
+each time — EU-RO-1 originally, then this session's two different pods),
+and results have stayed consistent across all of them where directly
+comparable (`pin_memory()` real, `is_pinned()` True on every real-Linux
+pod tried; MMLU accuracy landing in the same 72%-ish band; shadow
+activation counts within noise of each other across Marlin/AWQ and
+across pods). Not proof of hardware-independence in general — same GPU
+architecture (CC 8.6) and same checkpoint every time — but a real,
+checkable data point rather than an assumption.
+
+### Files brought back before this (non-persistent) pod goes away
+
+- `osx-poc/gpu_telemetry_20260812.csv` — full session telemetry
+- `osx-poc/pod_config_20260812/` — GPU/CPU/OS/package snapshot
+- `osx-poc/smoke_test_rerun2_20260812_213944.log`
+- `osx-poc/mmlu_tier_manager_pod_fetta1_rerun2_20260812_215033.jsonl`
+- `osx-poc/mmlu_tier_manager_pod_singleshot_rerun3_20260812_215416.jsonl`
+- `osx-poc/bench_tier_pod_rerun2_20260812_221103.log`
+
+---
+
+## 2026-08-12 — Tekniska, continued: issue #1 decided and closed — Bloom filter removed from EAT entirely
+
+Discussed with the user rather than decided unilaterally: given #4's
+fresh numbers (Counting Bloom Filter measuring *worse* than the old
+`pybloom_live`, not better — ~6.8-8.1× slower than a plain dict vs. the
+previous ~4.7-4.9×), agreed the answer to issue #1's long-open question
+("does the Bloom filter belong in the hot path at all") is no, regardless
+of which Bloom implementation backs it — the structure it guards
+(`self._table`, a dict at ~16k-entry scale) is already O(1) and doesn't
+need a fast-negative layer in front of it. Removing it isn't a
+workaround, it's the decision.
+
+### What changed
+
+- **`src/eat/bloom.py` deleted entirely** — not bypassed, not left as
+  dead code. Grepped first to confirm nothing else imported it (only
+  `eat.py` and `tests/test_eat.py` did).
+- **`src/eat/eat.py`**: `insert()`/`lookup()`/`evict()` simplified back
+  to direct `dict` operations under the existing `RLock` — `lookup()` is
+  now just `self._table.get(...)`, no fast-negative check in front.
+  `stats()` drops `bloom_shard_count` (nothing left to report).
+  `capacity` stays as a constructor parameter for signature
+  compatibility but is now unused internally.
+- **`src/eat/__init__.py`**: `BloomFilter` removed from exports.
+- **`pybloom-live==4.0.0`**: already removed from `requirements.txt`
+  during #4's fix a few hours earlier — turned out to be removed twice
+  in the same day for two different reasons (first "replaced by our own
+  Counting BF", now "not needed at all").
+- **Tests**: `TestBloomFilter` (14 tests, including the ones added for
+  #4 a few hours ago) and the four `EAT.evict()`-integration tests that
+  asserted Bloom-specific behavior are gone — nothing left to assert
+  once the structure they tested doesn't exist. 91 passed / 18 skipped
+  afterward (down from 103, expected — removed tests, not broken ones;
+  zero failures).
+- **`benchmarks/bench_eat.py`**: kept, repurposed as a regression check
+  rather than the Bloom-vs-dict comparison it used to be — `eat` and
+  `baseline_plain_dict` are now expected to converge, and re-running
+  confirms it: the delta that used to be the whole point of this
+  benchmark is now **~0.07µs** (was ~4-5µs). If this ever drifts wide
+  again without an intentional change to `EAT`, that's the signal to
+  investigate, not the old "which Bloom variant is faster" question.
+- **`configs/osx_default.yaml`**: `bloom_error_rate` removed (was never
+  actually consumed by any code — checked before removing, this whole
+  file is a reference config, not parsed anywhere yet).
+
+### README updated to match, same session
+
+Sprint 1 percentage bumped (~90% → ~92%) — #1 and #4 both closed now,
+only #2 (contention, see the entry two above) remains genuinely open
+from the original three. Known Limitations table and the roadmap's
+Sprint 1 paragraph rewritten to tell the story in the order it actually
+happened (fix #4 → re-measure #1 against the new implementation → decide
+#1 → remove Bloom entirely, which makes #4's specific fix moot but
+doesn't make it wrong — the bug it fixed was real while the Bloom filter
+still existed).
+
+### Not touched, deliberately
+
+- `osx-poc/reports/gcsg_shadow_execution_report.md` §7 still cites the
+  original "~5-14×" Bloom finding as an open question — that report is
+  Sprint 3/GCSG-scoped, not M1-scoped; leaving it as a historical
+  snapshot rather than editing it for an M1 decision that happened in
+  Sprint 4. `CHANGELOG.MD` untouched — its most recent section is still
+  Sprint 3 (Oskarshamn); Sprint 4 hasn't reached release/CHANGELOG status
+  yet, same as every other Sprint 4 change so far.
+
+### Not yet done
+
+- Marlin path (path 2) TierManager wiring — agreed with the user to
+  proceed (separate from this entry, see the next one).
+- Sub-goal 6 (path 1 real-offload test) — designed, not run, see the
+  entry above.
+- Sub-goal 7 close-out still pending; this entry is part of it.
+
+---
+
+## 2026-08-12 — Tekniska, continued: sub-goal 6 designed — path 1 real-offload test, not run yet (no GPU here)
+
+Sub-goal 6 (path 1 `_ShadowExpertINT4` parity under real offload) needs
+hardware this environment doesn't have. Wrote the design and the script;
+running it is the pod's or Z8's job.
+
+### Why this is a bigger ask than any prior smoke test in this project
+
+Path 1 only triggers on a checkpoint vLLM loads with raw fp16 FusedMoE
+weights (`w13_weight`) — i.e. genuinely unquantized. Every real Mixtral
+checkpoint used so far in this project is AWQ-quantized (paths 2/3), so
+hitting path 1 for real means loading a different, much larger
+checkpoint: `mistralai/Mixtral-8x7B-Instruct-v0.1`, ~93GB at fp16 (46.7B
+real parameters — Mixtral's non-expert layers are shared, not literally
+8×7B). ~4× the ~23GB AWQ checkpoint every other script here downloads. On
+a 24GB GPU, roughly ~75-80GB of that needs offloading to host RAM — about
+20× the `cpu_offload_gb=4` used everywhere else. Host RAM isn't the
+constraint (pod ~125GB, Z8 256GB DDR4, both comfortably over ~80GB); GPU
+VRAM budget is what forces this.
+
+### What was written, not run
+
+- **`scripts/probe_kv_blocks.py` extended**: `--model-path`,
+  `--cpu-offload-gb`, `--quantization none` added (was hardcoded to the
+  AWQ checkpoint and `cpu_offload_gb=4`). Point: find a `cpu_offload_gb`
+  that leaves a workable KV-cache budget *before* launching a full smoke
+  test that could OOM or hang partway through — same tool, same purpose
+  it was built for in issue #10/#16, just parametrized for a checkpoint
+  ~4× the size.
+- **`scripts/smoke_test_gcsg_path1_real_offload.py`**: new, same
+  watchdog+heartbeat+checklist idiom as every other smoke test in this
+  project. `--cpu-offload-gb` defaults to 78 — an ESTIMATE from the
+  arithmetic above, not a measured value; the script's own docstring
+  tells the operator to run the probe first, not trust the default.
+  Watchdog defaults to 3600s (vs. 900-1200s elsewhere) — this project's
+  own Root Cause II finding (GCSG report §5) showed `cpu_offload_gb`
+  4→8 alone causing a 9× slowdown under WSL2; at ~78GB offloaded (~20×
+  that), a much larger slowdown is plausible and explicitly not treated
+  as a failure signal in the script's own messaging — same "slow ≠ hung"
+  discipline used throughout this project's offload investigations.
+  Checklist: (1) `load_model()` completes and correctly dispatches to
+  path 1, (2) shadow pool populated via `_ShadowExpertINT4`, (3)
+  `generate()` produces non-degenerate output, (4) gate hooks fire, (5)
+  a direct numerical check of the INT4 quantize/dequantize/SwiGLU math
+  at REAL Mixtral-8x7B dimensions (`hidden_size=4096`) — this specific
+  math has only ever been verified at the tiny test model's
+  `hidden_size=1024` (2026-08-09); nothing guarantees it generalizes,
+  and the script says so rather than assuming it.
+
+### Not yet done
+
+- Running the probe, then the smoke test, on real hardware — nothing in
+  this entry has touched a GPU.
+- Deciding whether ~78GB offload is even a sane starting point once real
+  numbers come back — explicitly flagged in the script as an estimate.
+- If results are too slow/ambiguous to interpret, the agreed fallback is
+  evaluating a bigger single GPU (e.g. a 48GB card, same GA102/CC8.6
+  family already used for clean comparisons) or multi-GPU — not decided
+  yet, starting with the GPU already available first.
+
+---
+
+## 2026-08-12 — Tekniska, continued: issue #4 actually fixed — `BloomFilter.remove_expert()` was never implemented AND never called; both are now real
+
+Continuing sub-goal 5. `remove_expert()` had been a `raise NotImplementedError`
+stub since Sprint 1 — checked before writing anything (`grep -rn
+remove_expert src/ tests/`) and found it was **never called from
+anywhere**, not even by `EAT.evict()`. So even a correct implementation
+would have changed nothing on its own — the real bug was two gaps, not
+one: no working deletion, and no caller wired to use it.
+
+### Fix: swapped `pybloom_live` for a custom Counting Bloom Filter
+
+A classic (non-counting) Bloom filter structurally can't support
+deletion — a single shared bit can't tell you whether it's safe to clear
+without breaking other elements that happen to hash into it. `pybloom_live.BloomFilter`
+is exactly that, so `remove_expert()` could never have been implemented
+against it as originally chosen. Replaced with a self-contained Counting
+Bloom Filter (`_CountingBloomFilter` in `src/eat/bloom.py`) — 8-bit
+counters instead of single bits, same standard `m`/`k` sizing math, double
+hashing via two independent `blake2b` digests (no new dependency —
+`hashlib` is stdlib). `pybloom-live==4.0.0` removed from `requirements.txt`
+— nothing else in the codebase used it (checked).
+
+`BloomFilter` gained `remove_shard(expert_id, shard_idx)` (new) alongside
+a now-real `remove_expert(expert_id)` (same signature as the original
+stub). `EAT.evict()` now calls both correctly: always clears the
+shard-level entry, but only clears the expert-level entry when it was
+the *last* remaining shard for that `expert_id` in the table — clearing
+it earlier would falsely make `may_contain_expert()` forget an expert
+that still has other valid shards, since that level's counters are
+shared across all of an expert's shards. Checked via a linear scan over
+the residual table (`evict()` isn't a per-token hot path like `lookup()`,
+so this is an acceptable cost, not the `access()`/`lookup()` fast path).
+
+### Verified the fix actually matters, not just "no longer raises"
+
+New test (`test_repeated_insert_evict_cycles_do_not_degrade_false_positive_rate`):
+20 cycles of insert-then-evict 500 entries each (10,000 cumulative
+"ghosts" if never actually removed — more than the filter's own
+declared capacity) — false-positive rate stays under 2%, same target as
+the original single-pass test. Against the *old* stub, every one of
+those 10,000 evictions would have stayed a permanent false positive
+(issue #4's literal description), driving the false-positive rate far
+past target — this test would have failed loudly on the old code, not
+just skipped/pending as `NotImplementedError` made it before. 9 new
+tests total (5 `BloomFilter`-level, 4 `EAT.evict()`-integration,
+including one confirming a shard eviction does NOT clear the expert-level
+entry while sibling shards remain). 103 passed / 18 skipped afterward (up
+from 94), zero failures.
+
+### Side effect on issue #1's numbers — not hidden
+
+Re-ran `bench_eat.py` 3× with the new implementation:
+
+| | old (`pybloom_live`) | new (Counting BF) |
+|---|---|---|
+| hit lookup p50 ratio vs. plain dict | ~4.7-4.9× | ~6.8-8.1× |
+| insert throughput | ~50,715 ops/sec | ~74,000-98,000 ops/sec |
+
+Lookups got a bit slower relative to a plain dict (still inside the
+issue's originally-cited "~5-14×" range, just toward the higher end);
+inserts got substantially faster (~1.5-2× the old pybloom_live-based
+throughput). Net effect on issue #1's own open question ("does the
+Bloom filter belong in the hot path at all") is a wash, not a win —
+recorded plainly rather than reported as an improvement it isn't.
+
+### Not yet done
+
+- Issue #1's actual design decision (keep Bloom fast-path vs. plain
+  dict) — still open, this session only re-measured it under the new
+  implementation, didn't decide it.
+- Issue #2 (contention) — unchanged from the entry above; the new
+  Counting Bloom Filter doesn't touch `EAT`'s `RLock` usage.
+- Sub-goal 6 (path 1 parity), sub-goal 7 (close-out).
+
+---
+
+## 2026-08-12 — Tekniska, continued: sub-goal 5 started — re-ran `bench_eat.py` fresh, found real GCSGWorker traffic is single-threaded (issue #2's tested scenario doesn't apply yet), and today's contention numbers don't match the issue's cited figure
+
+Started sub-goal 5 (M1 debt re-analysis under real EAT traffic) — no GPU
+needed for this, ran directly here rather than waiting on the pod/Z8.
+
+### Real GCSGWorker traffic is single-threaded — issue #2 as filed doesn't (yet) describe production reality
+
+Checked before benchmarking anything: `GCSGWorker._evaluate_gcsg_for_rows()`
+(the method that calls `EAT.access()` on real traffic, added earlier
+today) runs synchronously inside vLLM's own forward-pass hook — one
+process, one thread, no concurrent callers. Issue #2's benchmark
+(`bench_eat.py::bench_contention`, 4 readers + 1 writer) models a
+multi-threaded access pattern that **nothing in this project's current
+real usage actually produces** — not the sliced MMLU runs (one process
+each), not the single-shot run (still one process), not the smoke tests.
+The scenario is a legitimate forward-looking test (a future multi-worker
+or async-server setup could produce real concurrent EAT access), but
+it's not exercised by anything running today. Worth stating plainly
+rather than assuming "real traffic now exists" (true for volume — 256/256
+entries touched, confirmed earlier today) automatically means "the
+concurrency issue #2 measured is now realistic" (not shown).
+
+### Fresh numbers, and they don't match issue #2's cited ~1360×
+
+Ran `benchmarks/bench_eat.py` 4 times in this environment (no GPU
+needed — pure Python/threading):
+
+| | run 1 | run 2 | run 3 | run 4 |
+|---|---|---|---|---|
+| EAT hit p50 (uncontended) | 3.16µs | 3.21µs | 3.67µs | 3.09µs |
+| EAT hit p99 (uncontended) | 33.7µs | 33.8µs | 33.7µs | 25.6µs |
+| Contended reader p99 | — | 2062µs | 2309µs | 2324µs |
+| **p99 degradation ratio** | — | **~61×** | **~68×** | **~91×** |
+
+Consistent across 4 runs (not the ~32% single-run noise this project's
+own M1 benchmark history has flagged before) — this is a real,
+reproducible measurement, and it's roughly **15-20× smaller** than
+issue #2's cited "~1360× p99 degradation under contention." Bloom-vs-dict
+delta (issue #1) is directionally consistent with the original finding —
+EAT hit lookups ran ~4-5× slower than a plain dict here, same order of
+magnitude as the "~5-14×" cited, well within run-to-run/environment
+variance.
+
+**Not chased further this session** — plausible causes, none confirmed:
+different machine/CPU/Python build than whatever produced the original
+1360× figure (this is a sandbox environment, not the Z8 or the pod);
+Python version or GIL-scheduling differences affecting `RLock` contention
+characteristics; or the original figure itself being a single noisy run
+never repeated (this project's own precedent — the ~32% variance note
+above — makes that plausible too). Recorded as a real discrepancy, not
+quietly overwriting issue #2's number or declaring it resolved either way.
+
+### Not yet done
+
+- Reconciling the ~1360× vs. ~61-91× gap — needs either the original
+  benchmark's exact environment or accepting today's numbers as the
+  current reference point.
+- A contention benchmark actually shaped like real (if still
+  single-threaded) GCSGWorker traffic, once a genuinely concurrent access
+  pattern exists to model.
+- Issue #4 (`BloomFilter.remove_expert()`) — not touched, still `NotImplementedError`.
+- Sub-goal 6 (path 1 parity), sub-goal 7 (close-out).
+
+---
+
+## 2026-08-12 — Tekniska, continued: single-shot MMLU run is deterministic (byte-for-byte rerun), `bench_tier.py`'s `promote_live_tensor` section closes sub-goal 4 on real hardware
+
+### Determinism check on the previous entry's 411/570 result
+
+Reran the exact same single-shot 570-question command
+(`--wire-tier-manager`, same pod, same checkpoint) to see whether the
+4-subject divergence from baseline (previous entry) was run-to-run noise
+or a stable property of this code path. **Byte-identical to the first
+run**: 411/570, all 57 per-subject scores identical, even
+`shadow_activations_cumulative` identical (562,354 both times) — greedy
+decoding + `seed=0` + no randomness anywhere in this path reproduces
+exactly, as it should.
+
+This re-frames the earlier finding: the divergence against the
+`awq_marlin` baselines isn't instability introduced by this session's
+work — it's a **stable, reproducible** difference. Cross-checked the two
+`awq_marlin` baselines against each other where visible (worst-10 lists
+in `LogBook_20260812_1344/mmlu_burn_singleshot/burn_singleshot.log` vs.
+the sliced run's aggregated per-subject data) and they agree with each
+other too (e.g. `electrical_engineering` 30.0% in both). Working
+hypothesis, still not root-caused: the divergence tracks the
+`awq`-vs-`awq_marlin` kernel switch itself (forced by
+`--wire-tier-manager`, since the wiring only touches path 3), not
+anything in `TierManager`/EAT's own logic. Consistent with, not proof of.
+
+Also re-diffed against the closer real-Linux baseline
+(`LogBook_20260812_1344/mmlu_sliced_run/mmlu_results.jsonl`, 412/570,
+72.28%, same hardware class as today, not the WSL2 one used first): 5
+subjects off by 1 each, net -1 (412→411) — same order of magnitude as
+the WSL2 comparison, same conclusion.
+
+### `bench_tier.py`'s `promote_live_tensor` section (commit `51b516b`, sub-goal 4)
+
+Pulled it from a stale pod checkout the first time (cloned before
+`51b516b`/`dfa9a9d` landed — `git pull` on the pod's clone had never been
+re-run since the initial `git clone`, an easy thing to forget once a
+checkout exists) — first run's JSON was silently missing the
+`promote_live_tensor` key entirely, not an error, just old code. Caught
+by checking the output against what the commit message described before
+trusting it, pulled the pod's checkout current, reran.
+
+**Both `pin=False` and `pin=True` pass the README's "within 1.5x
+theoretical bandwidth" criterion at P50**, on real hardware (RTX 3090,
+CC 8.6, real Linux):
+
+| | P50 | P95/P99 | Within 1.5x @ P50 |
+|---|---|---|---|
+| `pin=False` | 684.2 µs | 29.8 ms | true |
+| `pin=True` | 194.1 µs | 82.7 ms | true |
+
+`pin=True` P50 is ~3.5x faster than `pin=False` — expected direction,
+pinned host memory avoiding the intermediate staging copy. P95/P99 go
+the *other* way (worse for `pin=True`) — with only 20 synthetic 4MB
+shards (declared deviation from the 256MB production `SHARD_SIZE_BYTES`,
+see the module docstring), P95/P99 on n=20 is essentially 1-2 outlier
+samples, not a statistically meaningful tail measurement. Not
+investigated further — the P50 pass/fail is what the README criterion
+actually asks for.
+
+### Files brought back before this (non-persistent) pod goes away
+
+- `osx-poc/mmlu_tier_manager_pod_singleshot_rerun_20260812_210821.jsonl`
+  — the determinism-check rerun
+- `osx-poc/bench_tier_pod_20260812_212555.log` — the valid
+  `bench_tier.py` run (post-pod-checkout-pull); the stale pre-pull run's
+  output was not kept, it's missing data, not a different result
+
+### Not yet done
+
+- Root-causing the `awq`-vs-`awq_marlin` divergence hypothesis — plausible,
+  not verified.
+- `promote_live_tensor` at production shard scale (real AWQ dominant
+  parameter size, not 4MB synthetic) — still unmeasured, same caveat as
+  `nvme_to_ddr4`/`ddr4_to_vram` always had.
+- Sub-goal 5 (issue #1/#2/#4 analysis under real EAT traffic), 6 (path 1
+  parity), Marlin path (path 2) wiring — all still open.
+
+---
+
+## 2026-08-12 — Tekniska, continued: full 570-question single-shot MMLU run, TierManager wired, on the pod — no hang, accuracy within noise, but NOT byte-identical to baseline (correcting an earlier overclaim)
+
+New pod (RunPod, different DC than the earlier EU-RO-1 one — Network
+Volume is datacenter-locked, this one's storage is ephemeral Container
+Disk, not persistent), GPU landed as RTX 3090 (CC 8.6, the matched
+architecture, confirmed via `nvidia-smi`). Environment came pre-installed
+with exactly the project's pinned versions (`torch==2.5.1+cu124`,
+`transformers==4.57.6`, `vllm==0.6.6.post1`, all of `requirements.txt`'s
+other deps) — not the project's own GHCR image (`/workspace` was empty),
+some other RunPod base template that happened to already match. Cloned
+`Sprint-4-Tekniska` fresh (`git clone`, no `.git` dir existed to `pull`
+into) rather than rely on any baked-in image code, landed at `f7d72ce`.
+Checkpoint (`casperhansen/mixtral-instruct-awq`, ~23GB) downloaded via
+`huggingface-cli download` in 88s — this DC's network is unusually fast.
+
+### `pin=True` end-to-end, then fetta1, then the real point of coming here
+
+`torch.zeros(1024).pin_memory().is_pinned()` → `True` (already logged in
+the entry above this one). `smoke_test_gcsg_tier_manager.py` green, 5/5,
+same as the Z8 run except this time with no `pin_memory=False` WSL
+warning and no fallback — the one item the Z8 run structurally couldn't
+close.
+
+Fetta1 (`[32:64]`, `--wire-tier-manager`, same pod) also came back an
+exact per-subject match against `mmlu_results_overnight_20260811.jsonl`'s
+same range (24/32 both ways, all four sub-scores identical:
+`business_ethics` 6/8, `clinical_knowledge` 7/10, `college_biology` 9/10,
+`college_chemistry` 2/4) — second slice in a row with zero divergence,
+this time under real `pin=True` rather than the Z8's forced `pin=False`.
+
+Then the actual reason for being on a real-Linux pod today: a full
+570-question single-shot run (`eval_mmlu_gcsg.py --wire-tier-manager`,
+no `--prompt-start`/`--max-prompts`, one process, one model load) — the
+pattern this project's own history says hangs under WSL2/Docker around
+request 27-31, and the sliced workaround exists specifically to route
+around. **Completed clean, no hang**: `generate()` took 774.1s (927.2s
+total including 153.1s load) for all 570 prompts, watchdog (3000s) never
+came close to firing.
+
+### Accuracy: 411/570 (72.1%) — same total as one baseline, but not the same answers
+
+Diffed `mmlu_tier_manager_pod_singleshot_20260812_195140.jsonl`'s
+per-subject breakdown against `mmlu_results_overnight_20260811.jsonl`
+(summed across its 18 slice entries — itself 411/570, 72.11%, the
+historical WSL2 baseline, not the 72.28%/72.3% real-Linux number from
+this project's other baseline runs, which don't have a full-570
+per-subject JSON on file to diff against directly):
+
+```
+college_mathematics:          baseline 5/10 vs today 4/10
+elementary_mathematics:       baseline 5/10 vs today 6/10
+high_school_european_history: baseline 9/10 vs today 8/10
+high_school_world_history:    baseline 8/10 vs today 9/10
+```
+
+**Correcting course on today's own earlier framing**: fetta0 and fetta1
+(64 questions total) were exact per-subject matches, and that got
+reported as "zero measurable difference." Over the full 570, that
+doesn't hold — 4 subjects differ by 1 question each, two in each
+direction, netting to zero at the aggregate level by coincidence, not
+identity. The honest statement is: **4/570 (0.7%) individual answers
+flipped, aggregate accuracy indistinguishable, well inside the README's
+<2% shadow-contamination target** — not "byte-identical," which is what
+the fetta0/fetta1-only evidence supported but the full run doesn't.
+Plausible cause, not verified: floating-point non-determinism between
+AWQ's plain dequant kernel and whatever kernel path the baseline used
+(unconfirmed which — the overnight file predates today's
+`--wire-tier-manager` flag, was almost certainly `awq_marlin`), on a
+handful of questions close enough to the A/B/C/D decision boundary for
+tiny logprob differences to flip the argmax. Not chased further — the
+accuracy-parity question this run exists to answer is answered either
+way.
+
+Worst-performing subjects this run: `abstract_algebra`,
+`college_mathematics`, `college_physics`, `electrical_engineering`,
+`formal_logic`, `high_school_mathematics` (all 40%) — the same six-ish
+subject pattern (math/formal-logic-heavy) flagged as weakest in every
+prior baseline run on this checkpoint, another point of consistency.
+
+### `shadow_activations`: 562,354 — consistent with prior runs across a different code path
+
+Within 0.01% of both numbers already on record for the Marlin-path
+burn-test (562,380 single-process, 562,403 sliced-sum, see the
+independent-verification entry two sessions back) — despite this run
+going through a structurally different path (AWQ ModuleList +
+TierManager-driven promotion, not Marlin + direct `.to(device)`).
+GCSGGuard's gating/activation logic producing near-identical counts
+regardless of the underlying promotion mechanism is a good consistency
+signal, not something this run specifically set out to test.
+
+### The same micro-slowdown zones as the Marlin burn-test, again
+
+The independent-verification entry flagged a small, self-resolving
+throughput dip around request ~211-221 (smaller one near ~302-320) in
+the Marlin single-shot burn-test log, noted then as "flagged, not
+investigated further." **Both zones reappear in this run's progress log
+almost exactly** (request ~211-221: `it/s` collapses from ~1.2/s to
+~0.18/s and recovers by ~229; a second, smaller dip ~302-320). Same
+request-index ranges, a completely different quantization/promotion
+path. This shifts the likely explanation away from anything
+Marlin-specific or GCSG-specific — toward something about the prompts
+themselves at those dataset positions (length, structure) or vLLM's own
+scheduling, common to both runs. Still not investigated further; now
+cross-validated as reproducible rather than a one-off.
+
+### Files brought back before the (non-persistent) pod goes away
+
+- `osx-poc/mmlu_tier_manager_pod_20260812_194757.jsonl` — fetta1 result
+- `osx-poc/mmlu_tier_manager_pod_singleshot_20260812_195140.jsonl` —
+  full 570-question result, per-subject breakdown
+- `osx-poc/mmlu_tier_manager_pod_singleshot_20260812_195140.log` — full
+  raw run log (timestamps, heartbeat, generate() progress, GCSGGuard
+  stats)
+
+### Not yet done
+
+- Root-causing the 4-subject divergence or the ~211-221/~302-320 dips —
+  both flagged, neither blocking.
+- Marlin path (path 2) TierManager wiring — still deliberately untouched.
+- Sub-goals 4 (promote/evict latency), 5 (issue #1/#2/#4 analysis under
+  real EAT traffic, now available from today's runs), 6 (path 1 parity).
+
+---
+
+Pod resumed (RTX 3090 this time, no A5000 substitution needed), and the
+one item the Z8 pass couldn't cover — `pin=True` — is now confirmed on
+the hardware that actually matters for it.
+
+### Fetta0 re-checked from the raw file, not just the summary
+
+`osx-poc/mmlu_tier_manager_fetta0_20260812_183539.jsonl` was pushed
+alongside the `--wire-tier-manager` flag (commit `f7d72ce`, other
+session) — checked it directly rather than trusting the earlier relayed
+numbers: `correct: 21/32`, `per_subject_correct` = `{abstract_algebra: 4,
+anatomy: 7, astronomy: 9, business_ethics: 1}`, `tier_manager_wired: true`.
+Diffed against `mmlu_results_overnight_20260811.jsonl`'s own first entry
+(the historical Marlin baseline) directly, both files in this checkout:
+identical range, identical `correct`, identical `per_subject_correct` —
+byte-for-byte, not approximately. Upgrades the previous entry's "relayed,
+not re-verified" status to independently confirmed.
+
+### `pin=True` — the last untested branch, now closed
+
+Same 5-item checklist as the Z8 run, this time on the pod (CC 8.6, real
+Linux, no WSL2):
+
+| # | Check | Outcome |
+|---|---|---|
+| 1 | `asyncio.run()` in `load_model()` | OK |
+| 2 | Real GPU transfer + EAT → `Tier.VRAM`, **`pin=True`** | 12 promotions confirmed, no fallback to pageable, no "pin_memory() fallito" warning |
+| 3 | AWQ dominant parameter fits `SHARD_SIZE_BYTES` | shadow pool populated `[0,1]` |
+| 4 | Real per-token EAT traffic | 256/256 |
+| 5 | `refresh_shadow_pool_selection()` | pool changed `[0,1]→[2,6]` after traffic |
+
+`is_pinned() == True` confirmed directly, and vLLM's own log shows no WSL
+warning this time (contrast with the Z8 run's `"Using 'pin_memory=False'
+as WSL is detected"`). Load 92.3s, `generate()` 7s for 3 prompts —
+faster than the Z8 pass, consistent with no WSL2/pageable-swap overhead
+(Root Cause II doesn't apply here by construction).
+
+**This closes the full "NOT run on real hardware" list from the
+original sub-goal 1 entry** (2026-08-12, "sub-goal 1 ... implemented,
+unit-tested, NOT yet run on real hardware") — all 5 items are now
+confirmed on real hardware, across two different platforms (Z8/WSL2 for
+4/5, pod/real-Linux for 5/5). Reported by the other session; no raw log
+was pushed for this specific run (unlike fetta0 above), so the exact
+numbers in the table are recorded as relayed, not re-derived — the
+`pin=True`/no-WSL-warning distinction is the one that matters most here
+and is a clean binary signal either way.
+
+### Not yet done
+
+- More MMLU slices across varied subjects, or the full comparison run —
+  open question for the next entry (asked, not yet decided as of this
+  writing).
+- Path 1 parity (sub-goal 6), M1 debt issues #1/#2/#4 exercised under
+  real load now that traffic exists (sub-goal 5), Marlin-path TierManager
+  wiring (deferred, see earlier entries).
+
+---
+
+## 2026-08-12 — Tekniska, continued: first real MMLU data point on the TierManager-wired path — exact per-subject match against the Marlin baseline, slice 1/18
+
+Sub-goal 3 (integrated-path MMLU rerun) had no script to do it with until
+now. Reported by the other session (Z8), not independently re-verified
+against raw result files here (none pushed yet — this entry records what
+was relayed, same as the smoke-test entry two above, not a from-source
+check).
+
+### What was added: `--wire-tier-manager` on `eval_mmlu_gcsg.py`
+
+Opt-in flag, default off — zero change to the existing baseline path.
+When set: builds a real `EAT`+`TierManager` with the same config as
+`smoke_test_gcsg_tier_manager.py`, wires it via
+`GCSGWorker.configure_tier_manager()`, and forces `quantization="awq"`
+(the only path this integration touches — see the 2026-08-12 "sub-goal 1"
+entries for why Marlin was deliberately left out). This is the missing
+piece sub-goal 3 needed; nothing in this repo could drive an MMLU run
+through the integrated path before this.
+
+### Result: slice `[0:32)`, byte-for-byte match against the historical baseline
+
+Compared directly against the same slice range in
+`mmlu_results_overnight_20260811.jsonl` (the run behind the published
+72.11%/72.28%/72.3% numbers, Marlin path):
+
+| Subject | Baseline (Marlin, 08-11) | Today (AWQ + TierManager) |
+|---|---|---|
+| abstract_algebra | 4/10 | 4/10 |
+| anatomy | 7/10 | 7/10 |
+| astronomy | 9/10 | 9/10 |
+| business_ethics | 1/2 | 1/2 |
+| **Total** | **21/32 (65.6%)** | **21/32 (65.6%)** |
+| shadow_activations | 23,659 | 23,683 (+0.1%) |
+
+Every per-subject sub-score matches exactly, not just the aggregate — a
+much stronger signal than the total alone would be (four independent
+32-vs-10-question ties would be a real coincidence; this isn't
+"statistically close," it's the same answers). With greedy decoding
+(`temperature=0.0`, `max_tokens=1`), this means switching from the
+validated Marlin path to AWQ-ModuleList-via-TierManager didn't change a
+single answer on these 32 questions. 65.6% looks low only because this
+slice is `abstract_algebra`-heavy, the historically weakest subject for
+this model (40% in every prior run too) — not a regression signal.
+
+### Not yet done
+
+- More slices — one slice (0-32, `abstract_algebra`-heavy) isn't a
+  representative sample across all 57 subjects; a broader spot-check
+  across subject areas is the natural next increment before treating this
+  as confirmed rather than "looks very good so far."
+- The full 18-slice (or single-shot) comparison against 72.28%/72.3% —
+  still the pod's job, per the plan already agreed (Z8 for fast
+  preliminary spot-checks, pod for the definitive full run, including the
+  still-untested `pin=True` branch).
+
+---
+
+## 2026-08-12 — Tekniska, continued: `smoke_test_gcsg_tier_manager.py` green on the Z8/RTX 3090 — 4 of 5 checklist items confirmed, 1 partially (as predicted)
+
+Run on the Z8 (WSL2/Docker), not the pod — no rebuild/download needed
+(branch already checked out via the local bind-mount, checkpoint already
+present at the expected path, 23GB). Reported by the other session, not
+independently re-verified against raw log files here (none were pushed
+this time, unlike the earlier `LogBook_20260812_1344/` archive) — recorded
+as relayed, per the same discipline as always, and cross-checked for
+internal consistency against the design instead.
+
+### Result: all 5 checklist items ran, load+generate in ~86s total (54.8s + 31s)
+
+| # | Check | Outcome |
+|---|---|---|
+| 1 | `asyncio.run()` inside `load_model()` | Load completed with `tier_manager` wired — no event-loop error |
+| 2 | Real GPU transfer + EAT → `Tier.VRAM` | 12 (expert_id, layer_id) pairs confirmed at VRAM — with `pin_memory=False` (vLLM's own log: `"Using 'pin_memory=False' as WSL is detected"`) — exactly the predicted `pin=True` path staying untested here |
+| 3 | AWQ dominant parameter fits `SHARD_SIZE_BYTES` | Shadow pool populated (`[0, 1]`), no "impossibile pinnare" warning |
+| 4 | Real per-token EAT traffic | 256/256 EAT entries (8 experts × 32 layers) show `access_count > 0` after `generate()` |
+| 5 | `refresh_shadow_pool_selection()` callable | Pool changed `[0,1] → [2,6]` after real traffic — the selection actually reacted to hotness, not just "didn't crash" |
+
+**Item 3's initial selection, `[0, 1]`, is a real independent confirmation
+of the cold-start-equals-round-robin fix** from two entries back (the
+`last_access_ts` tie-break bug caught by a unit test, not hardware) —
+`shadow_pool_size=2` at true cold start selected exactly `[0, 1]`, matching
+what the stable-sort proof predicted, on real EAT state this time, not a
+test double.
+
+No code bugs surfaced — no typos, no shape mismatches, nothing to patch.
+`generate()` didn't show the heavy Root Cause II slowdown that was
+expected on WSL2 — plausibly because 3 short prompts (32 tokens max) are
+too little traffic to make the pageable-memory CPU↔GPU swap-in cost
+noticeable; not evidence Root Cause II stopped applying, just that this
+particular smoke test's traffic was too light to trigger it visibly.
+
+### Still pod-only, unchanged from two entries back
+
+- The `pin=True` branch — WSL2 disabled it here by design (`in_wsl()`),
+  confirmed by vLLM's own log line; pinning under sustained load remains
+  validated only on real Linux (this morning's soak test).
+- A real MMLU comparison on the integrated path against the 72.28%/72.3%
+  baseline (LOGBOOK.md priority item 4).
+
+### Not yet done
+
+- Pod run: confirm `pin=True`, then the full MMLU comparison.
+- Everything else already queued, unchanged.
+
+---
+
+## 2026-08-12 — Tekniska, continued: closed a real injection gap in the TierManager wiring, added a pod verification checklist
+
+Before writing a hardware verification checklist for the previous
+entry's work, checked how a caller would actually supply `tier_manager=`
+to `GCSGWorker` given vLLM constructs the worker itself — and found it
+doesn't work. Worth catching now rather than handing the other session a
+checklist with a broken first step.
+
+### The gap
+
+`GCSGWorker(tier_manager=...)` is a normal constructor kwarg, but vLLM
+never calls that constructor directly: `worker_cls="scheduler.gcsg.GCSGWorker"`
+is a string, resolved internally by
+`vllm.worker.worker_base.init_worker()` (already documented in this
+file's module docstring, point 1) and constructed with vLLM's own
+standard args — there's no path for a caller's extra kwarg to reach it.
+Checked every existing script that uses `worker_cls` in this repo
+(`eval_mmlu_gcsg.py`, `probe_kv_blocks.py`, both `smoke_test_gcsg_*.py`,
+`verify_shadow_pool_pinning_e2e.py`) — none of them ever pass an extra
+kwarg through that path, which is itself evidence no such path exists,
+not just an assumption.
+
+### Fix
+
+Added `GCSGWorker.configure_tier_manager(tier_manager)` — a classmethod
+that sets a class-level `_pending_tier_manager`, called *before*
+constructing `LLM(...)`/`EngineArgs(...)`. `__init__` falls back to it
+when `tier_manager=` isn't passed explicitly. Direct `tier_manager=`
+still works for anyone constructing `GCSGWorker` without going through
+vLLM (all the unit tests from the previous entry use exactly that).
+Documented as class-level, deliberately-simple state — one script
+constructs one worker in every real use in this project, so no need for
+anything fancier; noted the escape hatch (pass `tier_manager=` directly)
+if that ever stops being true.
+
+Added 3 unit tests (`configure_tier_manager` sets/clears the pending
+value correctly) with an `autouse` fixture resetting it after every test
+in that class — class-level state used across a test file is exactly
+the kind of thing that leaks into unrelated tests if not reset
+explicitly. 94 passed / 18 skipped afterward (up from 91 — the 3 new
+tests), still zero failures.
+
+### New: `scripts/smoke_test_gcsg_tier_manager.py`
+
+A verification checklist for the pod, mechanized as far as it can be
+without a GPU, following this project's own established smoke-test
+idiom (docstring-as-checklist, watchdog+heartbeat, explicit PASS/FAIL
+per item — same shape as `smoke_test_gcsg_worker.py`/
+`smoke_test_gcsg_mixtral8x7b.py`). Checks, in the same priority order as
+the previous entry's "NOT run on real hardware" list:
+
+1. `asyncio.run()` inside `_promote_module_via_tier_manager()` doesn't
+   raise — implied by `load_model()` completing at all with
+   `tier_manager` wired.
+2. The real `.to('cuda')`/`pin_memory()` transfer actually completes AND
+   EAT's tier is really updated to `Tier.VRAM` afterward — not just
+   "didn't crash": looks up the shadow pool's expert_ids directly in EAT.
+3. Whether a real AWQ dominant parameter fits under `SHARD_SIZE_BYTES` —
+   surfaced by whether `worker._shadow_pool` actually contains the
+   expected experts (a silent exclusion would show up as a shorter pool
+   + a logged "impossibile pinnare" warning, not a crash).
+4. Real per-token EAT traffic accumulates during `generate()` —
+   checks `access_count > 0` on real EAT entries post-generate.
+5. `refresh_shadow_pool_selection()` is callable post-traffic without
+   raising.
+
+Uses `quantization="awq"` (not `"awq_marlin"`) on the same
+`casperhansen/mixtral-instruct-awq` checkpoint every other script in
+this repo loads with `awq_marlin` — deliberate: the new TierManager
+wiring only touches path 3 (plain AWQ ModuleList), and the tiny test
+model (`hf-internal-testing/Mixtral-tiny`, unquantized) hits path 1
+instead, which would exercise none of today's new code at all. This
+will be slower than the Marlin path (no Marlin kernel) — expected, not
+a regression to chase. Not run here (no GPU) — same "NOT verified on
+real hardware" status as everything else in the previous entry, just
+now with a script that mechanizes the check instead of a prose list.
+
+### Not yet done
+
+- Actually running `smoke_test_gcsg_tier_manager.py` on the pod.
+- Everything from the previous entry's "Not yet done" list, unchanged.
+
+---
+
+## 2026-08-12 — Tekniska: sub-goal 1 (TierManager/EAT wiring, issue #17) — implemented, unit-tested, NOT yet run on real hardware
+
+Pod is paused; wrote this against the local checkout, to be pulled and
+run for real on the pod by the other session rather than requiring a
+fresh image rebuild+publish. First real code (not just infra/environment
+work) on Sprint 4's actual core goal — everything since kickoff had been
+sub-goals 2/3 (pinning, re-running MMLU on the existing path).
+
+### Scope, decided deliberately narrower than "wire everything"
+
+Read `TierManager`/`EAT`'s real code before writing anything (`tier/manager.py`,
+`tier/gpu.py`, `eat/eat.py`) rather than assuming the API shape. Two
+structural findings shaped the scope:
+
+- `TierManager.promote()`'s NVMe→DDR4→VRAM chain expects shard *files* on
+  the NVMe volume (`AsyncNVMeIO.read_shard()`). GCSG's shadow experts are
+  not separate files — they're slices/parameters of the model vLLM
+  already loaded, live in process memory (GPU-resident or CPU-offloaded
+  by vLLM itself). Forcing them through the file-based NVMe hop would
+  mean writing an offline shard-export pipeline first — a bigger, riskier
+  piece I did not start this pass.
+- `SlabAllocator`'s DDR4 pool defaults to 4 slots — too few for
+  `shadow_pool_size × 32 layers` shards. Another sign GCSG's live-tensor
+  assets don't fit M2's file-shard abstraction as-is.
+
+Given that, implemented a **live-tensor promotion bridge** instead of
+forcing the existing file-based pipeline: `TierManager.promote_live_tensor()`,
+a new method that takes an already-in-memory CPU tensor, registers/updates
+it in EAT (seeded at `Tier.DDR4` — the honest starting tier for something
+that's never been on NVMe), and moves it to VRAM via `GPUTransfer`,
+skipping only the NVMe I/O that doesn't apply here. Real M2/M1 bookkeeping
+(EAT tier is the source of truth), not a NVMe-shard-file simulation.
+
+### What's wired now
+
+- **`EAT.hottest_candidates(tier, n)`** — new, mirrors `eviction_candidates()`
+  (which is LRU/coldest-first, for eviction) with (access_count,
+  last_access_ts) descending — the complementary "what to promote" primitive.
+- **`GPUTransfer.to_vram()`** — now accepts `pin: bool` (default `False`,
+  zero behavior change) and a `torch.Tensor` input in addition to numpy,
+  so it can serve GCSG's real tensors, not just NVMe-sourced byte buffers.
+  This is also the concrete follow-through on Sprint 4 sub-goal 2's literal
+  wording ("should `TierManager.GPUTransfer` attempt real pinning") — the
+  soak test closed *whether pinning is safe*; this closes *whether
+  `GPUTransfer` actually uses it*, now opt-in via `pin=True`.
+- **`TierManager.promote_live_tensor()`** — the bridge described above.
+  Idempotent (returns the existing VRAM tensor if already promoted).
+- **`GCSGWorker(tier_manager=...)`** — new optional constructor arg,
+  default `None` (byte-for-byte unchanged behavior when omitted — the
+  just-validated 72.28%/72.3% Marlin-path results are at zero risk from
+  this change unless explicitly opted in):
+  - `_seed_eat_entries()` — seeds one EAT entry per (expert_id, layer_id)
+    at `Tier.DDR4` at `load_model()` time, for *all* experts, not just
+    the ones currently in the shadow pool (otherwise hotness could never
+    discover a new candidate).
+  - `_select_shadow_expert_ids()` — replaces the round-robin
+    `range(shadow_pool_size)` placeholder with EAT-hotness-driven
+    selection when a `TierManager` is wired. At cold start (no tokens
+    routed yet), this is provably equivalent to round-robin — not
+    hand-waved: `sorted(..., reverse=True)` is stable in Python, and with
+    every `access_count` at 0 the `range(n_experts)` input order survives
+    intact. (First draft used `last_access_ts` as a tie-break, which
+    seemed like a reasonable "prefer fresher" signal — turned out to
+    silently bias toward whichever expert `_seed_eat_entries()` happened
+    to insert *last*, an artifact of insertion order, not real hotness.
+    Caught writing the unit test for the cold-start case, not on
+    hardware — dropped the tie-break entirely rather than patch around it.)
+  - Real EAT traffic: `_evaluate_gcsg_for_rows()` now calls `EAT.access()`
+    on the actual top-1 routed expert for every token/layer, independent
+    of whether GCSG's shadow path activates — this is the real concurrent
+    traffic issues #1/#2/#4 (M1 debt, sub-goal 5) need to even be
+    measurable; until now only synthetic unit-test traffic existed.
+  - `_pin_awq_expert_to_gpu()` (path 3, AWQ ModuleList) routes its
+    GPU-residency transfer through `TierManager.promote_live_tensor()`
+    instead of a direct `.to('cuda')` when wired — the literal ask in
+    issue #17 for this one path. One dominant parameter per
+    (expert_id, layer_id) is EAT-tracked (the largest, e.g. `qweight`);
+    smaller auxiliary tensors (`qzeros`/`scales`) move with the same
+    pin decision but aren't tracked individually — `SHARD_SIZE_MB=256`
+    and EAT's whole design target chunky weight tensors, not
+    scale/zero-point arrays.
+  - `refresh_shadow_pool_selection()` — recomputes selection from
+    current EAT hotness and reloads the pool if it changed. Deliberately
+    **not** wired to any automatic trigger: doing that without knowing
+    real `promote()`/`evict()` latency (sub-goal 4, unmeasured) risks a
+    promote/evict storm on every call — exactly the cost that sub-goal
+    is supposed to quantify first, not assume away.
+
+### Deliberately NOT touched: the Marlin path (path 2)
+
+`_build_marlin_shadow_pool()`/`_PinnedMarlinExperts` — the path the
+*actual* validated checkpoint uses (`casperhansen/mixtral-instruct-awq`,
+Marlin-packed) — still does its direct `.to(device)` pinning, unchanged.
+Two reasons: it's the most fragile mechanism in this file (a real CUDA
+allocator fragmentation hang was found and fixed there on 2026-08-10, see
+that entry — not a place to introduce unverified new code paths without
+hardware to test against), and it's the path the already-published
+72.28%/72.3% results depend on — zero appetite to risk that number on
+code nobody's run yet. Expert *selection* upstream of it is still
+EAT-driven when wired; only this path's own GPU transfer stays as-is.
+Natural next increment once the AWQ path is confirmed working on the pod.
+
+### Verification split, stated the same way every other claim in this
+### project has been
+
+**Real, run, passing (91 passed / 18 skipped, zero failures/errors,
+`PYTHONPATH=src python3 -m pytest tests/`):**
+- `EAT.hottest_candidates()` — 4 new tests (ranking, tie-break by
+  recency, tier isolation, empty tier).
+- `TierManager.promote_live_tensor()` — 5 new tests
+  (`@pytest.mark.gpu`, skip cleanly here with no CUDA, same as all
+  existing GPU-marked tests; will run for real on the pod).
+- `TierManager.eat` property — 1 new test.
+- `GCSGWorker` M1/M2 wiring logic — 13 new tests, all CPU-only (real
+  `TierManager`/`EAT` instances — constructing `TierManager` only needs
+  torch *importable*, not CUDA, same reason the pre-existing non-gpu-marked
+  `TestTierManager` class already does this in CI): selection
+  round-robin/hotness/cold-start/aggregation-across-layers/no-seed-fallback,
+  seeding idempotency, real per-token EAT traffic (including
+  independent-of-shadow-activation), `refresh_shadow_pool_selection()`'s
+  three branches.
+- Along the way, found and fixed a **real pre-existing latent bug**,
+  unrelated to this feature except that it's what exposed it:
+  `GCSGWorker.__getattr__` delegates unknown attributes to `self._base`
+  unconditionally — on a worker built via `GCSGWorker.__new__()` (the
+  established test pattern in this file, bypassing `__init__()`'s vLLM
+  import) with `_base` itself never set, any missing-attribute access
+  recursed into `RecursionError` instead of a clean `AttributeError`.
+  Existing tests never happened to trigger it; the new `_tier_manager`
+  read in `_evaluate_gcsg_for_rows()` did. Fixed with an explicit `_base`
+  presence check via `__dict__` (bypasses `__getattr__` for the check
+  itself) before delegating — genuine robustness fix, not just a
+  workaround for my own test.
+
+**NOT run on real hardware (no GPU in this environment) — first things
+to check on the pod, in rough priority order:**
+1. `asyncio.run()` inside `_promote_module_via_tier_manager()`, called
+   from `load_model()` (sync, inside a real vLLM worker process) — should
+   be safe (no event loop already running there, per the same
+   `GPUExecutor` init_device/load_model sequencing already verified for
+   this file, 2026-08-09), but that's inference from a related fact, not
+   a direct check of *this* bridging.
+2. The real `.to('cuda')`/`pin_memory()` transfer end-to-end through
+   `TierManager.promote_live_tensor()` on the AWQ path against the real
+   checkpoint (only unit-tested with fakes/CPU tensors here).
+3. Whether a real per-layer AWQ expert's dominant parameter actually fits
+   under `SHARD_SIZE_BYTES` (256MB) — `EAT.insert()` raises `ValueError`
+   if not; `_pin_awq_expert_to_gpu()` already catches and excludes that
+   expert_id per its pre-existing degrade-safely contract, so a failure
+   here is informative, not a crash, but the actual byte size on the real
+   checkpoint is unknown until measured.
+4. A real MMLU comparison run with `tier_manager` wired, once 1-3 hold,
+   against today's 72.28%/72.3% baseline — same discipline as every other
+   number in this project, not claimed until measured.
+
+### Not yet done
+
+- Sub-goals 3 (integrated-path MMLU rerun), 4 (promote/evict latency
+  measurement — needed before `refresh_shadow_pool_selection()` can be
+  wired to fire automatically), 5 (issue #1/#2/#4 depend on real EAT
+  traffic existing under load, which this now provides but hasn't yet
+  been exercised that way), 6 (path 1 parity) — all still open.
+- Marlin path (path 2) TierManager wiring — deferred, see above.
+- Everything already queued from prior entries (Dockerfile unification,
+  corrected-image GHCR publish — now lower priority per today's
+  clarification that the other session updates code directly on the pod).
+
+---
+
+## 2026-08-12 — Tekniska, continued: independent verification of the archived Sprint 4 data — correlation refines to r=0.993, plus a new micro-slowdown observation
+
+Cross-checked every headline number in `LogBook_20260812_1344/` against the
+raw archived files directly (not the `SUMMARY.md`), since that's the
+discipline this project has used throughout — pasted/summarized numbers
+get re-derived from source before being trusted.
+
+### Confirmed, exactly
+
+- Sliced run: Σcorrect/Σtotal from `mmlu_sliced_run/mmlu_results.jsonl`
+  = 412/570 = 72.28%.
+- Single-shot: `mmlu_burn_singleshot/burn_singleshot.log` itself prints
+  `Accuratezza complessiva: 72.3% (412/570)` and
+  `[T+ 570.3s] generate() completed.` — matches exactly.
+- `shadow_activations`: sliced run's 18-process sum = 562,403; the
+  single-shot run's own `GCSGGuard` stats report 562,380 — a 23-count
+  difference on 562K (~0.004%) across two entirely different process
+  topologies, same prompts/thresholds. Extra evidence the shadow-execution
+  behavior is deterministic and independent of process boundaries, not
+  just the final accuracy.
+
+### Refinement: the latency correlation is tighter than first measured
+
+The r=0.95 figure (previous entry) used each slice's total elapsed time,
+which bundles in the ~99s near-constant model-load cost. Isolating just
+the `generate()` duration per slice from `mmlu_sliced_run/orchestrator.log`
+(`[T+ Xs] Running generate()` → `[T+ Ys] generate() completed`, Y−X) and
+correlating that against `shadow_activations_cumulative`:
+**r=0.993** — tighter, and it should be: model load averages 99.0s with
+low variance (91.6-106.8s) regardless of content, while `generate()`
+duration (11.0-60.7s range) is the part actually driven by the extra
+forward passes shadow activations cause. Confirms, doesn't change, the
+mechanism already recorded.
+
+### New: a much smaller echo of the old stall pattern, self-resolving
+
+`burn_singleshot.log`'s per-request throughput briefly drops around
+request ~211-221 (down to ~0.29 it/s / 3.5s per item) and again, smaller,
+near ~302-320 — both recover within ~10-15s on their own, no
+preemption/warning logged by vLLM at this log level. Nowhere near the
+severity of the old WSL2 stall (that one never self-resolved, needed a
+kill) and didn't threaten this run, but it's a real, measurable
+micro-pattern worth watching — same general territory (the historical
+trigger zone was request ~27-31) as a milder, later-onset echo. Not
+investigated further today; flagged for if it recurs or grows on a larger
+run.
+
+---
+
+## 2026-08-12 — Tekniska, continued: burn-test result — single-shot 570-prompt run does NOT hang on real Linux, ~4.2x faster, identical accuracy
+
+Relaunched correctly (`PYTHONPATH` fix from the previous entry's false
+start) — one process, one `GCSGWorker`, one `generate()` call across all
+570 prompts at once. This is exactly the shape that hung reproducibly
+around request 27-31 on WSL2 (2026-08-10 entry) and was never
+root-caused; never re-tested outside WSL2 until now.
+
+### Result: no hang, and the numbers match the sliced run almost exactly
+
+- **570.3s total** (106.3s model load + 464.0s `generate()`) — no stall,
+  no watchdog trigger, completed cleanly well inside the 1800s safety
+  ceiling.
+- **412/570 = 72.3%** — the *exact same correct-answer count* as the
+  18-slice run (412/570 = 72.28%, previous entry). Confirms what was
+  expected going in: nothing in `GCSGGuard`/shadow-pool selection
+  carries state across requests that affects the actual generation math
+  (shadow-pool expert IDs are fixed round-robin, hooks are stateless
+  per-token) — slicing vs. single-shot changes wall-clock time, not
+  quality, and now that's measured, not just argued.
+- **~4.2x faster than the sliced run** (~9.5 min vs. ~38-40 min) — the
+  entire difference is the 17 avoided model reloads (§ previous entry:
+  ~96s/reload × 17 ≈ 27 min saved).
+
+### What this settles
+
+The fresh-process-per-slice design was a workaround for an unexplained
+WSL2 stall, adopted because it was "the only pattern ever found
+reliable" (2026-08-10 orchestrator script comment) — not because
+process-reuse/single-batch was known to be unsafe in general. Today's
+result is the first direct evidence that the stall was WSL2-specific,
+same shape as the CRLF false alarm and the SSH/CMD bug earlier this
+sprint: things that looked like structural project bugs turning out to
+be platform artifacts once tested on real Linux. `run_mmlu_in_slices.sh`
+stays as-is for now (proven, no reason to touch it mid-sprint), but the
+single-call path is now a validated faster option for future runs on
+non-WSL2 hardware, not just a hopeful theory.
+
+### Not a substitute for the sliced run as the baseline
+
+Same GPU (A5000, not 3090 — carried caveat from earlier this sprint),
+same checkpoint, same run. Recorded as a second, faster confirmation of
+the same result, not a replacement measurement.
+
+Session data (soak test log, both MMLU run logs+results, environment
+snapshot) archived locally under `LogBook_20260812_1344/` before pod
+shutdown, alongside this commit's `osx-poc/scripts/verify_pin_memory_soak.py`
+(the soak-test script itself, written same day, not yet committed until
+now).
+
+---
+
+## 2026-08-12 — Tekniska, continued: sliced MMLU run complete — 72.28% vs. WSL2's 72.11%, plus a new latency-vs-shadow-activations correlation
+
+All 18 slices done, 570/570 questions.
+
+### Result: cross-hardware reproducibility holds
+
+**412/570 = 72.28%**, against the WSL2 baseline's 411/570 = 72.11%
+(2026-08-11 report numbers) — a ~+0.17pp difference, inside noise for a
+570-question sample, despite a different GPU (A5000 vs. 3090) and a
+different OS/virtualization stack (real Linux vs. WSL2). This had
+already looked likely from the interim 96/570 checkpoint two entries
+back, and holds at full completion: same pipeline, same behavior,
+independent of the underlying hardware. Last slice `[544,570)`: 20/26 =
+76.9%.
+
+### `shadow_activations` vs. accuracy: no correlation (r=0.04)
+
+Per-slice shadow-execution activation count does not predict per-slice
+accuracy. Contamination from shadow execution isn't selectively wrecking
+the slices where it fires most — supports the report's <2%
+quality-degradation target being a stable property, not a hidden
+tail-risk tied to activation rate.
+
+### New: `shadow_activations` vs. per-slice *time* — strong correlation (r=0.95), not yet in any doc
+
+Not something we'd measured before. The four slowest slices are exactly
+the four with the most shadow activations (3-4x the typical rate):
+
+| slice | shadow_activations | time |
+|---|---|---|
+| `[288,320)` | 78,068 | 159.5s |
+| `[192,224)` | 69,276 | 148.3s |
+| `[480,512)` | 49,054 | 142.8s |
+| `[64,96)` | 35,900 | 132.8s |
+| typical | ~20-28k | ~112-125s |
+
+Mechanistically this is expected, not a coincidence: every shadow
+activation is an extra forward pass through the INT4 verification
+expert, so it has a real, roughly proportional latency cost. The
+project's roadmap/README only ever framed shadow execution's cost in
+terms of quality (`<2%` degradation) — this is a separate, measurable
+*performance* cost nobody had explicitly quantified until this run.
+Worth a note in the GCSG report's limitations/future-work section, not
+just here.
+
+### Aside: burn-test false start, self-corrected
+
+The standalone pinning burn-test (distinct from this MMLU run) was
+launched without exporting `PYTHONPATH` first — died in seconds on
+`ModuleNotFoundError: No module named 'scheduler'`, before touching the
+model. Not a stall, not a regression — a launch-command mistake, caught
+immediately and relaunched correctly (PID confirmed alive). A stale
+monitor echo from the already-concluded slice orchestrator briefly
+looked like new information; it wasn't — same check re-firing on
+concluded state, no new signal.
+
+### Not yet done
+
+- Burn-test result (best case ~8 min, safety timeout at 30 min).
+- Fold the latency/shadow_activations finding into the GCSG report.
+- Everything already queued: Dockerfile unification, corrected-image
+  rebuild+publish, remaining `/etc/environment` var verification,
+  process-reuse-safety-on-real-Linux test.
+
+---
+
+## 2026-08-12 — Tekniska, continued: per-slice timing breakdown — ~80% of wall-clock is model reload, not inference
+
+Further into the same run, a finer-grained look at where the per-slice
+time actually goes (8 slices sampled):
+
+| | range | avg |
+|---|---|---|
+| dataset setup | ~2-6s | — |
+| model load (18.8GB AWQ checkpoint, network volume) | 92-104s | ~96s |
+| `generate()` | 17-27s (one outlier: 53.7s) | — |
+| total per slice | 112-148s | — |
+
+Model reload is ~80% of wall-clock time. This is the cost of the
+fresh-process-per-slice design (§ previous entries): each of the 18
+slices starts a brand-new process and reloads the full checkpoint from
+scratch, specifically to avoid resuming a process-reuse stall that was
+never root-caused on WSL2 (2026-08-10/11 entries — ruled out content and
+batch composition as the variable, but the underlying mechanism was
+never pinned down, just avoided).
+
+**Not touched now** — changing the reuse pattern mid-run risks
+resurfacing that undiagnosed stall on a run we can't afford to
+invalidate. Logged as a concrete follow-up instead: now that pinning is
+confirmed stable under sustained load on real Linux (soak test, this
+morning's entry), it's worth testing separately — after this run
+completes — whether that old stall was itself a WSL2 artifact. If so,
+reusing one process across slices would cut the ~80% reload overhead.
+Filed here rather than acted on, per the same discipline as the
+Dockerfile-unification and `/etc/environment`-verification items already
+queued below.
+
+### Clarification: what's actually GPU-resident vs. CPU-offloaded, and why the reload cost above isn't the whole picture
+
+Follow-up question during the run: does GCSG use GPU and CPU offload
+*simultaneously*, and does state really reset every slice? Checked
+against `osx-poc/src/scheduler/gcsg.py` directly rather than answering
+from memory:
+
+- **Two separate expert populations, not one.** The shadow pool
+  (`GCSGGuard.shadow_pool_size=2`, gcsg.py:162) is always GPU-resident by
+  design — this is the 2026-08-10 fix (issue #10/#16): `_load_shadow_pool()`
+  pins every module it hands to the shadow path via `_PinnedMarlinExperts`
+  (gcsg.py:474, :997-999), zero CPU round-trips. Every *other* expert in
+  the model stays under vLLM's native `cpu_offload_gb=4` and swaps
+  CPU↔GPU on every forward pass that routes to it — that's the traffic
+  this morning's pinning soak test validated as safe under load. This
+  offload path is vLLM-native and does **not** go through `TierManager`/EAT
+  — confirmed by grep, no `TierManager`/`eat` import anywhere in
+  `gcsg.py`. That's exactly the gap issue #17 describes: `TierManager`
+  exists and is verified in isolation, but isn't in `GCSGWorker`'s real
+  data path yet. Today's run exercises `GCSGWorker` as it stands now, not
+  a `TierManager`-integrated version.
+- **State really is fresh per slice, confirmed two ways.** In code:
+  `GCSGWorker.__init__` (gcsg.py:722-727) constructs
+  `self._shadow_pool: Dict[int, object] = {}` and
+  `self.guard = guard or GCSGGuard()` unconditionally, no persistence
+  hook — a new process means a fully zeroed worker. In the data: the
+  `shadow_activations_cumulative` field (written from
+  `guard_stats_now["shadow_activations"]` = `GCSGGuard._contamination_counter`,
+  `eval_mmlu_gcsg.py:315/349`, `gcsg.py:381`) is cumulative only within
+  the current process — observed non-monotonic across slices (e.g.
+  23670 → 25125 → 35900 → 28521), which could only happen if the counter
+  resets each slice. Mechanism and observation agree.
+
+### Not yet done
+
+- Everything from the entry below, plus: test whether process reuse
+  across slices is safe on real Linux (separate from and after this run).
+
+---
+
+## 2026-08-12 — Tekniska, continued: MMLU run in progress — speed already conclusive, quality not yet
+
+Interim update, 3/18 slices in — not the final numbers, but the speed
+comparison is consistent enough across three independent slices to
+record now rather than wait.
+
+### Speed: dramatic, and it directly confirms the soak test's implication
+
+| | WSL2 (18/18 overnight, 2026-08-11) | RunPod, this run (3/18) |
+|---|---|---|
+| `generate()` per slice | up to ~30 min on the worst slice; 3,690s (~1h03m) summed across all 18 | 17-20s, consistent across all 3 |
+| total per slice (load+generate) | highly variable, unpredictable | 114-133s, stable across all 3 |
+
+Consistent with what this morning's pinning soak test already implied:
+the WSL2 bottleneck was never intrinsic to the model or `GCSGWorker` —
+it was specifically the pageable-memory CPU→GPU swap `maybe_offload_to_cpu()`
+falls back to when vLLM disables `pin_memory` under WSL2 (§5 of the GCSG
+report). Real pinning here removes exactly that cost. No stalls, no
+watchdog drama, none of the variability that forced smaller slices and
+raised timeouts on the WSL2 run — the interaction-effect stall from
+2026-08-10/11 hasn't reappeared once across 3 slices.
+
+Projection at the current pace (~146s/slice average): remaining 15
+slices ≈ 35-40 minutes to completion, versus the WSL2 run's overnight
+wall-clock time.
+
+### Quality: explicitly not compared yet — too early, said so before being asked
+
+96/570 questions done (65.6%, 75%, 62.5% per slice, 67.7% pooled), but
+these are only the first ~9-10 of 57 subjects in dataset order, not a
+representative sample across all subjects/difficulty. **Not compared
+against the WSL2 baseline (72.11%, −0.19pp) yet** — that comparison is
+only meaningful at full completion. Flagged as premature by the session
+running it, not left implicit — same discipline the GCSG report itself
+uses for its own limitations section.
+
+### Not yet done
+
+- Full 570-question completion and the real quality comparison.
+- Everything already queued from the previous entry (Dockerfile
+  unification, corrected-image rebuild+publish, remaining `/etc/environment`
+  var verification).
+
+---
+
+## 2026-08-12 — Tekniska, continued: false alarm on a "parallel session", full MMLU run launched
+
+### A "second session on a separate pod" report, checked before acting on it
+
+Mid-session, a report arrived that a different session appeared to be
+working on a separate RunPod pod, having just closed the same pinning
+soak-test sub-goal at nearly the same time — raised as a real risk of
+duplicating the upcoming MMLU eval too. Checked independently before
+treating it as real: `git log HEAD..origin/Sprint-4-Tekniska` (empty —
+local and remote identical), every remote branch's most recent activity
+(`git for-each-ref --sort=-committerdate`, nothing newer than this
+session's own last push). No second branch, no unfamiliar commit,
+nothing to suggest a real parallel actor. Likely explanation: every
+commit in this sprint is authored as the same generic `Claude
+<noreply@anthropic.com>` identity regardless of which session made it, so
+a run of closely-spaced commits from this session alone can read as "two
+different sessions" at a glance. Not confirmed with certainty, but no
+contradicting evidence found either — proceeded on that basis rather than
+stalling.
+
+### The CRLF bug again — same class as yesterday, not a new one
+
+Transferring the repo to `/data/nvme` a second time hit the identical
+`bad interpreter` failure from the SSH/`sshd` fix session — this time in
+`run_mmlu_in_slices.sh`. Root cause confirmed, not assumed: the transfer
+(`git archive`) ran *before* fetching `165fe77` (the `.gitattributes`
+LF-normalization commit from earlier today), so the archived tree still
+had CRLF line endings. Re-transferred after fetching current `HEAD` —
+resolved. Not a regression in the fix itself, a timing issue in when the
+transfer happened relative to the fetch.
+
+### A real design improvement: `/workspace` symlinked to the persistent volume
+
+`/workspace` now points at `/data/nvme/vMemoryFabric` (on the Network
+Volume) instead of living on the ephemeral Container Disk — the repo
+checkout survives a pod restart, and every path that still expects
+`/workspace` (the image's own `WORKDIR`, `PYTHONPATH`, scripts) keeps
+working unchanged. Directly addresses what cost real time at the end of
+the 2026-08-11 session: terminating a pod there meant starting over from
+a fresh checkout next time. Worth carrying into the Dockerfile/template
+as the default going forward, not just this pod's own manual fix — noted
+for the deferred "unify Docker/RunPod" pass below.
+
+### Full 570-question MMLU run launched
+
+Orchestrator running for real against the checkpoint on `/data/nvme`,
+output to `/data/nvme/runs/` (persistent, survives a pod restart same as
+the code now does). Sanity slice ran ~135s including model load — full
+570-question run estimated at "a few dozen minutes," far under the
+WSL2-era overnight run this project has had to work around before
+(`LOGBOOK.md`, 2026-08-11 "the stall was never a deadlock" entry).
+
+### Deferred, deliberately: unifying the Dockerfile for local dev + RunPod
+
+Today's fixes (SSH/`sshd`, source `COPY`, `PYTHONPATH`, now the
+`/workspace` persistence pattern) have accumulated as separate patches
+rather than one coherent "this image works the same way whether it's
+`docker compose run` locally or a RunPod Pod" design pass. Good next
+step, explicitly not now — mid-eval is the wrong time, the run in
+progress is not to be disturbed. Revisit once results land.
+
+### Not yet done
+
+- Wait for the 570-question run to complete and report real numbers.
+- The deferred Dockerfile unification pass above.
+- Still outstanding from earlier today: build + publish the corrected
+  image (`0b600f2`) as a fresh tag; verify `CUDA_VISIBLE_DEVICES`/
+  `TOKENIZERS_PARALLELISM`/`OMP_NUM_THREADS` reach an SSH session, not
+  just `PYTHONPATH`.
+
+---
+
+## 2026-08-12 — Tekniska, continued: pinning soak test — sub-goal 2 closed, positively
+
+The actual point of the whole RunPod detour, answered: **1000/1000
+iterations, 0 byte-exact mismatches**, real pinned host memory, real
+256MB shards (same unit `TierManager`/`EAT` operate on), on the A5000 pod
+over `ssh`. No silent corruption under sustained repeated use — the
+specific risk flagged and left explicitly open in the GCSG report's §9
+correction and in this sprint's kickoff entry (2026-08-11).
+
+### The numbers, not just pass/fail
+
+- Total-cycle drift (first 10% of runs vs. last 10%): **-1%** — flat.
+- H2D+D2H transfer time drift: **-3%** — flat.
+- Pin-alloc-specific drift: **-31%**, i.e. pinning got *faster* after the
+  first several hundred cycles, not slower — consistent with the host-side
+  allocator warming up / page caching, not with the kind of
+  fragmentation-driven degradation this project already saw once for real
+  (the `_PinnedMarlinExperts`-for-all-32-layers hang, 2026-08-10) and knows
+  to watch for. No sign of it here.
+- 1000 cycles in 589s (~513ms/cycle average, including a fresh 256MB pin +
+  H2D + D2H + byte comparison each time — not a raw-transfer-only number).
+
+### Why this reads as a real answer, not another single call
+
+Contrast with the diagnostic monkeypatch used throughout the original
+crash investigation (`vllm.platforms.interface.in_wsl` forced to
+`False`): that approach bypassed vLLM's own WSL2 guard on top of memory
+WSL2 itself doesn't support cleanly — a small number of calls not
+crashing was explicitly *not* trusted as sufficient evidence back then
+(2026-08-09/10 entries), for exactly the reason this soak test now
+addresses directly: real pinning, real Linux, sustained load, byte-exact
+verification every cycle, not just "didn't crash."
+
+### Sub-goal 2 (Sprint 4 kickoff, 2026-08-11) — closed
+
+> Resolve the pinning-strategy question the GCSG report's §9 correction
+> left open... Decide, with evidence, whether `TierManager.GPUTransfer`
+> should attempt real pinning or keep GCSG's current "stay permanently
+> GPU-resident" approach.
+
+Decided, with evidence: real pinning is safe and stable under sustained
+load on real Linux (not under WSL2, where this was never tested because
+it structurally can't be — vLLM disables it there). `TierManager`
+attempting real pinned transfers, rather than only the
+permanently-GPU-resident approach GCSG's shadow pool currently uses, is
+now a defensible design choice for the Sprint 4 sub-goal 1 integration
+work — on this platform specifically, not as a general claim about
+WSL2.
+
+### Next
+
+Sub-goal 3 (re-run the MMLU-5shot evaluation on the integrated path) is
+next — longer, more moving parts (`GCSGWorker` + checkpoint + eventually
+`TierManager`), more risk surface. Proceeding directly on the current pod
+with the manual `PYTHONPATH=/workspace/osx-poc/src` override rather than
+pausing to rebuild the corrected image first — the override is proven
+working (`GCSGWorker`/`TierManager` already imported successfully with
+it) and this pod is already warmed up (checkpoint present, environment
+verified, soak test done); rebuilding now would cost real time for zero
+change to the actual eval work. The corrected image (`0b600f2`, not yet
+built/published) stays queued as a hygiene pass for a natural pause
+point, not a blocker.
+
+---
+
+## 2026-08-12 — Tekniska, continued: the image had no project code on it
+
+Pre-checks before the pinning soak test (checkpoint integrity, free GPU,
+matching torch/CUDA build — all clean) surfaced a real blocker: **`import
+scheduler.gcsg` / `import tier.manager` both fail on the pod** —
+`ImportError`, the modules simply aren't there.
+
+### Same root cause shape as the CMD/sshd fix, different symptom
+
+`Dockerfile` never `COPY`s `osx-poc/src` (or anything else project-side)
+into the image — it only ever worked locally because
+`docker-compose.yml`'s `.:/workspace` bind-mounts the whole repo over
+`/workspace` at container start. That mount doesn't exist on a RunPod
+Pod, which runs the image as published — so the pod had CUDA, torch,
+vLLM, sshd, all the dependencies, and zero lines of this project's own
+code. Not caught earlier because every prior verification (SSH, `sshd`,
+`/dev/shm`, `nvidia-smi`) never touched project code, only the base
+environment.
+
+Second, related finding from the same pre-check pass: `PYTHONPATH` reads
+empty in the SSH session despite `ENV PYTHONPATH=/workspace/src` being
+set in the Dockerfile — `CUDA_VISIBLE_DEVICES`/`TOKENIZERS_PARALLELISM`/
+`OMP_NUM_THREADS` almost certainly have the same problem, not
+individually re-checked. Docker `ENV` sets the environment for the
+container's main process tree; a separate SSH login session gets its own
+environment via PAM, which doesn't read Docker's `ENV` at all.
+
+### Fix, and what didn't block on it
+
+`Dockerfile` (`2baae5c`): `COPY osx-poc/src|scripts|configs|tests` into
+`/workspace/*`, matching the `PYTHONPATH` already declared rather than
+the `osx-poc/`-relative convention `make`/CI use locally — shadowed by
+the bind mount for local dev, so no behavior change there, verified by
+reasoning about mount precedence rather than assumed. Also appended the
+same env values to `/etc/environment`, which `pam_env` reads for every
+login session including SSH.
+
+Not build-tested yet — same caveat as the SSH fix, needs a real GHCR
+build before trusting it. Didn't block today's actual work: the pinning
+soak test doesn't touch `GCSGWorker`/`TierManager` at all, so the plan is
+to `rsync`/`scp` the repo onto the already-running pod directly over the
+working SSH connection as an immediate unblock, independent of a
+rebuild-and-republish cycle.
+
+### Corrected same day: the COPY targets above were themselves wrong
+
+The rsync workaround (whole repo copied over the working SSH connection,
+not just `osx-poc/src`) preserved the repo's real directory structure —
+landing at `/workspace/osx-poc/src`, not `/workspace/src`. That disagreed
+with both the `COPY` fix above and the Dockerfile's own
+`ENV PYTHONPATH=/workspace/src`, forcing a manual `PYTHONPATH` override
+per SSH command. Flagged rather than fixed by the session doing the
+hands-on work — correctly deferred to avoid touching a shared branch
+unilaterally.
+
+Root cause, confirmed rather than guessed: `docker-compose.yml`'s local
+bind mount is `.:/workspace` (repo **root**, not `osx-poc/`), so the code
+has only ever really lived at `/workspace/osx-poc/src`, even for local
+dev — this `ENV` disagreed with that from before Sprint 4 even started,
+masked because `make`/CI always override `PYTHONPATH` explicitly at
+invocation time rather than relying on it. Confirmed independently via
+`scripts/smoke_test.py`'s own internal contradiction:
+`check_osx_src_importable()`'s docstring said
+`PYTHONPATH=/workspace/src`, but its own `_warn` on import failure
+already said `/workspace/osx-poc/src` — and the function imports
+`eat`/`tier`/`scheduler` as top-level packages, which only resolve under
+`osx-poc/src`, never a top-level `src/`. Two independent pieces of
+evidence agreeing, not one claim taken on faith.
+
+`Dockerfile`/`smoke_test.py` (`0b600f2`): `ENV PYTHONPATH`, the `COPY`
+targets from the fix above, and the `/etc/environment` entry all
+corrected to `/workspace/osx-poc/src`; the docstring fixed to match its
+own already-correct `_warn` instead of contradicting it.
+
+### Not yet done
+
+- Build + publish the corrected Dockerfile as a fresh `sprint-4-tekniska`
+  tag — now two rounds of fixes bundled into one build instead of one.
+- Verify `CUDA_VISIBLE_DEVICES`/`TOKENIZERS_PARALLELISM`/`OMP_NUM_THREADS`
+  actually reach an SSH session now, not just `PYTHONPATH`.
+- The pinning soak test itself, on the rsync'd copy (with the manual
+  `PYTHONPATH=/workspace/osx-poc/src` override) — still the point of
+  today, running now.
+
+---
+
+## 2026-08-12 — Tekniska, continued: `/dev/shm` measured, second pod live
+
+New pod deployed from the updated template (issue #18's `/dev/shm`
+question was one of the two open items from last night, alongside the
+`pin_memory` test itself).
+
+**`/dev/shm` = 12GB** (`df -h /dev/shm` inside the running pod), not the
+generic 64MB Docker default this project was bracing for. RunPod's own
+support assistant confirmed there's no exposed setting for this
+(2026-08-11 entry) — evidently they size it automatically based on pod
+resources rather than leaving the container runtime default in place.
+Closes the "real blocker" half of issue #18 for this specific concern:
+no `torch.multiprocessing.set_sharing_strategy('file_system')` workaround
+needed. `OMP_NUM_THREADS`-vs-real-vCPU-count, the other half of #18,
+stays open — not re-checked on this pod.
+
+Also noted, neither blocking: `/data/nvme` is backed by MooseFS
+(`mfs#us-il-1.runpod.net:9421`), a shared distributed network filesystem,
+not local disk — 657TB pool-wide, not this volume's own capacity. Worth
+remembering if I/O-heavy work later shows different latency
+characteristics than local NVMe would. Root filesystem (`overlay`) at
+50GB matches the configured Container Disk, 16MB used on fresh boot —
+sizing from the real GHCR manifest (LOGBOOK, 2026-08-11 pod-deployment
+entry) held up.
+
+Next: `ls /data/nvme/models/` (checkpoint presence), then the
+`pin_memory` test itself — still the actual point of this whole detour.
+
+### First real `pin_memory=True` outside WSL2 — real signal, not yet the full answer
+
+GPU on this pod: **RTX A5000**, confirmed via `nvidia-smi` — not the RTX
+3090 the original plan named, but not a deviation either: A5000 is
+GA102, CC 8.6, 24GB — the same architecture/VRAM class as the 3090, and
+was already the first choice among compatible cards for exactly this
+reason (see the 2026-08-11 pod-deployment entry). No second variable was
+introduced; a moment of confusion mid-session, corrected before acting on
+it rather than after redeploying a pod unnecessarily.
+
+`torch.zeros(1024).pin_memory(); t.is_pinned()` → **`True`**. First time
+this project has gotten a real `True` on a system where it matters,
+outside a diagnostic monkeypatch bypassing vLLM's own guard. Real signal
+that pinning is at least possible on this platform, where it structurally
+isn't under WSL2.
+
+**Not yet the full answer to the open question from the GCSG report's §9
+correction** — that question was specifically whether manual pinning is
+*safe and fast under sustained load*, not just whether a single
+allocation succeeds. This one call is the same class of evidence the
+project has explicitly flagged before as insufficient on its own (see the
+original pin_memory investigation, 2026-08-09/10: "a single small
+synthetic forward not crashing doesn't rule out silent corruption or
+instability under sustained load"). Next: a real soak test — repeated
+pinned allocations/transfers, not a one-shot check — before treating
+this as resolved rather than promising.
+
+Checkpoint (`casperhansen/mixtral-instruct-awq`) confirmed absent, as
+expected — `/data/nvme/models/` doesn't exist yet on this volume. Download
+starting next.
+
+---
+
+## 2026-08-11 — Tekniska, session close: pod terminated, resume point set
+
+Stopping for the day rather than leaving a GPU pod billing overnight for
+no work happening. Container Disk held nothing worth keeping — checkpoint
+was never downloaded there (would land on the Network Volume anyway, not
+the ephemeral disk) — so the pod was terminated outright rather than just
+paused. No cost of any kind continues; the Network Volume
+(`vmemoryfabric-sprint4-runpod-20260811_volume`, 72GB, EU-RO-1) is
+unaffected either way, it's a resource independent of the pod's lifecycle.
+
+### End of day state
+
+- GHCR image `sprint-4-tekniska`: built, public, verified pullable, and —
+  the part that actually mattered — verified to run as a real persistent
+  service with working SSH (see the entry directly below). Not a
+  hypothesis anymore.
+- RunPod template already points at this tag; redeploying tomorrow is a
+  straight "create pod from template" with no further setup.
+- Nothing yet run inside a working pod except the SSH verification itself
+  — no checkpoint download attempted, no `pin_memory` test executed. Nothing
+  to lose by having terminated.
+- **Correction to the entry below**: the Network Volume's mount path was
+  found fixed to `/workspace`, not editable — true for RunPod's direct
+  Pod-creation screen, but the Template configuration screen is a
+  different flow and does let the path be set explicitly. Set to
+  `/data/nvme` there directly — the `ln -s /workspace /data/nvme`
+  workaround is no longer needed for pods deployed from this template.
+
+### Resume point for next session
+
+1. Deploy a pod from the existing template (GPU: whatever's available at
+   the time on EU-RO-1 — A5000/3090 Ti/A6000 preferred for the CC 8.6
+   match, RTX 4090 acceptable for anything that doesn't touch Marlin/GCSG
+   directly, per the architecture-substitution note below). Volume mounts
+   at `/data/nvme` directly now, no symlink step.
+2. `ls /data/nvme/models/` — near-certain the checkpoint still needs
+   downloading, the volume has never had anything written to it.
+3. `python -c "import torch; t=torch.zeros(1024).pin_memory(); print(t.is_pinned())"`,
+   then a real soak test if that passes — the actual point of the whole
+   RunPod detour, still not answered.
+
+---
+
+## 2026-08-11 — Tekniska, continued: SSH fix verified end-to-end, plus a false alarm
+
+**Release:** [Tekniska] v0.5.0-dev — in progress. Closes out the "not yet
+done" list from the entry directly below: the GHCR rebuild against
+`Sprint-4-Tekniska` succeeded (workflow run `31544443200`, `success`,
+~23 min — confirmed via the Actions API, not just taken on trust), the
+new `sprint-4-tekniska` tag verified publicly pullable with the same
+anonymous two-step registry check used for the first image, and — the
+actual point of all this — SSH now genuinely works.
+
+### A local build hit a real-looking bug that wasn't in the repo
+
+Building the fixed Dockerfile locally (to verify before trusting the
+GHCR pipeline again) surfaced `/bin/bash^M: bad interpreter: No such
+file or directory` — a CRLF-mangled shebang, `^M` being a carriage
+return. Traced before assuming the committed file was broken:
+`git show HEAD:docker-entrypoint.sh | cat -A` showed only trailing `$`
+(LF), no `^M` — the blob itself was clean. The CRLF was introduced by
+the local Windows checkout's `core.autocrlf=true`, converting LF to CRLF
+on checkout; the GHCR build (Linux runner) reads the same LF blob and
+was never affected. Confirmed independently by re-checking the blob
+directly rather than accepting the read at face value.
+
+Added `.gitattributes` (`*.sh text eol=lf`) anyway — doesn't rewrite
+anything already committed, just stops the next Windows checkout from
+rediscovering the identical false alarm.
+
+### SSH verified for real, not just "the build succeeded"
+
+Republished port 22 (initial timeout was Docker Desktop's Windows-VM
+bridge IP not being directly reachable, not an sshd problem) and did an
+actual login with the project's key pair: `SSH_OK`, `PID 1 = sshd`
+(container stays up, doesn't exit after the banner anymore), pubkey auth
+passed. Also checked the `sed` edits to `sshd_config` landed for real
+inside the container (`PermitRootLogin yes` / `PubkeyAuthentication yes`
+both present) rather than assuming a silent no-op.
+
+### GPU substitution: RTX 4090 also on the table now
+
+EU-RO-1 availability keeps shifting — RTX A5000 (the GA102/CC 8.6 match
+used for the first pod) became unavailable again; RTX 3090 Ti and A6000
+also checked, neither free; RTX 4090 (Ada Lovelace, **CC 8.9** — a
+different generation, not GA102) is what's actually available right now.
+Accepted for the immediate SSH/`pin_memory` verification work, since
+neither depends on GPU architecture at all — flagged explicitly as *not*
+pre-approved for the eventual full MMLU re-run (Sprint 4 sub-goal 3)
+without noting the architecture change in whatever report references
+that run, since the whole point of matching CC 8.6 was isolating one
+variable at a time. VRAM is still 24GB either way, so the memory-budget
+calibration (`cpu_offload_gb`, KV blocks) should still transfer — the
+kernel-architecture question does not.
+
+### Not yet done
+
+- Checkpoint presence check (`ls /data/nvme/models/` after the
+  `/workspace` → `/data/nvme` symlink) — the actual next step now that
+  the environment itself is confirmed sound.
+- The `pin_memory` soak test — the reason this whole RunPod detour
+  exists.
+
+---
+
+## 2026-08-11 — Tekniska, continued: SSH unreachable — the image never ran as a persistent service
+
+**Release:** [Tekniska] v0.5.0-dev — in progress. Direct continuation of
+the pod-deployment entry below: pod came up, image pull completed, but
+`ssh <pod-user>@ssh.runpod.io -i ~/.ssh/id_ed25519` failed outright.
+
+### Wrong first guesses, ruled out before touching anything
+
+Initial hypotheses — mount path wrong, model download still in progress
+blocking something, SSH key mismatch — were all plausible given the
+session so far, but none matched the actual evidence once asked for
+directly. The pod's boot log, requested specifically instead of guessing
+from the SSH client's own error alone, showed only the base
+`nvidia/cuda` image's standard license banner (`CUDA Version 12.1.1`,
+NGC container license text, `==========`) and **nothing after it** — not
+a truncated log, the actual last thing the container ever printed.
+
+### Root cause: two real gaps in the image, both invisible until now
+
+Read `Dockerfile` directly rather than guessing further:
+
+1. **`CMD ["/bin/bash"]`** — with no TTY attached (exactly the case for a
+   cloud provider's container supervisor, unlike `docker compose run -it`
+   locally), `bash` reads EOF on stdin immediately and exits. The
+   container was never staying up long enough to do anything, SSH
+   included — the banner is the last output because the container died
+   right after printing it.
+2. **No `openssh-server` anywhere in the image.** Even had (1) not
+   existed, nothing was listening for SSH connections inside the
+   container at all.
+
+Neither gap was ever visible before: every local invocation of this image
+(`make smoke`, `make test`, `make shell`, CI's `docker compose run`) goes
+through `docker compose run`, which always passes an explicit command
+that replaces `CMD` entirely — confirmed by rereading `osx-poc/Makefile`'s
+own header comment ("Tutti i target girano nel container via docker
+compose run") and the `shell:` target
+(`docker compose run --rm -it $(SERVICE) /bin/bash`) before changing
+anything, rather than assuming the fix wouldn't break local dev. This
+image had simply never been asked to run as a standing service before
+today — a RunPod Pod is the first thing that does.
+
+### Fix — `openssh-server` + an entrypoint, not a RunPod-side workaround
+
+`Dockerfile`: installs `openssh-server`, enables `PermitRootLogin`/
+`PubkeyAuthentication` in `sshd_config`. New `docker-entrypoint.sh`:
+writes RunPod's `$PUBLIC_KEY` (their documented convention for injecting
+the account's registered SSH key into a pod at boot) to
+`/root/.ssh/authorized_keys` if present, then `exec`s `sshd -D` as the
+container's foreground process — no key baked into the image itself.
+Default `CMD` changed to run this entrypoint; local workflows are
+unaffected since, as confirmed above, they override `CMD` unconditionally
+regardless of what it's set to.
+
+**Not build-verified in this sub-session** — no Docker daemon available
+to actually build the image where this fix was written; `docker build
+--check` confirmed the daemon itself wasn't reachable, syntax was checked
+by re-reading the Dockerfile carefully instead. Needs a real build (via
+the GHCR workflow, targeting `Sprint-4-Tekniska` this time, not the
+`Sprint-3-Oskarshamn` default) before trusting it — flagged explicitly
+rather than assumed to work.
+
+### Deliberately not touched: `Sprint-3-Oskarshamn`
+
+This is a RunPod-deployment concern, not a correction to anything the
+GCSG report's numbers depend on. Fixed on `Sprint-4-Tekniska` and
+published as a new `sprint-4-tekniska` image tag instead of editing the
+closed baseline branch — same discipline as not touching
+`mmlu_final_report.md`'s underlying run data when correcting its
+reported total earlier this sprint.
+
+### Not yet done
+
+- Rerun the GHCR publish workflow against `Sprint-4-Tekniska` (this
+  session cannot dispatch it — no `actions: write` permission, same
+  403 hit earlier this sprint; needs `gh workflow run` from a session
+  with real credentials, same pattern as before).
+- Redeploy the RunPod pod against the new `sprint-4-tekniska` tag — the
+  Network Volume is unaffected, no need to recreate it.
+- Confirm SSH actually works this time, then resume the original plan:
+  checkpoint presence check, the `pin_memory` soak test.
+
+---
+
+## 2026-08-11 — Tekniska, continued: first RunPod pod live
+
+**Release:** [Tekniska] v0.5.0-dev — in progress. Picks up right after the
+kickoff entry below: image published to GHCR
+(`ghcr.io/danielesalpietro/vmemoryfabric:sprint-3-oskarshamn`, verified
+publicly pullable — see the two-step anonymous-token manifest check, not
+just "the visibility toggle says Public"), Network Volume created, first
+pod deployed against it.
+
+### GPU choice: RTX 3090 unavailable at the volume's datacenter, A5000 substituted
+
+Network Volumes on RunPod are datacenter-locked — ours (`72GB`, region
+**EU-RO-1**) forces every pod using it into that same datacenter. RTX 3090
+had no capacity there: the deploy UI would only offer ephemeral Volume Disk
+for it, never the Network Volume option, implying "3090 exists, just not
+in this datacenter." RTX A5000 did show the Network Volume option but
+initially reported "not deployable" (no free A5000 instances in EU-RO-1 at
+that moment either) — resolved itself a short time later once capacity
+freed up, no configuration change needed.
+
+A5000 was already the first choice among the WSL2-escape candidates
+(GA102 die, compute capability 8.6 — identical to the 3090's, 24GB VRAM,
+same as the reference hardware every measurement in
+`reports/gcsg_shadow_execution_report.md` is calibrated against), not a
+downgrade. RTX 3090 Ti / RTX A6000 (same CC 8.6) were the fallbacks in
+that order had A5000 also been unavailable; never needed.
+
+### Pod details, verified from the RunPod dashboard (not estimated)
+
+```
+Pod name:        vmemoryfabric-sprint4-runpod-20260811
+GPU:              RTX A5000 x1
+vCPU:             12 (AMD EPYC 7B13 64-Core Processor)
+Memory:           25 GB
+Container disk:   50 GB
+Region:           EU-RO-1 (forced by the Network Volume; not shown directly
+                  in the pod summary, but the only datacenter the volume
+                  can be in)
+Pricing:          $0.27/hr compute + $0.007/hr container storage
+                  = $0.28/hr total
+Image:            ghcr.io/danielesalpietro/vmemoryfabric:sprint-3-oskarshamn
+Template ID:      57t6fqbfiv
+Network volume:   vmemoryfabric-sprint4-runpod-20260811_volume, 72 GB,
+                  mount path /workspace
+```
+
+### Container Disk sizing — measured, not guessed
+
+Before deploying: pulled the real image manifest from GHCR (anonymous
+token, two-step registry protocol — a bare unauthenticated GET returns 401
+by design even for public images, not evidence of a private package;
+confirmed public separately). **18 layers, 10.63 GB compressed total.**
+Uncompressed-on-disk is typically 2-2.5× compressed for this kind of
+content (CUDA libs, Python wheels) — estimated ~22-27 GB just to unpack
+the image. Container Disk set to **50 GB**, not the platform's 5 GB
+default (which would almost certainly have failed mid-pull with "no space
+left on device" rather than failing loudly upfront).
+
+### `/workspace`, not `/data/nvme` — the mount path is fixed, not a field to edit
+
+Expected to set the Network Volume's mount path to `/data/nvme` (the path
+hardcoded in ~17 project scripts' `MODEL_PATH`) at deploy time. RunPod's
+UI doesn't expose that as an editable field for a Network Volume — it's
+fixed to `/workspace`. Workaround decided rather than editing every
+script: `ln -s /workspace /data/nvme` once per pod, immediately after
+first connecting. One command, needs repeating only if the pod is
+recreated from scratch (not on a simple restart — the container filesystem
+persists across those).
+
+### Access: SSH only, no direct network path from this Claude session
+
+This session's own network egress is allowlisted to specific domains
+(confirmed: GitHub reachable; `runpod.io`/`api.runpod.io` both return a
+`403` policy denial from the environment's own proxy, and raw SSH on port
+22 times out outright — not a credentials problem, a network-policy one,
+not something to route around). Pod access for hands-on verification
+(`nvidia-smi`, the `pin_memory` soak test, checkpoint download) is handed
+to the session running on the physical GPU workstation instead, which has
+real network reach — briefed via a separate, self-contained prompt.
+
+### Not yet done, next in this same sub-session
+
+- Confirm the model checkpoint (`casperhansen/mixtral-instruct-awq`) is
+  actually on the volume — near-certain it isn't, since the volume was
+  created empty and nothing has been uploaded to it yet. `ls
+  /data/nvme/models/` (after the symlink above) is the first real command
+  to run, before anything else.
+- The test this whole RunPod detour exists to run:
+  `torch.zeros(1024).pin_memory().is_pinned()`, then something closer to a
+  real soak test under load if that passes — the open question left by the
+  GCSG report's §9 correction, not yet answered with anything more rigorous
+  than a pre-investigation, never-stress-tested check.
+
+---
+
+## 2026-08-11 — Tekniska: Sprint 4 kickoff, plan
+
+**Release:** [Tekniska] v0.5.0-dev — branch `Sprint-4-Tekniska`, cut from
+`Sprint-3-Oskarshamn` at `91cb6da`. Named for the same reason every sprint
+here is — conversation happened at the Tekniska museet, Stockholm.
+
+### Why Sprint 4 starts here
+
+The roadmap has carried an "Integration + benchmarks" placeholder for
+Sprint 4 since Karlshamn, with no real content behind it until now. What
+gives it real content is [issue #17](https://github.com/danielesalpietro/vMemoryFabric/issues/17),
+found while writing the GCSG preliminary report: M1 (EAT) and M2 (Tier
+Manager) are both implemented and independently GPU-verified, but nothing
+in `src/scheduler/` or `scripts/` ever calls them — GCSG's one real,
+validated result (72.11% MMLU-5shot, `reports/gcsg_shadow_execution_report.md`)
+was produced entirely through vLLM's own `cpu_offload_gb`, not through
+this project's own tiering system. Sprint 4 is that gap, plus everything
+that was explicitly deferred pending "real end-to-end numbers" or "M3
+adding real concurrent traffic" — both preconditions Sprint 3 just
+satisfied.
+
+### Sub-goals
+
+1. **Wire the shadow pool through TierManager/EAT (core of #17).**
+   `GCSGWorker._load_shadow_pool()` calls `TierManager.promote()`/
+   `prefetch()` instead of relying on vLLM's `cpu_offload_gb` + the
+   explicit `.to('cuda')` pinning added in `e59a16d`; expert selection
+   moves from the current round-robin placeholder to
+   `EAT.eviction_candidates()`.
+2. **Resolve the pinning-strategy question the GCSG report's §9
+   correction left open.** Soak-test `torch.Tensor.pin_memory()` called
+   directly (bypassing vLLM's `is_pin_memory_available()` gate) under
+   sustained real load in this environment — not the one-off, never
+   stress-tested check this project has been carrying since before the
+   crash investigation started. Decide, with evidence, whether
+   `TierManager.GPUTransfer` should attempt real pinning or keep GCSG's
+   current "stay permanently GPU-resident" approach for the shard sizes
+   actually in play.
+3. **Re-run the MMLU-5shot evaluation on the integrated path** as the
+   next data point against Tekniska's own baseline (the 2026-08-11 GCSG
+   report) — same method as that report, same slicing/orchestration
+   unless the integration changes the failure modes it was built around.
+4. **Measure the one non-functional target that's never been
+   measurable:** "shard promotion latency within 1.5× theoretical
+   bandwidth" (`README.md`'s acceptance criteria) has had no real
+   `TierManager.promote()` call to measure until sub-goal 1 lands.
+5. **Close out the M1 debt Sprint 1/2 explicitly deferred to this
+   moment.** Issues #1 (Bloom filter ~5-14× slower than a plain dict)
+   and #2 (`RLock` p99 degrades ~1360× under contention) were both
+   recorded as "Sprint 2/M3 candidates" specifically because M3 would be
+   the thing generating real concurrent traffic against the EAT — that's
+   what sub-goal 1 does. Issue #4 (`BloomFilter.remove_expert()`
+   unimplemented) stops being a theoretical gap once EAT does live
+   evictions in the real pipeline instead of only in unit tests.
+6. **Path 1 (`_ShadowExpertINT4`) parity under real offload** — the one
+   shadow path never exercised against the real checkpoint under real
+   offload (GCSG report §7), naturally in scope alongside the
+   `_load_shadow_pool()` rewrite in sub-goal 1.
+7. **Close-out:** update the GCSG report/README/LOGBOOK with whatever
+   sub-goals 1-6 actually find (including negative results — same
+   standard as every prior sprint here); close #17 and whichever of
+   #1/#2/#4 get real resolutions, not partial ones; mark Sprint 4 done
+   in the roadmap table only once it is.
+
+### What's deliberately not in scope
+
+M4 (RecursiveMAS LED Bridge) — unrelated, still out of PoC scope, not
+touched by this sprint despite the name similarity to "Sprint 4." Dual-GPU
+/ AER (#8) and PMEM (#7) stay hardware-blocked. Sprint 5 (PoC delivery +
+paper) and Sprint 6 (Stockholm, telemetry) stay untouched until this
+sprint's own scope is real, per the same discipline used when Sprint 6 was
+added without reordering Sprints 0-5.
+
+---
+
 ## 2026-08-11 — Oskarshamn, continued: the "stall" was never a deadlock — root cause found, confirmed by direct manipulation
 
 **Release:** [Oskarshamn] v0.4.0-dev — still in progress. Picks up the

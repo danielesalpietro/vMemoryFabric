@@ -4,15 +4,31 @@ Usage:
     python benchmarks/bench_eat.py
     make bench-eat          (via Makefile)
 
+Storia (issue #1, deciso 2026-08-12): questo benchmark è quello che ha
+prodotto i numeri dietro la decisione di rimuovere il Bloom filter da
+EAT — misurato consistentemente più lento (~5-14x, poi ri-misurato a
+~6.8-8.1x con l'implementazione Counting BF di issue #4) di un lookup
+diretto sul dict, per una struttura già O(1) in-memory. `EAT.lookup()`
+ora fa lookup diretto (vedi src/eat/eat.py), quindi le due sezioni sotto
+dovrebbero convergere sullo stesso ordine di grandezza — tenute
+entrambe come regression check: se `eat` tornasse a divergere
+sensibilmente da `baseline_plain_dict` senza una modifica intenzionale a
+EAT, sarebbe un segnale da investigare, non atteso.
+
 Sezioni:
-    eat_with_bloom       — EAT (Bloom filter + dict), lookup hit/miss separati
-    baseline_plain_dict  — stesso workload, dict+RLock senza Bloom filter,
-                            per isolare il contributo reale del fast-negative
-                            path (senza baseline, §5 dimostra feasibility ma
-                            non benefit)
-    bloom_vs_baseline_delta_us — differenza p50 (EAT − baseline), hit e miss
+    eat                  — EAT (dict + RLock, nessun layer intermedio),
+                            lookup hit/miss separati
+    baseline_plain_dict  — stesso workload, dict+RLock "nudo" (nessuna
+                            EATEntry, nessun bookkeeping oltre il dict
+                            stesso) — isola qualunque overhead residuo di
+                            EAT rispetto a un dict grezzo
+    eat_vs_baseline_delta_us — differenza p50 (EAT − baseline), hit e miss —
+                            atteso vicino a zero ora, non più un vantaggio
+                            "Bloom" da giustificare
     contention           — 4 reader concorrenti + 1 writer, per misurare il
                             costo dell'RLock sotto traffico misto stile M2/M3
+                            (issue #2 — vedi LOGBOOK.md 2026-08-12 per la nota
+                            sul fatto che il traffico reale oggi è single-thread)
     slab_scale           — alloc/free timing a 4 vs 32 slot (1 GB vs 8 GB),
                             per verificare empiricamente l'O(1) del free-list
 
@@ -56,7 +72,7 @@ def _gen_workload(seed: int = 0) -> list:
     return keys
 
 
-# ── EAT (con Bloom filter) ──────────────────────────────────────────────────
+# ── EAT ────────────────────────────────────────────────────────────────────
 
 def bench_eat() -> dict:
     eat = ExpertAccessTable(capacity=N_ENTRIES * 2, n_slots=4)
@@ -81,13 +97,14 @@ def bench_eat() -> dict:
     }
 
 
-# ── Baseline: dict + RLock, senza Bloom filter ──────────────────────────────
+# ── Baseline: dict + RLock "nudo" ────────────────────────────────────────────
 
 class _PlainDictBaseline:
     """Baseline di misura per il benchmark — stessa semantica insert/lookup
-    dell'EAT (dict + RLock) ma senza Bloom filter. Non fa parte dell'API
-    pubblica dell'EAT: serve solo a isolare, per differenza, il contributo
-    reale del fast-negative path Bloom rispetto a un dict.get() sotto lock.
+    di un dict.get() sotto lock, senza EATEntry né alcun bookkeeping
+    aggiuntivo. Non fa parte dell'API pubblica dell'EAT: isola, per
+    differenza, qualunque overhead residuo di EAT rispetto a un dict
+    grezzo (atteso vicino a zero dal 2026-08-12 — vedi docstring di modulo).
     """
 
     def __init__(self) -> None:
@@ -267,14 +284,14 @@ def main() -> None:
 
     result = {
         "status": "done",
-        "sprint": 1,
+        "sprint": "1, revisited 2026-08-12 (issue #1 — Bloom filter removed)",
         "module": "EAT",
         "n_entries": N_ENTRIES,
         "n_lookups": N_LOOKUPS,
         "hit_ratio": HIT_RATIO,
-        "eat_with_bloom": eat_result,
+        "eat": eat_result,
         "baseline_plain_dict": baseline_result,
-        "bloom_vs_baseline_delta_us": delta_us,
+        "eat_vs_baseline_delta_us": delta_us,
         "contention": bench_contention(),
         "contention_churn": bench_contention_churn(),
         "slab_scale": bench_slab_scale(),

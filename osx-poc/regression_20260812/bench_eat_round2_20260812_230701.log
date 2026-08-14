@@ -1,0 +1,87 @@
+{
+  "status": "done",
+  "sprint": "1, revisited 2026-08-12 (issue #1 \u2014 Bloom filter removed)",
+  "module": "EAT",
+  "n_entries": 10000,
+  "n_lookups": 50000,
+  "hit_ratio": 0.8,
+  "eat": {
+    "insert_throughput_ops_sec": 744876.5795145761,
+    "lookup_latency_hit": {
+      "p50_us": 0.42980536818504333,
+      "p95_us": 0.5401670932769775,
+      "p99_us": 1.0398216545581818
+    },
+    "lookup_latency_miss": {
+      "p50_us": 0.3902241587638855,
+      "p95_us": 0.4600733518600464,
+      "p99_us": 1.2600794434547424
+    },
+    "lookup_latency_overall": {
+      "p50_us": 0.4200264811515808,
+      "p95_us": 0.530388206243515,
+      "p99_us": 1.0496005415916443
+    }
+  },
+  "baseline_plain_dict": {
+    "insert_throughput_ops_sec": 2588522.287858888,
+    "lookup_latency_hit": {
+      "p50_us": 0.410713255405426,
+      "p95_us": 0.6109476089477539,
+      "p99_us": 0.7101334631443024
+    },
+    "lookup_latency_miss": {
+      "p50_us": 0.37997961044311523,
+      "p95_us": 0.6109476089477539,
+      "p99_us": 0.6896443665027618
+    },
+    "lookup_latency_overall": {
+      "p50_us": 0.4102475941181183,
+      "p95_us": 0.6109476089477539,
+      "p99_us": 0.7096678018569946
+    }
+  },
+  "eat_vs_baseline_delta_us": {
+    "hit_p50": 0.01909211277961731,
+    "miss_p50": 0.010244548320770264
+  },
+  "contention": {
+    "n_readers": 4,
+    "n_writes": 20000,
+    "writer_throughput_ops_sec_under_contention": 29551.693101738136,
+    "reader_lookups_completed": 50544,
+    "reader_lookup_latency_under_contention": {
+      "p50_us": 4.90015372633934,
+      "p95_us": 209.02883261442184,
+      "p99_us": 433.7970167398453
+    }
+  },
+  "slab_scale": {
+    "n_slots_4": {
+      "pool_size_gb": 1.0,
+      "alloc_latency_us": {
+        "p50_us": 4.099681973457336,
+        "p95_us": 20.34008502960205,
+        "p99_us": 20.34008502960205
+      },
+      "free_latency_us": {
+        "p50_us": 1.349952071905136,
+        "p95_us": 3.220047801733017,
+        "p99_us": 3.220047801733017
+      }
+    },
+    "n_slots_32": {
+      "pool_size_gb": 8.0,
+      "alloc_latency_us": {
+        "p50_us": 0.800006091594696,
+        "p95_us": 1.769978553056717,
+        "p99_us": 4.4889748096466064
+      },
+      "free_latency_us": {
+        "p50_us": 0.31013041734695435,
+        "p95_us": 0.6002373993396759,
+        "p99_us": 0.650063157081604
+      }
+    }
+  }
+}

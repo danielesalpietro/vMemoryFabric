@@ -1,12 +1,26 @@
 """M2 — GPU Transfer (DDR4 → VRAM RTX 3090).
 
 Adattamenti rispetto a spec OSX v1.0:
-    - Pinned memory (cudaMallocHost) NON disponibile in Docker su Windows.
-      Usiamo cudaMemcpy standard con pageable host memory.
-      Il delta rispetto a pinned sarà documentato come baseline deviation.
+    - Pinned memory (cudaMallocHost) NON disponibile in Docker su Windows
+      (WSL2) — default storico di questo modulo: to_vram() usa cudaMemcpy
+      standard con pageable host memory a meno di pin=True esplicito.
     - Single GPU: solo RTX 3090 (device 0). Dual-GPU deferred.
     - Nessuna CUDA stream pipeline per ora — sarà aggiunta in Sprint 2
       per misurare l'overlap compute/transfer.
+
+    **Aggiornamento (2026-08-12, Sprint 4 sotto-obiettivo 2):** pinning
+    reale (torch.Tensor.pin_memory()) verificato sicuro e stabile sotto
+    carico sostenuto su Linux reale (RunPod, non WSL2) — 1000 cicli
+    pin-allocate/H2D/D2H/confronto-byte, 0 mismatch, nessun degrado (vedi
+    LOGBOOK.md, GCSG report §9). to_vram() ora accetta pin=True per
+    usarlo davvero — default resta False (comportamento storico
+    invariato, il chiamante decide in base alla piattaforma reale, es.
+    via vllm.platforms.interface.in_wsl() quando disponibile — vedi
+    scheduler.gcsg.GCSGWorker._should_pin_transfers()). Non ancora
+    validato SPECIFICAMENTE per questo path (era stato validato lo
+    shard-transfer generico, non ancora un run reale attraverso
+    TierManager.promote_live_tensor() con pin=True) — primo item da
+    verificare sul pod.
 
 Target latenza DDR4 → VRAM (256 MB shard):
     Teorico pinned   : ~32 ms  (PCIe Gen3 ~8 GB/s unidirezionale)
@@ -15,6 +29,8 @@ Target latenza DDR4 → VRAM (256 MB shard):
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 try:
@@ -22,6 +38,8 @@ try:
     _TORCH_AVAILABLE = True
 except ImportError:
     _TORCH_AVAILABLE = False
+
+log = logging.getLogger(__name__)
 
 
 class GPUTransfer:
@@ -39,24 +57,52 @@ class GPUTransfer:
 
     # ── host → device (promozione DDR4 → VRAM) ────────────────────────────────
 
-    def to_vram(self, data: np.ndarray,
-                stream: torch.cuda.Stream | None = None) -> torch.Tensor:
+    def to_vram(self, data: np.ndarray | torch.Tensor,
+                stream: torch.cuda.Stream | None = None,
+                pin: bool = False) -> torch.Tensor:
         """Trasferisce uno shard da DDR4 a VRAM.
 
-        NOTE: senza pinned memory, il driver CUDA esegue una copia intermedia
-        su host-pinned buffer interno. Overhead misurabile vs. cudaMallocHost.
+        NOTE: senza pinned memory (pin=False, default), il driver CUDA
+        esegue una copia intermedia su host-pinned buffer interno.
+        Overhead misurabile vs. cudaMallocHost — vedi pin=True sotto.
 
         Args:
-            data:   numpy array uint8 (shard in DDR4).
-            stream: CUDA stream per overlap asincrono (None = stream default).
+            data:   numpy array uint8 (shard in DDR4) oppure un
+                    torch.Tensor già esistente (CPU o GPU — usato da
+                    scheduler.gcsg.GCSGWorker, i cui shadow expert sono
+                    tensori reali già del modello caricato, non byte
+                    grezzi da un file NVMe).
+            stream: CUDA stream per overlap asincrono (None = stream
+                    default). Se fornito, il transfer resta non_blocking
+                    a prescindere da pin — comportamento storico invariato.
+            pin:    Se True, tenta un pin_memory() reale prima del
+                    transfer (verificato sicuro su Linux reale, non
+                    ancora specificamente su questo path — vedi docstring
+                    di modulo). Fallback silenzioso a pageable se
+                    pin_memory() solleva. Default False: comportamento
+                    identico a prima di questa opzione.
 
         Returns:
-            torch.Tensor su GPU (dtype uint8).
+            torch.Tensor su GPU.
         """
+        if isinstance(data, np.ndarray):
+            base = torch.from_numpy(data)
+        else:
+            base = data.detach()
+            if base.device.type != "cpu":
+                base = base.cpu()
+
+        if pin:
+            try:
+                base = base.pin_memory()
+            except Exception as e:
+                log.warning("GPUTransfer: pin_memory() fallito (%s) — fallback a pageable.", e)
+                pin = False
+
         if stream is not None:
             with torch.cuda.stream(stream):
-                return torch.from_numpy(data).to(self._device, non_blocking=True)
-        return torch.from_numpy(data).to(self._device)
+                return base.to(self._device, non_blocking=True)
+        return base.to(self._device, non_blocking=pin)
 
     # ── device → host (eviction VRAM → DDR4) ──────────────────────────────────
 

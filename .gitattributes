@@ -1,0 +1,8 @@
+# Shell scripts must stay LF — a shebang line with a trailing CRLF becomes
+# `#!/bin/bash\r`, which the kernel can't find as an interpreter
+# ("bad interpreter: No such file or directory"). Hit this for real
+# building docker-entrypoint.sh locally on Windows with core.autocrlf=true
+# (2026-08-11, Tekniska) — the committed blob was already LF-only, so this
+# doesn't rewrite anything, it just stops the same false alarm recurring
+# for the next Windows checkout.
+*.sh text eol=lf

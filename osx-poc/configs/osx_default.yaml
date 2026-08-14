@@ -24,9 +24,8 @@ emh:
 
 # ── M1: Expert Access Table ────────────────────────────────────────────────────
 eat:
-  capacity: 16384             # 256 expert × 64 shard
-  bloom_error_rate: 0.01      # 1% false positive
-  slab_n_slots: 4             # slots DDR4 pre-allocati (dev: piccolo)
+  capacity: 16384             # 256 expert × 64 shard (Bloom filter rimosso 2026-08-12, issue #1 — non più consumato)
+  slab_n_slots: 4              # slots DDR4 pre-allocati (dev: piccolo)
 
 # ── M2: Tier Manager ──────────────────────────────────────────────────────────
 tier_manager:
