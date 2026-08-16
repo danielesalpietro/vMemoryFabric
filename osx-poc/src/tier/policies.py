@@ -116,3 +116,83 @@ class SEEPolicy:
         ]
         scored.sort(key=lambda c: c.score)
         return scored[:n]
+
+    def classify_hot_cold(
+        self, entries: list[EATEntry], hot_fraction: float = 0.5,
+        now: float | None = None,
+    ) -> tuple[list[int], list[int]]:
+        """Issue #33 Fase 0 — separa expert_id "caldi" (candidati VRAM/GPU
+        shadow pool) da "freddi" (candidati DDR4-resident/CPU shadow pool —
+        issue #33 Fase 2) usando lo score() già esistente, non una formula
+        nuova — esattamente quello che Fase 0 del piano chiedeva ("riusare
+        SEEPolicy invece di inventarne una nuova").
+
+        Criterio validato contro il codice reale di
+        exllamav3/model/moe_cpu_host.py, non per sola analogia: lo stesso
+        segnale — quanti token sono stati assegnati a un expert — decide
+        lì quali esperti vengono streammati "caldi" verso la GPU e quali
+        restano "coda fredda" calcolata su CPU con AVX-512 (vedi
+        osx-poc/reports/component_reuse_analysis.md §2.1, verificato sul
+        sorgente exllamav3, non sul solo README). access_count di EATEntry
+        è esattamente quel segnale — lo stesso già pesato dal termine
+        freq_component di score().
+
+        Deliberatamente NON usa context_vec/σ (l'estensione proposta in
+        issue #21, collegare PT-PEP a σ): quel collegamento resta un
+        miglioramento non ancora misurato, con un rischio di scope
+        mismatch dichiarato nella issue stessa (σ pensato per lo shard
+        corrente, PT-PEP opera a livello dell'intero prompt) — "misurare
+        prima di collegare", non assumere che sia un miglioramento.
+        Restare sul path context_vec=None (LRU ponderata alpha/beta) tiene
+        questa funzione sul solo segnale già validato, senza ereditare un
+        rischio non ancora verificato.
+
+        Aggrega per expert_id sommando lo score di ogni entry (una per
+        layer/shard_idx) — stesso principio di aggregazione già usato in
+        GCSGWorker._select_shadow_expert_ids() per l'hotness (lì su
+        access_count grezzo, qui via score()): un expert con hotness
+        sparsa su più layer non deve perdere contro uno concentrato su un
+        solo layer, se il totale è maggiore.
+
+        hot_fraction è una frazione parametrizzabile, non una soglia
+        hardcoded: il punto di taglio esatto tra "abbastanza caldo per la
+        VRAM" e "abbastanza freddo per restare CPU" dipende dal costo
+        relativo reale transfer-vs-compute su questo hardware — misura non
+        ancora fatta (issue #24, richiede budget POD). Fase 0 fornisce la
+        struttura del criterio, non il valore calibrato — la calibrazione
+        resta esplicitamente aperta per quando quel dato esisterà.
+
+        Cold start onesto: con tutte le entry ad access_count=0 (nessun
+        traffico reale ancora instradato), lo score si riduce al solo
+        termine di recency — stesso principio già dichiarato in
+        _select_shadow_expert_ids() per il suo caso round-robin
+        equivalente, non un comportamento nascosto qui.
+
+        Args:
+            entries:      EATEntry del tier candidato (tipicamente
+                          tier_manager.eat.get_tier(Tier.DDR4)).
+            hot_fraction: Frazione di expert_id distinti (non di entry —
+                          un expert_id ha un'entry per layer) da
+                          classificare "caldi", in (0, 1]. Default 0.5.
+            now:          Timestamp corrente (monotonic). None =
+                          time.monotonic().
+
+        Returns:
+            (hot_ids, cold_ids): expert_id ordinati per score aggregato
+            decrescente, spaccati al punto round(n * hot_fraction)
+            (minimo 1 se ci sono entry).
+        """
+        assert 0.0 < hot_fraction <= 1.0, "hot_fraction deve essere in (0, 1]"
+        now = now if now is not None else time.monotonic()
+
+        scores: dict[int, float] = {}
+        for entry in entries:
+            scores[entry.expert_id] = (
+                scores.get(entry.expert_id, 0.0) + self.score(entry, now=now)
+            )
+        if not scores:
+            return [], []
+
+        ranked = sorted(scores, key=lambda expert_id: scores[expert_id], reverse=True)
+        hot_count = max(1, round(len(ranked) * hot_fraction))
+        return ranked[:hot_count], ranked[hot_count:]

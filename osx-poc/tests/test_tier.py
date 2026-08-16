@@ -150,6 +150,93 @@ class TestEvictionPolicies:
             SEEPolicy(alpha=0.5, beta=0.5, gamma=0.5)
 
 
+# ── Hot/cold classification (2026-08-17, issue #33 Fase 0) ────────────────────
+#
+# Criterio di routing hot(VRAM)/cold(DDR4-resident, issue #33 Fase 2) —
+# riusa SEEPolicy.score() così com'è, non una formula nuova. Pure unit test,
+# nessun hardware — vedi SEEPolicy.classify_hot_cold() per la motivazione
+# completa (validata contro exllamav3/moe_cpu_host.py reale, non solo per
+# analogia — osx-poc/reports/component_reuse_analysis.md §2.1).
+
+class TestHotColdClassification:
+
+    @staticmethod
+    def _entry(expert_id, shard_idx, access_count, age, now):
+        return EATEntry(
+            expert_id=expert_id, shard_idx=shard_idx, tier=Tier.DDR4,
+            access_count=access_count, last_access_ts=now - age,
+        )
+
+    def test_classify_hot_cold_splits_by_score(self):
+        see = SEEPolicy()
+        now = time.monotonic()
+        entries = [
+            self._entry(0, 0, access_count=50, age=1, now=now),    # caldo
+            self._entry(1, 0, access_count=0, age=1000, now=now),  # freddo
+        ]
+        hot_ids, cold_ids = see.classify_hot_cold(entries, hot_fraction=0.5, now=now)
+        assert hot_ids == [0]
+        assert cold_ids == [1]
+
+    def test_classify_hot_cold_aggregates_across_layers(self):
+        """Un expert con hotness sparsa su più layer deve battere uno con
+        tutta la hotness concentrata su un solo layer, se il totale è
+        maggiore — stesso principio già verificato per
+        GCSGWorker._select_shadow_expert_ids() in test_scheduler.py."""
+        see = SEEPolicy()
+        now = time.monotonic()
+        entries = [
+            self._entry(1, layer_id, access_count=1, age=1, now=now)
+            for layer_id in range(3)
+        ]  # expert 1: 3 accessi totali, sparsi su 3 layer
+        entries += [
+            self._entry(2, 0, access_count=2, age=1, now=now),
+        ]  # expert 2: 2 accessi totali, concentrati su 1 layer
+        hot_ids, cold_ids = see.classify_hot_cold(entries, hot_fraction=1 / 3, now=now)
+        assert hot_ids == [1]
+        assert cold_ids == [2]
+
+    def test_classify_hot_cold_ties_are_stable_on_insertion_order(self):
+        """Cold start onesto: tutte le entry con access_count=0 e stessa
+        recency (nessun traffico reale ancora instradato) -> punteggi
+        identici -> l'ordine di input sopravvive intatto (sort stabile),
+        stesso principio deliberato già usato in
+        GCSGWorker._select_shadow_expert_ids() per il suo caso
+        round-robin equivalente (non last_access_ts come tie-break)."""
+        see = SEEPolicy()
+        now = time.monotonic()
+        entries = [
+            self._entry(expert_id, 0, access_count=0, age=1, now=now)
+            for expert_id in range(4)
+        ]
+        hot_ids, cold_ids = see.classify_hot_cold(entries, hot_fraction=0.5, now=now)
+        assert hot_ids == [0, 1]
+        assert cold_ids == [2, 3]
+
+    def test_classify_hot_cold_hot_fraction_rounds_with_minimum_one(self):
+        see = SEEPolicy()
+        now = time.monotonic()
+        entries = [
+            self._entry(expert_id, 0, access_count=0, age=1, now=now)
+            for expert_id in range(3)
+        ]
+        # round(3 * 0.1) = 0, ma almeno 1 hot se ci sono entry.
+        hot_ids, cold_ids = see.classify_hot_cold(entries, hot_fraction=0.1, now=now)
+        assert len(hot_ids) == 1
+        assert len(cold_ids) == 2
+
+    def test_classify_hot_cold_empty_entries(self):
+        see = SEEPolicy()
+        assert see.classify_hot_cold([], hot_fraction=0.5) == ([], [])
+
+    def test_classify_hot_cold_invalid_hot_fraction_raises(self):
+        see = SEEPolicy()
+        with pytest.raises(AssertionError):
+            see.classify_hot_cold([], hot_fraction=0.0)
+        with pytest.raises(AssertionError):
+            see.classify_hot_cold([], hot_fraction=1.5)
+
+
 # ── TierManager ────────────────────────────────────────────────────────────────
 
 class TestTierManager:

@@ -582,8 +582,13 @@ esercitato questo bug perché `ci.yml` non usa affatto il Makefile — chiama
 `docker compose run` direttamente con un wrapper `bash -c "cd osx-poc && ..."`
 esplicito. Aggirato in questa sessione passando il path completo
 (`osx-poc/tests/...`) invece di usare `make`. Non in scope per Fase 2, non
-fixato qui — issue aperta:
-https://github.com/danielesalpietro/vMemoryFabric/issues/40
+fixato qui. Correzione: avevo aperto la issue #40 per questo senza prima
+controllare le issue esistenti — è un duplicato di #12 (aperta
+2026-08-09, stessa causa, analisi anche più completa: propone
+`working_dir: /workspace/osx-poc` in `docker-compose.yml` come fix,
+alternativa migliore al semplice `cd osx-poc &&` per-target che avevo
+suggerito). #40 chiusa come duplicato, riferimento corretto:
+https://github.com/danielesalpietro/vMemoryFabric/issues/12
 
 **Trovato anche in questa sessione (prima di iniziare Fase 2), non
 correlato al lavoro DDR4**: il disco `D:` della macchina (dove vive
@@ -629,7 +634,8 @@ implementati.
 - `tests/test_scheduler.py`: `TestGCSGCpuShadowPool` (5 test), tutti verdi
   su hardware reale insieme al resto della suite (133 passed / 3 skipped).
 - Makefile: target rotti (path relativi assumono WORKDIR sbagliato),
-  non fixato qui — issue #40.
+  non fixato qui — issue preesistente #12 (avevo aperto #40 per errore
+  senza controllare prima, chiusa come duplicato).
 - Disco D: della macchina al 17% libero (81/477 GB), non correlato al
   lavoro DDR4, nessuna pulizia eseguita — issue #41.
 - Fase 0 (criterio hot/cold via SEEPolicy) e Fase 3 (routing reale,
@@ -643,3 +649,129 @@ pure unit test) o Fase 3 (routing in TierManager/GCSGWorker) — decisione
 del project owner. Fase 3 dipende concettualmente da Fase 0 (serve un
 criterio prima di poter instradare), quindi Fase 0 è la scelta più naturale
 se non diversamente indicato.
+
+---
+
+## 2026-08-17 (continued) — Fase 0: criterio hot/cold, informato dall'esperienza di issue #32 e successive
+
+**Release:** none — solo codice/test, nessuna integrazione col routing reale
+(Fase 3, ancora da fare).
+
+### What we set out to do
+
+Fase 0 del piano: definire il criterio hot/cold riusando `SEEPolicy`
+scoring invece di inventarne uno nuovo, pure unit test, nessun hardware.
+Richiesta esplicita del project owner questa volta: non progettarlo a
+vuoto, ma tesorizzare l'esperienza già raccolta in issue #32 ("Component
+reuse da Petals/ExLlamaV2/V3/tabbyAPI") e nelle sue issue figlie/collegate.
+
+### What we did
+
+**Trovato prima di tutto un problema reale**: i due report che issue #32 e
+tutte le sue sub-issue (incluse #33-37) citano come fondamento
+(`osx-poc/reports/component_reuse_analysis.md`,
+`osx-poc/reports/related_work_petals_exllama.md`) non esistono su
+`develop` né su questo branch — vivono solo sul branch mai mergiato
+`claude/petals-exllama-heterogeneous-v0frr4`. Recuperati via `git show`
+per leggerli (non checkout, per non toccare lo stato del branch corrente).
+
+**La scoperta rilevante per Fase 0**, da `component_reuse_analysis.md`
+§2.1 (verificato sul sorgente reale di `exllamav3/model/moe_cpu_host.py`,
+non per analogia): il criterio hot/cold REALE di quel sistema è "quanti
+token sono stati assegnati a un expert" — gli esperti con più
+assegnazioni vengono streammati verso la GPU, la "coda fredda" gira su
+CPU con AVX-512. Questo è esattamente `access_count` di `EATEntry`, il
+segnale che `SEEPolicy.score()` già pesa nel suo `freq_component`. Non
+un'idea nuova da inventare: il piano "riusa SEEPolicy" del 2026-08-16 era
+già la scelta giusta, ora validata contro un'implementazione reale
+verificata sul codice, non solo per intuizione architetturale.
+
+Letta anche issue #21 ("Collegare σ in SEEPolicy a PT-PEP") prima di
+scrivere codice, per capire cosa NON fare: propone di alimentare il
+termine γ·σ (oggi stub, γ=0.4 sprecato su un contributo nullo) col
+segnale semantico di PT-PEP, ma con due riserve esplicite nella issue
+stessa — (1) PT-PEP opera a livello di prompt intero, σ è pensato per lo
+shard corrente, possibile mismatch di scope; (2) raccomandazione di
+misurare se aiuta davvero prima di collegare, non assumerlo. Decisione
+per Fase 0: NON toccare σ/PT-PEP — resterebbe un rischio non ancora
+misurato ereditato in un criterio che deve restare puro/testabile senza
+hardware. Riusato solo il path `context_vec=None` di `score()` (LRU
+ponderata alpha/beta), già validato.
+
+Letta anche issue #24 (misura diretta transfer-bound vs compute-bound,
+non ancora eseguita, gated su budget POD) — non blocca Fase 0 (che è
+struttura, non calibrazione) ma ne informa il design: `hot_fraction` è un
+parametro esplicito, non una soglia hardcoded, perché il punto di taglio
+reale tra "vale la VRAM" e "resta CPU" dipende da un dato che oggi non
+esiste ancora.
+
+Letta anche issue #27 (EPM, persistenza hotness EAT) per il principio
+del cold start onesto — coerente con quanto già dichiarato in
+`_select_shadow_expert_ids()` (Fase 2 precedente): senza traffico reale,
+degrado deterministico via tie-break stabile, non un fallback nascosto.
+
+**Implementato**: `SEEPolicy.classify_hot_cold(entries, hot_fraction=0.5,
+now=None) -> tuple[list[int], list[int]]` in `tier/policies.py`. Aggrega
+`score()` per `expert_id` sommando su tutti gli `shard_idx`/layer (stesso
+principio di aggregazione già in `_select_shadow_expert_ids()`, qui via
+`score()` invece di `access_count` grezzo), ordina decrescente, spacca a
+`round(n * hot_fraction)` con minimo 1 hot se ci sono entry. Nessun
+wiring in `GCSGWorker`/`TierManager` — quello resta Fase 3, per lo stesso
+motivo per cui Fase 2 non ha anticipato il routing: la funzione è pronta,
+la decisione di quando/come chiamarla no.
+
+7 test in `TestHotColdClassification` (`tests/test_tier.py`): split per
+score, aggregazione cross-layer (stesso schema del test analogo per
+`_select_shadow_expert_ids`), tie-break stabile a cold start (access_count
+uniforme, ordine di input preservato — non last_access_ts), arrotondamento
+di `hot_fraction` con minimo 1, entries vuote, `hot_fraction` fuori range
+solleva `AssertionError`. Tutti verdi al primo run — nessun bug trovato
+questa volta (a differenza delle due sessioni precedenti).
+
+Full suite verificata su hardware reale: 139 passed, 3 skipped, 0 failed.
+`ruff check`/`mypy` puliti sui file toccati (stesso singolo warning
+pre-esistente non correlato già visto nella sessione Fase 2, questa volta
+anche su `test_tier.py` — stesso debito di stile diffuso, issue #6
+chiusa ma non evidentemente su ogni file).
+
+**Correzione da questa sessione**: la issue #40 aperta nella sessione
+precedente (Makefile rotto) era un duplicato di #12, preesistente
+dal 2026-08-09 — non controllato prima di aprirla. Chiusa come duplicato,
+riferimento corretto a #12 nel log della sessione precedente sopra.
+
+### Result
+
+Fase 0 chiusa: criterio hot/cold esiste, puro, testato, riusa `SEEPolicy`
+senza inventare nulla di nuovo — e la scelta di design (hotness via
+access_count, non semantica via PT-PEP/σ) è ora giustificata da due fonti
+indipendenti: il piano originale (Fase 0 del 2026-08-16) e il codice reale
+di exllamav3 (component_reuse_analysis.md §2.1), non solo da intuizione.
+
+### Why this matters
+
+Fase 3 (routing reale) può ora consumare `classify_hot_cold()` senza dover
+decidere da capo cosa significa "caldo" — la domanda che il piano
+originale aveva lasciato esplicitamente aperta. L'esperienza già raccolta
+in issue #32/#21/#24/#27 (fin qui dispersa in issue e report non
+tutti raggiungibili da `develop`) è ora concentrata in un'unica
+implementazione con la motivazione di ogni scelta scritta accanto al
+codice, non solo nelle issue di origine.
+
+### Current state
+
+- `tier/policies.py`: `SEEPolicy.classify_hot_cold()`.
+- `tests/test_tier.py`: `TestHotColdClassification` (7 test), suite
+  completa 139 passed / 3 skipped su hardware reale.
+- `route_forward()`/wiring in `GCSGWorker`/`TierManager` resta Fase 3, non
+  iniziata.
+- I due report fondanti di issue #32 esistono solo sul branch non
+  mergiato `claude/petals-exllama-heterogeneous-v0frr4` — non segnalato
+  come issue separata questa sessione (nessuna azione richiesta, solo
+  annotato qui: chi riprende Fase 3 o le altre sub-issue di #32 dovrebbe
+  saperlo).
+- Branch: `claude/ddr4-ram-processing-unzseh`.
+
+Next session: Fase 3 — wiring di `classify_hot_cold()` in
+`TierManager`/`GCSGWorker` (`route_forward()`), test che asserisce
+`GPUTransfer.to_vram()` mai chiamato per un expert instradato a freddo
+(il pool CPU di Fase 2 è già pronto a riceverlo).
