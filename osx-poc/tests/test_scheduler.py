@@ -477,12 +477,14 @@ class TestGCSGTierManagerWiring:
 
     @pytest.fixture(autouse=True)
     def _reset_pending_tier_manager(self):
-        """_pending_tier_manager è stato di classe (necessario perché
-        vLLM costruisce GCSGWorker da solo — vedi configure_tier_manager()) —
-        senza reset, un test che lo imposta trapelerebbe negli altri test
-        di questo file e di scheduler.gcsg in generale."""
+        """_pending_tier_manager/_pending_enable_cpu_offload sono stato di
+        classe (necessario perché vLLM costruisce GCSGWorker da solo —
+        vedi configure_tier_manager()/configure_cpu_offload()) — senza
+        reset, un test che li imposta trapelerebbe negli altri test di
+        questo file e di scheduler.gcsg in generale."""
         yield
         GCSGWorker.configure_tier_manager(None)
+        GCSGWorker.configure_cpu_offload(False)
 
     @staticmethod
     def _real_tier_manager(tmp_path):
@@ -514,6 +516,24 @@ class TestGCSGTierManagerWiring:
         GCSGWorker.configure_tier_manager(mgr)
         GCSGWorker.configure_tier_manager(None)
         assert GCSGWorker._pending_tier_manager is None
+
+    # ── configure_cpu_offload() — issue #33 Fase 4, default False ───────────
+
+    def test_configure_cpu_offload_defaults_to_false(self):
+        """Nessuna leak da altri test — vedi _reset_pending_tier_manager.
+        Default False (non None come tier_manager): la funzionalità
+        DDR4-resident resta spenta finché non esplicitamente richiesta,
+        vedi il commento su _pending_enable_cpu_offload in gcsg.py."""
+        assert GCSGWorker._pending_enable_cpu_offload is False
+
+    def test_configure_cpu_offload_sets_class_level_pending(self):
+        GCSGWorker.configure_cpu_offload(True)
+        assert GCSGWorker._pending_enable_cpu_offload is True
+
+    def test_configure_cpu_offload_false_clears_pending(self):
+        GCSGWorker.configure_cpu_offload(True)
+        GCSGWorker.configure_cpu_offload(False)
+        assert GCSGWorker._pending_enable_cpu_offload is False
 
     # ── _select_shadow_expert_ids ──────────────────────────────────────────
 
@@ -712,9 +732,16 @@ class TestGCSGCpuShadowPool:
         return TestGCSGTierManagerWiring._real_tier_manager(tmp_path)
 
     @staticmethod
-    def _make_worker(tier_manager=None, shadow_pool_size=2):
+    def _make_worker(tier_manager=None, shadow_pool_size=2, cpu_offload_enabled=True):
+        """cpu_offload_enabled default True qui (a differenza della
+        produzione, dove il default è False — issue #33 Fase 4): questa
+        classe testa specificamente il comportamento del pool CPU, quindi
+        il default locale riflette lo scenario "funzionalità attiva".
+        test_load_shadow_pool_cpu_pool_disabled_by_default_even_with_tier_manager
+        sotto copre esplicitamente il caso opposto (default reale)."""
         worker = TestGCSGTierManagerWiring._make_worker(tier_manager, shadow_pool_size)
         worker._cpu_shadow_pool = {}
+        worker._cpu_offload_enabled = cpu_offload_enabled
         return worker
 
     @staticmethod
@@ -803,6 +830,35 @@ class TestGCSGCpuShadowPool:
         worker._load_shadow_pool()
 
         assert set(worker._shadow_pool.keys()) == {0, 1}
+        assert worker._cpu_shadow_pool == {}
+
+    def test_load_shadow_pool_cpu_pool_disabled_by_default_even_with_tier_manager(
+        self, tmp_path, monkeypatch,
+    ):
+        """Issue #33 Fase 4: un TierManager wired NON basta più da solo —
+        cpu_offload_enabled default False in produzione (qui esplicito
+        via cpu_offload_enabled=False, il default reale di
+        GCSGWorker.__init__), il pool CPU resta vuoto anche con
+        tier_manager presente. Prova diretta che il flag, non solo la
+        presenza di un TierManager, governa la costruzione — negazione
+        esplicita di test_load_shadow_pool_builds_parallel_cpu_pool_when_tier_manager_wired
+        sopra, stessa fixture con un solo parametro cambiato."""
+        monkeypatch.setattr(gcsg_module, "_quantize_int4", lambda w: (w, 1.0))
+
+        layers = self._fake_offloaded_fused_layers(num_layers=2, num_experts=8)
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(
+            tier_manager=mgr, shadow_pool_size=2, cpu_offload_enabled=False,
+        )
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=layers)),
+            ),
+        )
+
+        worker._load_shadow_pool()
+
+        assert set(worker._shadow_pool.keys()) == {0, 1}   # pool GPU invariato
         assert worker._cpu_shadow_pool == {}
 
     def test_build_cpu_shadow_pool_produces_working_forward(self):

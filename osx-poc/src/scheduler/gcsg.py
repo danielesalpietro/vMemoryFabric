@@ -828,14 +828,24 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
           promote()/evict() su hardware reale (Sprint 4 sotto-obiettivo 4).
 
     Issue #33 Fase 2 — pool CPU-resident (2026-08-17): quando un
-    TierManager è wired e il path 1 (FusedMoE fp16 grezzo) è in uso,
-    _load_shadow_pool() costruisce ANCHE self._cpu_shadow_pool —
-    _build_cpu_shadow_pool() esegue lo stesso loop di estrazione/
-    quantizzazione del pool GPU ma senza il `.to("cuda")` forzato: i pesi
-    restano DDR4-resident, _ShadowExpertINT4 li usa senza modifiche (già
-    device-agnostic, Fase 1). Parallelo a self._shadow_pool, non un suo
-    sostituto — QUALI expert instradare a quale pool resta una decisione
-    di routing non ancora implementata (Fase 3, route_forward()). Solo il
+    TierManager è wired, il path 1 (FusedMoE fp16 grezzo) è in uso, E
+    self._cpu_offload_enabled è True (Fase 4, default False —
+    configure_cpu_offload()/enable_cpu_offload=, vedi il commento su
+    _pending_enable_cpu_offload), _load_shadow_pool() costruisce ANCHE
+    self._cpu_shadow_pool — _build_cpu_shadow_pool() esegue lo stesso
+    loop di estrazione/quantizzazione del pool GPU ma senza il
+    `.to("cuda")` forzato: i pesi restano DDR4-resident, _ShadowExpertINT4
+    li usa senza modifiche (già device-agnostic, Fase 1). Parallelo a
+    self._shadow_pool, non un suo sostituto. Il routing vero e proprio
+    (QUALE pool usare per un expert presente in entrambi) è Fase 3
+    (route_forward()) — Fase 4 ha chiuso il gate su overhead di dispatch
+    (trascurabile) e stabilità pin_memory (non pertinente, questo path
+    non pinna nulla), ma resta comunque dietro il flag esplicito sopra:
+    l'overhead-non-trascurabile e la sicurezza tecnica non implicano da
+    soli che la funzionalità debba essere live di default ovunque un
+    TierManager esista per qualunque altro motivo (es. solo hotness
+    tracking EAT lato GPU, issue #17) — l'impatto reale va ancora
+    misurato e documentato (Fase 5) prima di quella decisione. Solo il
     path 1 è coperto: i path 2/3 (Marlin, AWQ ModuleList) delegano a
     kernel CUDA reali (quant_method.apply()) mai validati su CPU, fuori
     scope per questa fase.
@@ -894,9 +904,43 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         """
         cls._pending_tier_manager = tier_manager
 
+    # Configurazione "pending" per il pool CPU/DDR4-resident (issue #33
+    # Fase 2/3/4, 2026-08-17) — stesso meccanismo di _pending_tier_manager
+    # sopra, stesso motivo (vLLM costruisce GCSGWorker da solo).
+    #
+    # Default False DELIBERATAMENTE, non solo "se tier_manager è wired
+    # allora attiva anche il pool CPU": Fase 4 ha chiuso il gate
+    # sull'overhead di dispatch (trascurabile, ~0.08% del tempo di
+    # compute — vedi benchmarks/bench_route_forward.py) e sul rischio di
+    # pin_memory (non pertinente, questo path non pinna nulla), ma questo
+    # NON significa che il routing CPU/DDR4-resident debba attivarsi
+    # automaticamente ogni volta che qualcuno wira un TierManager per
+    # tutt'altro motivo (es. solo per l'hotness tracking EAT lato GPU,
+    # issue #17). È una funzionalità distinta, non ancora misurata in
+    # produzione (Fase 5 non fatta) — resta spenta finché non viene
+    # esplicitamente richiesta, cosicché l'impatto reale (positivo o
+    # negativo) possa essere testato e documentato prima di diventare il
+    # default, non deciso a priori qui.
+    _pending_enable_cpu_offload: bool = False
+
+    @classmethod
+    def configure_cpu_offload(cls, enabled: bool) -> None:
+        """Abilita/disabilita il routing CPU/DDR4-resident (issue #33) per
+        il PROSSIMO GCSGWorker costruito da vLLM. Va chiamato PRIMA di
+        LLM(...)/EngineArgs(...), insieme a configure_tier_manager() (un
+        TierManager wired è comunque un prerequisito — questo flag da solo
+        non basta, vedi _load_shadow_pool()).
+
+        Default False: vedi il commento su _pending_enable_cpu_offload per
+        perché non è legato automaticamente alla presenza di un
+        TierManager.
+        """
+        cls._pending_enable_cpu_offload = enabled
+
     def __init__(
         self, *args, guard: GCSGGuard | None = None,
-        tier_manager: TierManager | None = None, **kwargs,
+        tier_manager: TierManager | None = None,
+        enable_cpu_offload: bool | None = None, **kwargs,
     ) -> None:
         from vllm.worker.worker import Worker  # import locale, vedi docstring classe
         self._base = Worker(*args, **kwargs)
@@ -913,12 +957,21 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         # questo worker da solo, un kwarg esplicito qui non è raggiungibile
         # dall'esterno quando LLM(worker_cls=...) è il chiamante reale.
         self._tier_manager = tier_manager if tier_manager is not None else type(self)._pending_tier_manager
+        # Issue #33 Fase 2/3/4 — flag esplicito e SEPARATO da tier_manager:
+        # vedi il commento su _pending_enable_cpu_offload per perché il
+        # routing CPU/DDR4-resident non si attiva solo perché un
+        # TierManager è wired. Default False.
+        self._cpu_offload_enabled = (
+            enable_cpu_offload if enable_cpu_offload is not None
+            else type(self)._pending_enable_cpu_offload
+        )
         self._n_experts_cached: int | None = None
         self._shadow_pool: dict[int, object] = {}
         # Issue #33 Fase 2 — pool CPU-resident (DDR4), parallelo a
         # _shadow_pool (GPU), non un suo sostituto: vedi
         # _build_cpu_shadow_pool()/_load_shadow_pool() per come/quando
-        # viene popolato (solo con self._tier_manager wired).
+        # viene popolato (solo con self._tier_manager wired E
+        # self._cpu_offload_enabled True — entrambi, non basta uno solo).
         self._cpu_shadow_pool: dict[int, object] = {}
         # Issue #33 Fase 3 — quali expert_id (tra quelli presenti in
         # ENTRAMBI i pool) sono "caldi" in questo momento: vedi
@@ -1168,11 +1221,17 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
             )
             # Issue #33 Fase 2: pool CPU-resident parallelo, stessi
             # expert_ids, stessa classe _ShadowExpertINT4 (device-agnostic,
-            # Fase 1) — mai promosso a CUDA. Solo con un TierManager wired:
-            # è lavoro di compute-offload DDR4, non ha senso costruirlo
-            # senza un tier system a monte. Vedi _build_cpu_shadow_pool()
-            # per il perché niente .to('cuda') qui.
-            if getattr(self, "_tier_manager", None) is not None:
+            # Fase 1) — mai promosso a CUDA. Richiede ENTRAMBI: un
+            # TierManager wired (è lavoro di compute-offload DDR4, non ha
+            # senso senza un tier system a monte) E il flag esplicito
+            # self._cpu_offload_enabled (Fase 4, default False — vedi il
+            # commento su _pending_enable_cpu_offload nel costruttore per
+            # perché i due non sono la stessa cosa). Vedi
+            # _build_cpu_shadow_pool() per il perché niente .to('cuda') qui.
+            if (
+                getattr(self, "_tier_manager", None) is not None
+                and getattr(self, "_cpu_offload_enabled", False)
+            ):
                 self._cpu_shadow_pool.update(
                     self._build_cpu_shadow_pool(layers, expert_ids),
                 )

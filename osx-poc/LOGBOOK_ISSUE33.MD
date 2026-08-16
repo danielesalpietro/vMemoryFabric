@@ -1026,4 +1026,93 @@ Next session: Fase 5 — benchmark end-to-end su hardware reale
 (`bench_hybrid.py`, mirror di `bench_tier.py`), sul runner
 `Z8-G4-RTX3090` via `full-gpu-tests`. Con Fase 4 chiusa a "skip", Fase 5
 misura l'intero pipeline così com'è (Fase 0-3), senza dover prima
-integrare un meccanismo di sync che si è appena deciso di non costruire.
+
+---
+
+## 2026-08-17 (continued) — flag esplicito enable_cpu_offload, spento di default
+
+**Release:** codice + test, nessuna modifica di comportamento per chi già
+usa `configure_tier_manager()`/`tier_manager=` senza il nuovo flag — resta
+tutto invariato finché non viene richiesto esplicitamente.
+
+### What we set out to do
+
+Correzione al project owner ("sei troppo frettoloso"): chiudere Fase 4 a
+"skip il job ring" non doveva implicare che il routing CPU/DDR4-resident
+(Fase 2/3) diventasse automaticamente live ovunque un `TierManager` è
+wired. Va tenuto, testato bene, ma spento di default — attivabile solo
+esplicitamente — così l'impatto reale si può misurare e documentare più
+avanti senza che nel frattempo sia già la via di default in produzione.
+
+### What we did
+
+Aggiunto `GCSGWorker.configure_cpu_offload(enabled: bool)` (classmethod,
+stesso meccanismo di `configure_tier_manager()` — `_pending_enable_cpu_offload`
+a livello di classe, perché vLLM costruisce il worker da solo e non c'è
+un punto per iniettare un kwarg extra) e il parametro `enable_cpu_offload`
+sul costruttore, per chi costruisce `GCSGWorker` direttamente (test).
+Default **False** in entrambi i casi — deliberatamente diverso da
+`tier_manager` (che risolve a `None`): qui la scelta è booleana e il
+default deve essere "non attivare", non "eredita quello che c'è".
+
+Il gate in `_load_shadow_pool()` ora richiede ENTRAMBE le condizioni —
+`self._tier_manager is not None` E `self._cpu_offload_enabled` — per
+costruire il pool CPU. Prima di questa sessione bastava la prima da
+sola: chiunque avesse wired un TierManager per qualunque altro motivo
+(es. solo hotness tracking EAT lato GPU, issue #17, che non ha nulla a
+che fare col compute-offload DDR4) si sarebbe ritrovato anche il routing
+CPU attivo come effetto collaterale non richiesto. `route_forward()` non
+ha bisogno di nessuna modifica: con `_cpu_shadow_pool` vuoto (flag
+spento), il suo fallback già esistente ("usa qualunque pool contenga
+l'expert") instrada tutto al pool GPU esattamente come prima di Fase 2 —
+lo stesso principio "zero rischio per il path già validato" di ogni
+altra estensione in questo file, questa volta verificato per costruzione
+invece che per un test dedicato aggiuntivo.
+
+4 test nuovi: `configure_cpu_offload()` classmethod (default False,
+imposta/pulisce lo stato pending — stesso schema dei tre test gemelli
+per `configure_tier_manager()`), e un test diretto che nega
+esplicitamente il caso precedente (`tier_manager` wired MA
+`cpu_offload_enabled=False` esplicito, il default reale di produzione) —
+pool CPU resta vuoto, pool GPU invariato. `TestGCSGCpuShadowPool._make_worker()`
+aggiornato con un default locale `cpu_offload_enabled=True` (quella
+classe testa specificamente il comportamento attivo — il default reale a
+livello di produzione resta False, coperto a parte).
+
+Full suite: 154 passed, 3 skipped, 0 failed (157 raccolti, +4). `ruff
+check` pulito (stesso singolo warning pre-esistente non correlato).
+
+### Result
+
+Il routing CPU/DDR4-resident (Fase 2/3) è ora un opt-in esplicito e
+separato dal resto del wiring TierManager, non un effetto collaterale
+implicito. Nessuna regressione per l'uso esistente di `tier_manager=`.
+
+### Why this matters
+
+Disaccoppia due decisioni che erano rimaste implicitamente fuse: "voglio
+un TierManager per l'hotness tracking/promozione GPU" (issue #17,
+maturo, validato su hardware reale) e "voglio che gli expert freddi
+girino su CPU invece che essere promossi" (issue #33, nuovo, Fase 5 non
+ancora fatta — impatto reale non ancora misurato). Tenerle separate
+significa che l'adozione della seconda può essere graduale e misurata,
+invece che automatica per chiunque usi già la prima.
+
+### Current state
+
+- `scheduler/gcsg.py`: `GCSGWorker.configure_cpu_offload()`,
+  `_pending_enable_cpu_offload` (default False), parametro
+  `enable_cpu_offload` sul costruttore, gate aggiornato in
+  `_load_shadow_pool()`.
+- `tests/test_scheduler.py`: 4 test nuovi, `_make_worker()` di
+  `TestGCSGCpuShadowPool` aggiornato.
+- Suite completa 154 passed / 3 skipped, lint pulito.
+- Branch: `claude/ddr4-ram-processing-unzseh`.
+
+Next session: Fase 5 — benchmark end-to-end su hardware reale
+(`bench_hybrid.py`, mirror di `bench_tier.py`), sul runner
+`Z8-G4-RTX3090` via `full-gpu-tests`. Con l'aggiunta che ogni run dovrà
+esplicitamente attivare il flag (`configure_cpu_offload(True)` o
+`enable_cpu_offload=True`) per esercitare davvero il path CPU — senza,
+misurerebbe solo il comportamento di sempre (GPU-only), non quello che
+Fase 5 deve validare.
