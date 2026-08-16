@@ -12,6 +12,11 @@ corretta l'incoerenza tassonomica di "Open Silicon" (era una categoria
 alla pari, ora è una nota trasversale), rimossa la digressione fuori
 scope su un progetto esterno non correlato — tutti e tre i punti da una
 seconda critica esterna, verificati prima di accettarli (vedi §3).
+**Revisione 2026-08-16 (round 3):** aggiunto §5 sull'ecosistema silicio
+cinese (Ascend, Cambricon, Biren, Moore Threads, MetaX), fact-checked
+punto per punto — scartato senza verifica in round 1, reintrodotto dopo
+verifica invece di restare nell'oblio solo perché non è hardware
+acquistabile per il PoC.
 
 ---
 
@@ -119,3 +124,47 @@ progetto — le altre restano contesto di mercato generico:
 Le altre categorie (Scale-Up, Wafer-Scale, Dataflow, Inference ASIC,
 Neuromorphic) restano utili come mappa di mercato generale ma non toccano
 direttamente le scelte architetturali di questo progetto.
+
+## 5. Hardware upstream: l'ecosistema cinese
+
+Scartato nella prima revisione di questo documento con l'argomento "non è
+lab-actionable per un PoC single-developer" — vero, ma è un criterio
+parziale per un documento che si chiama *landscape watch*: la scala non
+va in oblio solo perché non è acquistabile qui. Fact-check fatto ora,
+non preso dal testo della critica originale (che conteneva almeno un
+errore, vedi sotto):
+
+- **Huawei Ascend 910C**: singolo chip a ~60% delle performance di
+  inferenza di un H100 (2.4 vs 4 PFLOPS FP16/FP8, dato da ricerca
+  DeepSeek riportata da Tom's Hardware/TrendForce) — ma il sistema
+  **CloudMatrix 384** (package di più 910B) supera il rack NVIDIA GB200
+  NVL72 su alcune metriche chiave a livello sistema. Il gap è reale al
+  livello del singolo chip, si restringe o si inverte al livello sistema.
+- **Cambricon**: il nome corretto è **Siyuan 590** (7nm, 2024, modellato
+  su A100) e **Siyuan 690** (target classe-H100, produzione di massa
+  2026) — non "MLU370/590" come nella critica originale ricevuta, che
+  usava il branding di prodotto precedente. Target dichiarato 2026: 500K
+  acceleratori totali, di cui 300K Siyuan 590/690.
+- **Biren BR100**: GPGPU rivendicato alla pari di H100 al lancio (2022);
+  IPO a Hong Kong gennaio 2026 — non più solo un design da monitorare,
+  un'azienda quotata.
+- **Moore Threads**: IPO sullo STAR Market di Shanghai, debutto 5
+  dicembre 2025.
+- **MetaX C600**: HBM3e, supporto FP8, produzione di massa Q1 2026.
+- Segnale aggregato più significativo dei singoli chip: l'intero
+  ecosistema cinese ha completato l'adattamento "Day-0" di DeepSeek V4 nel
+  2026 — passaggio da deployment in ritardo rispetto a NVIDIA a deployment
+  simultaneo. È un indicatore di maturità dello stack, non un aneddoto
+  isolato su un singolo vendor.
+
+**Perché resta fuori dalla roadmap operativa (issue #8) ma non da questo
+documento**: nessun canale di acquisto diretto per un lab occidentale,
+nessuna community/documentazione in inglese comparabile a CUDA/ROCm,
+restrizioni all'export in entrambe le direzioni. Questo continua a
+escluderlo come opzione hardware per il PoC — ma la scala (500K
+acceleratori/anno dichiarati, IPO multiple, parità a livello sistema su
+alcune metriche) è un fatto di mercato che un osservatorio strategico non
+può omettere solo perché non è comprabile da qui. La critica originale
+aveva individuato il buco giusto nel punto sbagliato del documento (voleva
+sezioni su CANN/MindSpore dentro un file di scoping interno); qui, come
+fatto di scala verificato, il buco era reale.
