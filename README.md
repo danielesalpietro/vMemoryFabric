@@ -6,7 +6,7 @@ Developed under the internal codename **OSX** ("Operating System for Experts") �
 
 > *Current release: **Tekniska** (v0.5.0-dev) — August 13, 2026 — previous: Oskarshamn (v0.4.0-dev), Eketorp (v0.3.0-dev), Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev). Sprint 4 complete; Sprint 5 (PoC delivery + paper, codename **Berg**) in planning — see [`osx-poc/reports/sprint5_berg_plan.md`](osx-poc/reports/sprint5_berg_plan.md).*
 >
-> *Related work: how vMemoryFabric's paged memory fabric compares to Petals (P2P pipeline parallelism) and ExLlamaV2/V3/tabbyAPI (local heterogeneous multi-GPU split) — see [`osx-poc/reports/related_work_petals_exllama.md`](osx-poc/reports/related_work_petals_exllama.md), plus a concrete component-reuse assessment against this repo's actual code in [`osx-poc/reports/component_reuse_analysis.md`](osx-poc/reports/component_reuse_analysis.md) (both Italian).*
+> *Related work (sub-project **Marstrand**): how vMemoryFabric's paged memory fabric compares to Petals (P2P pipeline parallelism) and ExLlamaV2/V3/tabbyAPI (local heterogeneous multi-GPU split) — see [`osx-poc/reports/related_work_petals_exllama.md`](osx-poc/reports/related_work_petals_exllama.md), plus a concrete component-reuse assessment against this repo's actual code in [`osx-poc/reports/component_reuse_analysis.md`](osx-poc/reports/component_reuse_analysis.md) (both Italian) — tracked as issue [#32](https://github.com/danielesalpietro/vMemoryFabric/issues/32).*
 
 ---
 
@@ -172,6 +172,7 @@ vMemoryFabric/                  (repo root)
 | 4      | Integration + benchmarks | 9–12 | ✅ **Tekniska** (100%) — merged into `develop` 2026-08-14 (PR #29) |
 | 5      | PoC delivery + paper   | 13–16 | 🟡 planning — **Berg** |
 | 6      | Telemetry + observability dashboard | TBD | 🔲 pending (~10%) — **Stockholm** |
+| —      | Component reuse & upstream monitoring (Petals/ExLlamaV2/V3/tabbyAPI) | — | 🟡 research phase — **Marstrand** (issue [#32](https://github.com/danielesalpietro/vMemoryFabric/issues/32)) |
 
 Percentages are grounded in code/test/hardware verification, not label
 carry-over — updated 2026-08-13 with Sprint 4 (Tekniska) complete: all 7
@@ -427,6 +428,33 @@ Two phases, in order, not scoped together:
    short-lived workers) — not started until phase 1 is real and the
    hardware blocker clears, tracked as a dependency rather than an
    arbitrary "later."
+
+**Marstrand** is a parallel sub-project, not a numbered sprint like 0–6 above — same
+pattern as Stockholm being added without reordering the others, except Marstrand looks
+outward instead of at OSX's own internals. It's a source-code-verified competitive/
+component-reuse analysis of four related heterogeneous-inference projects (Petals,
+ExLlamaV2, ExLlamaV3, tabbyAPI) against vMemoryFabric's actual code, not its roadmap.
+Named, like the sprints, after a Swedish place — a coastal town this time.
+
+Two deliverables so far (both Italian):
+[`osx-poc/reports/related_work_petals_exllama.md`](osx-poc/reports/related_work_petals_exllama.md)
+(architectural comparison, verified against the four repos' source code — corrected two
+claims from an earlier general-knowledge draft, and found that ExLlamaV3, unlike V2,
+already does single-host CPU-RAM tiering for MoE experts and KV-cache) and
+[`osx-poc/reports/component_reuse_analysis.md`](osx-poc/reports/component_reuse_analysis.md)
+(solutions-architect assessment: what's concretely reusable in vMemoryFabric's current
+code, and what isn't, with reasoning grounded in both codebases, not just the target
+architecture). Tracked as issue
+[#32](https://github.com/danielesalpietro/vMemoryFabric/issues/32) and five sub-issues:
+three concrete improvement candidates — active DDR4 tier via a CPU-compute-offload
+pattern ([#33](https://github.com/danielesalpietro/vMemoryFabric/issues/33)), content-hash
+page dedup in `SlabAllocator` ([#34](https://github.com/danielesalpietro/vMemoryFabric/issues/34)),
+and Petals' fault-tolerance pattern registered for future multi-node work
+([#35](https://github.com/danielesalpietro/vMemoryFabric/issues/35)) — plus a documented
+no-list with explicit re-evaluation conditions
+([#36](https://github.com/danielesalpietro/vMemoryFabric/issues/36)) and a standing
+reminder to monitor how the four upstream projects evolve
+([#37](https://github.com/danielesalpietro/vMemoryFabric/issues/37)).
 
 Non-functional targets (acceptance criteria for PoC):
 
