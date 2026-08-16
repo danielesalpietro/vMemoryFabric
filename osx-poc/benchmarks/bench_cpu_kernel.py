@@ -85,7 +85,13 @@ def _build_shadow(hidden: int, intermediate: int, generator: torch.Generator,
 
 
 def _bench_forward(device: str) -> dict:
-    generator = torch.Generator(device="cpu").manual_seed(_SEED)
+    # torch.randn(..., generator=g, device=device) richiede g sullo stesso
+    # device del tensore da generare — un Generator("cpu") passato con
+    # device="cuda" solleva "Expected a 'cuda' device type for generator
+    # but found 'cpu'" (bug reale, trovato sul primo run su hardware reale
+    # Z8/Xeon 6244+RTX 3090: la sezione cpu passava perché device="cpu"
+    # matcha, quella gpu_reference no — vedi LOGBOOK_ISSUE33.MD).
+    generator = torch.Generator(device=device).manual_seed(_SEED)
     shadow = _build_shadow(_HIDDEN, _INTERMEDIATE, generator, device)
 
     results = {}
