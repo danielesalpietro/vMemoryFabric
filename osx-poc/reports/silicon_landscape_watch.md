@@ -17,6 +17,10 @@ cinese (Ascend, Cambricon, Biren, Moore Threads, MetaX), fact-checked
 punto per punto — scartato senza verifica in round 1, reintrodotto dopo
 verifica invece di restare nell'oblio solo perché non è hardware
 acquistabile per il PoC.
+**Documento correlato:** [`cloud_procurement_map.md`](cloud_procurement_map.md)
+copre il "dove affittarlo pay-per-use" per l'hardware citato qui — tenuto
+deliberatamente separato perché cambia su base mensile, mentre questo
+documento punta a paradigmi architetturali molto più stabili.
 
 ---
 

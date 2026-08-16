@@ -124,6 +124,11 @@ vMemoryFabric/                  (repo root)
     ├── CHANGELOG.MD
     ├── LOGBOOK.md               # dev diary — full investigation trails, session-by-session
     ├── reports/                 # preliminary/technical reports (.md + .docx EN/IT)
+    │   ├── gcsg_shadow_execution_report.md
+    │   ├── poc_final_report.md
+    │   ├── sprint5_berg_plan.md
+    │   ├── silicon_landscape_watch.md    # background/literature for the paper — architecture, not roadmap
+    │   └── cloud_procurement_map.md      # pay-per-use rental channels for issue #8 hardware — updated ad hoc, not on a schedule
     │
     ├── src/
     │   ├── eat/              # M1 — Expert Access Table
@@ -450,7 +455,7 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#5](https://github.com/danielesalpietro/vMemoryFabric/issues/5) | No CUDA stream pipelining in `GPUTransfer` | Deferred since Sprint 0, needs real compute to overlap with |
 | [#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6) | No `pyproject.toml`/`ruff.toml` | Pre-existing style debt across the whole codebase |
 | [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) | PMEM (EMH-2) integration | Blocked on hardware availability |
-| [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival |
+| [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival — see also [`osx-poc/reports/silicon_landscape_watch.md`](osx-poc/reports/silicon_landscape_watch.md) (why alternative silicon matters architecturally) and [`osx-poc/reports/cloud_procurement_map.md`](osx-poc/reports/cloud_procurement_map.md) (where to rent it pay-per-use before buying) |
 | [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint`/`test`/`bench` fail on relative paths — container `WORKDIR` (`/workspace`) doesn't match `osx-poc/`'s relative paths | Workaround in use everywhere: `docker compose run --rm osx-dev bash -c "cd osx-poc && ..."` |
 | ~~[#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17)~~ | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` used vLLM's `cpu_offload_gb` directly | **Resolved 2026-08-13**: all three shadow-pool paths (AWQ, Marlin, path 1) wired/exercised and verified on real hardware (Sprint 4, complete — see roadmap above), each with its own real bug found and fixed along the way. The last open gap — an MMLU quality number for Marlin specifically routed through TierManager — is now closed too: 412/570 (72.28%), matching the historical Marlin baseline exactly (`logs/sprint4_tekniska/marlin_mmlu/`). Getting there required a small fix to `eval_mmlu_gcsg.py`, which had `--wire-tier-manager` silently forcing `quantization=awq` (stale from before Marlin was wired) — added an explicit `--quantization` flag. Promotion-latency measurement done. Issue #2 (RLock contention) decided separately, not a blocker |
 | [#18](https://github.com/danielesalpietro/vMemoryFabric/issues/18) | No environment fingerprint pre-check — `OMP_NUM_THREADS`/`shm_size`/GPU model assumed, not verified | Hit for real deploying to RunPod: `OMP_NUM_THREADS=8` fixed regardless of real vCPU count, `docker-compose.yml`'s `shm_size` doesn't apply outside local `docker compose` |
