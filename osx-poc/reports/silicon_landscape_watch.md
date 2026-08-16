@@ -7,6 +7,11 @@ lavoro su `osx-poc/src/`, non tocca la issue #8 (quella resta scoped su
 hardware execution reale: RTX 5080, AMD, Tenstorrent — vedi quell'issue per
 lo stato operativo). Origine: critica esterna ricevuta il 2026-08-16 sulla
 mappatura vendor/hardware discussa in issue #8, valutata e integrata qui.
+**Revisione 2026-08-16 (round 2):** integrato CXL come categoria mancante,
+corretta l'incoerenza tassonomica di "Open Silicon" (era una categoria
+alla pari, ora è una nota trasversale), rimossa la digressione fuori
+scope su un progetto esterno non correlato — tutti e tre i punti da una
+seconda critica esterna, verificati prima di accettarli (vedi §3).
 
 ---
 
@@ -33,8 +38,17 @@ cittadino architetturale (EMH).
 | Wafer-Scale Compute | Tutta la memoria on-chip | Cerebras |
 | Photonic Fabrics / Network-Centric AI | Connessione compute↔memoria via fotonica, non il chip in sé | Celestial AI, Lightmatter, Ayar Labs |
 | Analog / In-Memory Compute | Moltiplicazione matriciale come fenomeno analogico, non digitale | Mythic, EnCharge, Rain AI |
-| Open Silicon (modello industriale, non architettura) | RISC-V, stack aperto, no CUDA lock-in | Tenstorrent (leader ideologico) |
+| Memory Pooling / Disaggregation (standard aperto, non vendor) | Pooling ed espansione di memoria system-level tra host, indipendente dal chip di calcolo | CXL Consortium — Intel Xeon 6, AMD EPYC (adozione CPU); Samsung/SK Hynix/Micron (moduli CXL-attached fino a 256GB); Astera Labs/Microchip/IntelliProp (switch) |
 | Neuromorphic Computing | Paradigma computazionale alternativo | Loihi, BrainScaleS |
+
+**Nota tassonomica:** "Open Silicon" (RISC-V, stack aperto, no CUDA
+lock-in) è stato rimosso come riga a sé — non risponde alla stessa domanda
+delle altre ("che collo di bottiglia attacca?"), risponde a "che modello
+industriale/di licensing ha?". È un asse trasversale, non una categoria
+alla pari: Tenstorrent, ad esempio, è *sia* Memory-Centric Compute
+(architettura Tensix/NoC) *sia* Open Silicon (modello industriale
+RISC-V/no lock-in) — le due etichette descrivono livelli diversi dello
+stesso vendor, non vendor diversi.
 
 ## 3. Verifica — cosa regge, cosa è illustrativo
 
@@ -51,14 +65,27 @@ per buono dal testo originale:
   utile come intuizione qualitativa (pochi competono con NVIDIA su
   training general-purpose, la maggior parte punta sull'inferenza), da non
   citare come dato nel paper senza fonte primaria.
-- Un riferimento nel testo originale a un progetto "NORTHSTREAM" non
-  corrisponde a nulla in questo repository — chiarito dall'autore: è un
-  progetto separato dell'autore, non correlato a vMemoryFabric/OSX, fuori
-  scope qui.
+- **CXL 3.0/3.1** (categoria Memory Pooling/Disaggregation, aggiunta in una
+  revisione successiva del documento): verificato, non solo citato. Intel
+  Xeon 6 (Granite Rapids+) e AMD EPYC (Turin+) hanno adozione CXL a livello
+  CPU; moduli CXL-attached DRAM fino a 256GB di Samsung/SK Hynix/Micron
+  sono già in produzione; il settore parla di "Phase 3: memory pooling"
+  calendarizzata 2026-2027. Era l'assenza più seria della prima versione di
+  questo documento — è l'analogo hardware più diretto dell'EMH tra tutto
+  ciò che è citato qui.
+- `vllm-ascend` (plugin ufficiale sotto l'org GitHub `vllm-project`, non un
+  fork terzo) dichiara esplicitamente supporto **Mixture-of-Experts** per
+  hardware Ascend NPU — verificato. Rilevante in relazione al caveat già
+  registrato in issue #8: `tt-forge` di Tenstorrent non copre Mixtral/MoE
+  nella sua lista pubblica di 800+ varianti testate, mentre il plugin
+  Ascend lo dichiara come caso d'uso supportato. Non un'indicazione
+  d'acquisto (nessun path di importazione/community pratico per un lab
+  occidentale), solo un dato tecnico più preciso di quanto emerso nella
+  prima revisione di questo documento.
 
 ## 4. Rilevanza specifica per vMemoryFabric
 
-Due categorie, non tutte e otto, hanno un collegamento diretto con questo
+Tre categorie, non tutte e otto, hanno un collegamento diretto con questo
 progetto — le altre restano contesto di mercato generico:
 
 - **Memory-Centric Compute** è l'inquadramento corretto per Tenstorrent
@@ -78,16 +105,17 @@ progetto — le altre restano contesto di mercato generico:
   problema che questi vendor risolvono in silicio. Da citare nella
   literature review del paper come corrente di ricerca affine, non da
   valutare come hardware d'acquisto.
+- **Memory Pooling / Disaggregation (CXL)** è l'analogia hardware più
+  diretta dell'EMH tra tutte quelle citate in questo documento: CXL fa a
+  livello di **fabric fisico** (pooling/espansione di memoria tra host,
+  standard aperto multi-vendor) esattamente quello che EAT/TierManager
+  fanno a livello **software** (promozione/eviction hot-cold tra
+  VRAM/DDR/NVMe). A differenza di Memory-Centric Compute e Photonic
+  Fabrics, CXL non è un'analogia di filosofia progettuale ma uno standard
+  che sta arrivando su hardware server mainstream (Xeon 6, EPYC Turin+)
+  nella stessa finestra temporale del PoC — la citazione più diretta per
+  la sezione related-work del paper.
 
 Le altre categorie (Scale-Up, Wafer-Scale, Dataflow, Inference ASIC,
 Neuromorphic) restano utili come mappa di mercato generale ma non toccano
 direttamente le scelte architetturali di questo progetto.
-
-## 5. Fuori scope qui, annotato per il futuro
-
-L'autore ha segnalato un tema collegato ma distinto, da un altro suo
-progetto (NORTHSTREAM): la qualità e velocità dei **dati in ingresso** alla
-memoria del modello — non solo dati statici tiered (come fa EMH), ma
-flussi informativi continui/real-time. Argomento esplicitamente rimandato
-("lo vediamo più avanti") — non sviluppato in questo documento, annotato
-solo perché riemerga nel punto giusto quando verrà ripreso.
