@@ -127,3 +127,114 @@ reasoning chain — audit → confirmation → plan — without re-deriving it.
 Next session: Fase 1 — bench PyTorch CPU backend (oneDNN/MKL AVX-512) vs.
 `_ShadowExpertINT4`'s existing GPU path, decide whether a custom AVX-512
 kernel is actually needed before writing one.
+
+---
+
+## 2026-08-16 (continued) — Fase 1: no custom kernel needed, `_ShadowExpertINT4` is already device-agnostic
+
+**Release:** none — new tests + benchmark added, no production code changed.
+
+### What we set out to do
+
+Fase 1 of the plan above: check whether PyTorch's CPU backend (oneDNN/MKL,
+AVX-512/VNNI-capable) is fast enough for the SwiGLU INT4 forward before
+committing to writing custom AVX-512 intrinsics.
+
+### What we did
+
+Read `_ShadowExpertINT4.__call__()` (`gcsg.py:445-457`) again with this
+specific question in mind, and found the answer was already sitting there:
+the method is `hidden_states @ w13.T` → split → `F.silu` → `* up` →
+`@ w2.T` — plain PyTorch ops with zero CUDA-specific code. It runs on
+whatever device the input tensors are on. The "GPU path" in production is
+GPU-only because `_load_shadow_pool()` forces `.to("cuda")` on the weights
+*before* handing them to this class (the same guard documented in the
+previous session's audit) — not because the class itself needs CUDA. So
+Fase 1's actual deliverable wasn't a new kernel, it was proving this.
+
+Added `tests/test_cpu_kernel.py` (4 tests, no `@pytest.mark.gpu`, runs in
+the standard `cpu-tests` CI job):
+- `test_runs_on_cpu_without_cuda` — builds `_ShadowExpertINT4` from
+  CPU-quantized weights, calls it with a CPU `hidden_states`, asserts the
+  output stays CPU (`not output.is_cuda`) — direct proof of the
+  device-agnostic claim.
+- `test_quantize_int4_round_trip_within_scale_tolerance` — `_quantize_int4`
+  had no correctness test anywhere in the repo despite a comment in
+  `test_scheduler.py:362` claiming it was "verified elsewhere" (grepped,
+  found nothing — stale or aspirational comment). Verifies the per-element
+  round-trip error stays within `scale/2`, as guaranteed by `torch.round()`.
+- `test_shadow_expert_forward_matches_fp32_reference_within_quant_tolerance`
+  — parity test: CPU INT4 output vs. an independently-computed fp32
+  reference forward (same formula, unquantized weights). First attempt used
+  a hand-derived per-element error bound (`scale/2` propagated through the
+  two matmuls) — wrong by over an order of magnitude, because it ignored
+  error accumulation over the summed `hidden`/`intermediate` dimensions.
+  Replaced with an empirically-calibrated threshold: relative L2 error
+  measured at 0.24–0.32 across 5 seeds (ad-hoc script, not committed),
+  asserted `< 0.5`. Recorded as an explicit deviation, same convention
+  `bench_tier.py` already uses for its own declared approximations.
+- `TestThroughputSmoke` (`@pytest.mark.avx512`, new marker registered in
+  `pytest.ini`) — loose wall-clock sanity check (not a real benchmark),
+  skipped via a `/proc/cpuinfo` flag check if `avx512f` isn't present.
+
+Added `benchmarks/bench_cpu_kernel.py` (mirrors `bench_tier.py`'s
+structure/conventions): P50/P95/P99 latency and a GFLOPS-at-p50 estimate
+for `_ShadowExpertINT4`'s forward on CPU, at 3 batch sizes, with a
+`gpu_reference` section that runs the identical forward on CUDA for a
+real side-by-side — `{"status": "skipped", ...}` if no GPU, not a fake
+number. Default synthetic dims (512×1536) are a declared fraction of
+Mixtral's real 4096×14336 (see module docstring for the env-var override
+to run at real scale); this run still needs repeating on the actual Xeon
+6244 hardware for a meaningful number, same caveat `bench_tier.py` already
+carries for its own synthetic shard size.
+
+Added `make test-cpu-kernel` / `make bench-cpu-kernel` targets. Did not
+wire the new benchmark into `ci.yml`'s `full-gpu-tests` job yet — Fase 1 is
+explicitly exploratory ("decide if a custom kernel is needed"), wiring a
+benchmark into CI with an acceptance threshold is Fase 5 territory once the
+kernel approach itself is settled.
+
+Verified locally (no real GPU/AVX-512 hardware confirmed beyond a
+container CPU that happens to expose `avx512f`): `pytest tests/ -m "not
+gpu"` — 114 passed, 3 skipped (pre-existing), 0 failed, no regressions.
+`bench_cpu_kernel.py` runs clean, `gpu_reference` skips cleanly with no
+CUDA present, matching `bench_tier.py`'s established pattern.
+
+### Result
+
+No new CPU kernel was written, and per the plan's own Fase 1 gate, none is
+needed yet: PyTorch's existing CPU backend already executes the real
+production forward class unmodified. Fase 2 (a CPU-resident wrapper
+"mirroring" `_ShadowExpertINT4`) is now simpler than planned — it doesn't
+need a new class, `_ShadowExpertINT4` already qualifies as long as its
+weights are constructed/kept CPU-resident, which is exactly what
+`test_runs_on_cpu_without_cuda` demonstrates.
+
+Numbers from this sandbox (not the real Xeon 6244, no AVX-512-vs-scalar
+comparison possible without a second run on hardware without the flag):
+batch=32 forward at 512×1536 → ~3.8ms p50, ~40 GFLOPS at p50. Not
+production-representative — logged as a sandbox sanity number, not a
+Fase 5 result.
+
+### Why this matters
+
+This closes the specific open question Fase 1 was scoped to answer, and
+changes the shape of Fase 2: instead of building something new, Fase 2 is
+now about wiring `_ShadowExpertINT4` into a CPU-resident code path inside
+`TierManager`/`GCSGWorker` and testing that it's *never* promoted to CUDA
+— reusing, not reinventing, issue #33's own "conferma indiretta" evidence
+(the 2026-08-12 bug fix that forces `.to('cuda')` before compute) as the
+thing Fase 2's test needs to assert does NOT happen for cold experts.
+
+### Current state
+
+- `tests/test_cpu_kernel.py`, `benchmarks/bench_cpu_kernel.py` added.
+- `pytest.ini`: new `avx512` marker registered.
+- `Makefile`: `test-cpu-kernel`, `bench-cpu-kernel` targets added.
+- Full CPU suite green (114 passed / 3 skipped / 0 failed), no regressions.
+- Not yet run on real Xeon 6244 hardware — sandbox numbers only.
+- Branch: `claude/ddr4-ram-processing-unzseh`.
+
+Next session: Fase 2 — wire a CPU-resident `_ShadowExpertINT4` path into
+`GCSGWorker`'s shadow pool construction (parallel to the existing GPU pool,
+not replacing it), reusing the class as-is per this session's finding.

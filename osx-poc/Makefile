@@ -34,6 +34,9 @@ test-tier:
 test-scheduler:
 	$(RUN) pytest tests/test_scheduler.py -v --tb=short
 
+test-cpu-kernel:
+	$(RUN) pytest tests/test_cpu_kernel.py -v --tb=short
+
 # ── Benchmarks ────────────────────────────────────────────────────────────────
 
 bench:
@@ -45,6 +48,9 @@ bench-eat:
 
 bench-tier:
 	$(RUN) python benchmarks/bench_tier.py
+
+bench-cpu-kernel:
+	$(RUN) python benchmarks/bench_cpu_kernel.py
 
 # ── Diagnostic repros (manual, not wired into CI) ───────────────────────────────
 # Requires the real checkpoint on disk (/data/nvme/models/mixtral-instruct-awq)
@@ -106,7 +112,9 @@ help:
 	@echo "  make test-eat     pytest M1 only"
 	@echo "  make test-tier    pytest M2 only"
 	@echo "  make test-scheduler pytest M3 only"
+	@echo "  make test-cpu-kernel pytest issue #33 Fase 1 (CPU kernel, no GPU needed)"
 	@echo "  make bench        Benchmark M1 + M2"
+	@echo "  make bench-cpu-kernel  Benchmark issue #33 Fase 1 (CPU forward throughput)"
 	@echo "  make gpu-repro-issue10  Diagnostic repros, issue #10 offload crash (manual, one at a time)"
 	@echo "  make lint         Ruff linter"
 	@echo "  make typecheck    mypy"
