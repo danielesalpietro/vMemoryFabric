@@ -235,6 +235,132 @@ thing Fase 2's test needs to assert does NOT happen for cold experts.
 - Not yet run on real Xeon 6244 hardware — sandbox numbers only.
 - Branch: `claude/ddr4-ram-processing-unzseh`.
 
+---
+
+## 2026-08-16 (continued 2) — Fase 1 confirmed on real hardware (Z8, Xeon Gold 6244 + RTX 3090), plus one real bug found only by running there
+
+**Release:** none — one bug fix (`bench_cpu_kernel.py`), no production code changed.
+
+### What we set out to do
+
+Get `test_cpu_kernel.py` and `bench_cpu_kernel.py` actually running on the real
+Z8 (dual Xeon Gold 6244, RTX 3090) instead of the sandbox-only numbers logged
+above — the project owner asked for this explicitly, wanting real numbers
+before deciding anything about Fase 2/3.
+
+### What we did
+
+No direct shell access to the Z8 from this session (it's a separate
+Windows 11 Pro machine — this session runs in an isolated cloud container
+regardless of which physical device is driving the chat, confirmed via
+`list_environments` showing only the cloud environment). Wired
+`bench_cpu_kernel.py` into `full-gpu-tests` (`.github/workflows/ci.yml`),
+the self-hosted-runner job already registered on that same Z8
+(`Z8-G4-RTX3090`, `full-gpu-tests`, gated to manual `workflow_dispatch`),
+then asked the project owner to trigger it from the GitHub Actions UI (this
+session's GitHub App integration gets a `403 Resource not accessible by
+integration` on `workflow_dispatch` itself — read-only for Actions from
+here, confirmed twice).
+
+**First run (`31971631020`) surfaced a real bug the sandbox couldn't**:
+`_bench_forward()` built `torch.Generator(device="cpu")` unconditionally,
+then passed it to `torch.randn(..., device="cuda")` in the `gpu_reference`
+section — PyTorch requires the generator's device to match the tensor's,
+so it raised `RuntimeError: Expected a 'cuda' device type for generator but
+found 'cpu'`. The `cpu` section had already run correctly (matched by
+construction), but the whole script crashed before printing anything, so
+even that result was lost. This class of bug is invisible in a CPU-only
+sandbox by definition — first real payoff of insisting on a hardware run
+instead of accepting the sandbox numbers as final. Fixed by building the
+generator on the same device as the tensors inside `_bench_forward()`
+instead of hardcoding `"cpu"`.
+
+**Second run (`31973334463`), on the fix commit, went green end to end**:
+full suite (129 passed / 3 skipped, incl. `test_cpu_kernel.py`), M1/M2
+benchmarks, and `bench_cpu_kernel.py` all succeeded. Real numbers
+(hidden=512, intermediate=1536 — still the declared fraction of Mixtral's
+real 4096×14336, not yet re-run at full scale):
+
+| batch | CPU (Xeon 6244) p50 | CPU GFLOPS | GPU (RTX 3090) p50 | GPU GFLOPS | GPU/CPU |
+|---|---|---|---|---|---|
+| 1  | 2.59 ms | 1.82  | 0.32 ms | 14.59  | ~8.0×  |
+| 8  | 2.51 ms | 15.03 | 0.36 ms | 106.30 | ~7.1×  |
+| 32 | 2.96 ms | 50.96 | 0.29 ms | 526.53 | ~10.3× |
+
+Unplanned finding, worth more than the raw numbers: CPU p50 latency is
+almost flat across batch=1→32 (2.59ms → 2.96ms, batch 32× larger) — the
+cost is dominated by weight load/dequant, not by per-token compute at this
+scale. GPU shows the same flatness (kernel-launch-overhead bound at these
+tiny synthetic dims, not compute bound). Practical read for Fase 3: on this
+hardware, batching multiple calls to the *same* cold expert before running
+them is close to free in latency and multiplies effective throughput —
+a concrete argument for a batching/coalescing step in the eventual
+hot/cold routing design, not just a hot/cold split.
+
+**Also observed, not yet solved**: both `full-gpu-tests` runs rebuilt the
+Docker image from scratch (`Build dev image`: ~26 min first run, ~17.5 min
+second run) despite the Dockerfile ordering `pip install` of
+torch/vLLM/CUDA deps (lines 53-60) *before* `COPY` of source code (lines
+82-85) — meaning normal source-only commits should hit Docker's layer
+cache and skip the expensive re-download entirely. Checked the Dockerfile
+layer order specifically to rule out a cache-defeating COPY-before-install
+anti-pattern — it's fine. So the cache loss is happening at the Docker
+daemon/host level on the Z8 (Windows 11 Pro, Docker Desktop + WSL2), not in
+anything this branch's commits touched. Leading hypothesis, not yet
+confirmed: WSL2 disk space pressure (large model checkpoints + growing
+build cache on the same disk) triggering an automatic or manual prune
+between runs — flagged to the project owner with `docker system df` /
+`docker images` / `Get-PSDrive` as the next diagnostic step, not yet run.
+Separate concern from Fase 1 itself; logged here so it isn't lost before
+the next `full-gpu-tests` dispatch.
+
+**Also discovered mid-session**: the project owner opened a second,
+independent Claude Code CLI session directly on the Z8 (local, not a
+Claude Code Remote/CCR session — confirmed absent from both `ListAgents`
+and `list_sessions`), with `gh` authenticated with `workflow` scope. That
+session *can* trigger `workflow_dispatch` directly (unlike this one). Not
+yet linked to this session via Remote Control — would remove the
+project owner as a manual relay for every future run. Deferred, at the
+project owner's request, to a planned `site-test-preparation.MD` covering
+both the Docker/cache environment setup and this connectivity question
+together, rather than solving it piecemeal mid-debugging.
+
+### Result
+
+Fase 1 is now closed on real hardware, not just sandbox-verified: the core
+claim (`_ShadowExpertINT4` runs correctly, unmodified, CPU-resident, on the
+real Xeon 6244) is confirmed by the full test suite passing there, and the
+CPU-vs-GPU throughput gap is now a real number (~7-10× at this synthetic
+scale) instead of a guess.
+
+### Why this matters
+
+Real hardware found a real bug (device-mismatched generator) that no amount
+of sandbox testing could have caught, and produced one design-relevant
+finding (batching cold-expert calls is nearly free in latency) that wasn't
+anticipated in the original phased plan. Both are exactly the payoff the
+project owner was asking for when insisting on a real run instead of
+accepting sandbox numbers as sufficient.
+
+### Current state
+
+- `benchmarks/bench_cpu_kernel.py`: generator-device bug fixed (commit
+  `2379920`), verified green on real hardware (run `31973334463`).
+- Fase 1 real-hardware numbers logged above — synthetic scale (512×1536),
+  not yet re-run at Mixtral's real 4096×14336.
+- Docker build-cache-loss on the Z8 runner: open, diagnostic commands
+  handed to the project owner, not yet run.
+- Remote Control link between this session and the project owner's local
+  Z8 Claude Code CLI session: deferred to `site-test-preparation.MD`
+  (not yet written).
+- Branch: `claude/ddr4-ram-processing-unzseh`.
+
+Next session: either (a) re-run `bench_cpu_kernel.py` at real Mixtral scale
+(`OSX_BENCH_HIDDEN=4096 OSX_BENCH_INTERMEDIATE=14336`) for a
+production-representative number, or (b) start Fase 2 (wire
+`_ShadowExpertINT4` into a CPU-resident path in `TierManager`/`GCSGWorker`,
+gated by the batching insight from this session) — project owner's call.
+
 Next session: Fase 2 — wire a CPU-resident `_ShadowExpertINT4` path into
 `GCSGWorker`'s shadow pool construction (parallel to the existing GPU pool,
 not replacing it), reusing the class as-is per this session's finding.
