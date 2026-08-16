@@ -28,6 +28,24 @@ disallineamento è esattamente il tipo di dettaglio che un reviewer esterno
 nota per primo — da qui la regola operativa sotto (§2, A1): **nessun issue si
 considera chiuso finché non lo è su GitHub**, non nel LOGBOOK.
 
+**Addendum 2026-08-14 — la stessa regola non bastava.** Un secondo controllo,
+partito da una domanda indipendente ("il progetto su GitHub è aggiornato?"),
+ha trovato una versione più grave dello stesso problema: Sprint 3
+(Oskarshamn) e Sprint 4 (Tekniska) erano entrambi documentati come completi
+da giorni — issue chiuse su GitHub, come da regola sopra — ma il codice che
+li implementa **non era mai arrivato su `develop`**. Viveva su
+`Sprint-3-Oskarshamn` e `claude/sprint-5-berg-plan-e4dsc3`, entrambi mai
+mersati; `develop` eseguiva ancora gli stub Sprint 0/1 di M2/M3
+(`raise NotImplementedError`) mentre README/CHANGELOG descrivevano quel
+lavoro come "✅ complete". La regola qui sopra verificava lo stato
+dell'issue, non se il commit che la chiudeva fosse mai arrivato dove conta.
+Corretto mergendo in sequenza `Sprint-3-Oskarshamn` → `claude/sprint-5-berg-
+plan-e4dsc3` → `claude/log-folder-organization-uh5f1a` (PR #25) →
+`claude/rlock-data-quality-9pcxzq` (PR #26) su `develop` (PR #9, #29, #25,
+#26) — vedi CHANGELOG.MD [Berg] §Tracking per il dettaglio dei conflitti
+risolti. **Regola estesa: nessun issue/sprint si considera chiuso finché il
+codice che lo risolve non è in `develop`, non solo su un branch.**
+
 ---
 
 ## 1. Obiettivo e principio guida
@@ -85,12 +103,12 @@ regola §0 ("nessun issue si considera chiuso finché non lo è su GitHub").
 impressione di un reviewer esterno che clona il repo e prova a farlo
 girare):
 
-| # | Issue | Perché ora |
-|---|-------|-----------|
-| [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint/test/bench` falliscono per WORKDIR/path relativi | È il primo comando che chiunque esterno lancia — oggi richiede di già sapere il workaround (`cd osx-poc && ...`), non documentato nel Quickstart in modo ovvio |
-| [#3](https://github.com/danielesalpietro/vMemoryFabric/issues/3) | `bench_tier.py` p95/p99 sporcati da CUDA cold-start | I numeri di questo benchmark finiscono nel paper (§B2/B3) — vanno puliti prima di essere citati in una sede accademica |
-| [#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6) | manca `pyproject.toml`/`ruff.toml` | Costo basso, "good first issue"; un repo senza config di lint è un segnale negativo per un reviewer che guarda il codice |
-| [#18](https://github.com/danielesalpietro/vMemoryFabric/issues/18) | nessun fingerprint ambiente, assunzioni silenti (`OMP_NUM_THREADS`, `shm_size`, GPU model) | Già mordente per davvero su RunPod (Sprint 4); un reviewer esterno che riproduce su hardware diverso dal nostro ci sbatte contro allo stesso modo — fix minimo: fail-loud invece di assumere |
+| # | Issue | Perché ora | Stato |
+|---|-------|-----------|-------|
+| [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint/test/bench` falliscono per WORKDIR/path relativi | È il primo comando che chiunque esterno lancia — oggi richiede di già sapere il workaround (`cd osx-poc && ...`), non documentato nel Quickstart in modo ovvio | 🔲 aperto |
+| ~~[#3](https://github.com/danielesalpietro/vMemoryFabric/issues/3)~~ | `bench_tier.py` p95/p99 sporcati da CUDA cold-start | I numeri di questo benchmark finiscono nel paper (§B2/B3) — vanno puliti prima di essere citati in una sede accademica | ✅ **chiuso 2026-08-14** — warm-up shard dedicato in `bench_ddr4_to_vram()`, vedi CHANGELOG [Berg] |
+| ~~[#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6)~~ | manca `pyproject.toml`/`ruff.toml` | Costo basso, "good first issue"; un repo senza config di lint è un segnale negativo per un reviewer che guarda il codice | ✅ **chiuso** — PR #11 |
+| [#18](https://github.com/danielesalpietro/vMemoryFabric/issues/18) | nessun fingerprint ambiente, assunzioni silenti (`OMP_NUM_THREADS`, `shm_size`, GPU model) | Già mordente per davvero su RunPod (Sprint 4); un reviewer esterno che riproduce su hardware diverso dal nostro ci sbatte contro allo stesso modo — fix minimo: fail-loud invece di assumere | 🔲 aperto |
 
 **Da documentare come limitazione nota, non da fixare in questo sprint**
 (rientra nel §7 "Limitations" del paper così com'è):

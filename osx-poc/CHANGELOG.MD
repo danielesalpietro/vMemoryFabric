@@ -42,10 +42,17 @@ Releases are named after cities where significant project milestones were reache
 - Superseded the 2026-08-12 (Tekniska) decision to leave this open as a "known limitation" pending real production contention — implementing the locking-strategy options turned out to be cheap enough not to wait. `bench_contention_by_strategy()` (disjoint keys): p99 reader latency single→striped→lockfree_read = ~1119µs → ~611µs → ~1.3µs in sandbox CI, ~758µs → ~442µs → ~1.1µs on real hardware (`Z8-G4-RTX3090`, `full-gpu-tests` run [#150](https://github.com/danielesalpietro/vMemoryFabric/actions/runs/31726685030)) — ~700-900× improvement, confirmed on both environments, unlike the four-way sandbox/pod discrepancy this issue previously accumulated (see Tekniska entry, and `reports/poc_final_report.md` §1.2)
 - `bench_churn_by_strategy()` (same-key writer/reader traffic): the torn read `lockfree_read` deliberately accepts is real but rare — 10/119,038 (~0.0084%) in sandbox, 10/410,829 (~0.0024%) on real hardware; zero on `single`/`striped` in both environments
 
+**Issue [#3](https://github.com/danielesalpietro/vMemoryFabric/issues/3) — `bench_tier.py` DDR4→VRAM p95/p99 dominated by CUDA cold-start**
+
+- `bench_ddr4_to_vram()`: added a dedicated warm-up shard (`_WARMUP_SHARD_IDX = N_SHARDS`, outside the measured range), promoted NVMe→DDR4→VRAM once and discarded before the timed loop — pays the one-time CUDA context/allocator init cost (`torch.from_numpy(...).to(device)`) that was previously absorbed by the first measured sample and dominating p95/p99 together (both landing on the same outlier at `N_SHARDS=20`)
+- Bumped `N_SHARDS` 20 → 100 so p95/p99 land on distinct indices; `_seed_nvme_shards()` now takes `shard_indices` explicitly so the extra warm-up shard doesn't leak into `bench_nvme_to_ddr4()`, which doesn't need it (no CUDA on that hop)
+- Originally opened against `Sprint-3-Oskarshamn` (the real `bench_tier.py` this fix targets didn't exist on `develop` yet); reapplied onto `develop`'s current file — which had grown a third section (`promote_live_tensor`, issue #17) in the meantime — once that branch merged
+
 ### Tracking
 
-- Issues [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2) and [#23](https://github.com/danielesalpietro/vMemoryFabric/issues/23) closed (`state_reason: completed`), both confirmed on real hardware before closing, not just sandbox CI
+- Issues [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2), [#3](https://github.com/danielesalpietro/vMemoryFabric/issues/3), and [#23](https://github.com/danielesalpietro/vMemoryFabric/issues/23) closed (`state_reason: completed`); #2/#23 confirmed on real hardware before closing, not just sandbox CI
 - `reports/sprint5_berg_plan.md` §2/A1 updated — #2 was scoped there as "document as known limitation, not fix this sprint" one day before this fix landed; corrected in place rather than left inconsistent
+- **Branch consolidation (2026-08-14):** `Sprint-3-Oskarshamn`, `claude/sprint-5-berg-plan-e4dsc3` (Tekniska), `claude/log-folder-organization-uh5f1a`, and this branch (`claude/rlock-data-quality-9pcxzq`) were all merged into `develop` in dependency order (PRs #9, #29, #25, #26) — `develop` had none of Sprint 3/4's real M2/M3 implementation until this point, still running the Sprint 0/1 `NotImplementedError` stubs. PR [#13](https://github.com/danielesalpietro/vMemoryFabric/pull/13) ("fix: bound Bloom filter FP leak") was closed rather than merged: superseded by this branch's own, independent removal of the Bloom filter entirely (issue #1). PR [#14](https://github.com/danielesalpietro/vMemoryFabric/pull/14) (issue #3, above) was retargeted from the now-merged `Sprint-3-Oskarshamn` to `develop` and reapplied. See `reports/sprint5_berg_plan.md` §0 for the issue-tracker-hygiene principle this extends.
 
 ---
 
@@ -140,7 +147,7 @@ Releases are named after cities where significant project milestones were reache
 
 ---
 
-## [Oskarshamn] — v0.4.0-dev — 2026-08-10 (in progress, not yet released)
+## [Oskarshamn] — v0.4.0-dev — 2026-08-10 (merged into `develop` 2026-08-14, PR #9)
 
 *Named after Oskarshamn, Sweden, where M3 — Expert Scheduler work is happening.*
 
