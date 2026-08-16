@@ -23,6 +23,15 @@ Cina con silicio cinese?") durante la discussione su issue #8 e sul silicon
 landscape watch — utile abbastanza da meritare un posto proprio, non solo
 una nota a margine.
 
+**Revisione 2026-08-16 (round 2)**: da una critica esterna, verificata
+punto per punto prima di accettarla — aggiunta §3 su egress/trasferimento
+dati (RunPod $0, Koyeb $0.04/GB oltre 100GB/mese gratis, resto non
+verificato), reso esplicito che il prezzo mancante di `TT-Loudbox` va
+richiesto direttamente a Koyeb prima di spendere budget reale (§4),
+corretta l'informazione su AutoDL/Ascend (non più MindSpore-only, ha
+aperto una zona dedicata con `vllm-ascend`), spostata la riga sul canale
+diretto partner fuori dalla tabella.
+
 ---
 
 ## 1. Perché esiste
@@ -47,15 +56,37 @@ capitale che non ha senso immobilizzare per un test.
 | Ascend 910B | Luchentech Cloud (潞晨云) | NVIDIA + Ascend 910B stessa piattaforma | — | |
 | Ascend 910B | 算力网 (Suanlix) | Ascend 910B dedicato | — | |
 | Ascend 910B | 智启云川 (Zhiqi Cloud) | Ascend 910B | sconti fino al 50% su commitment pluriennali | |
-| Ascend 910B | AutoDL | Ascend 910B | — | Richiede **MindSpore**, non PyTorch/vLLM nativo — attrito reale, non un semplice swap di endpoint |
-| Ascend 910B/910C | (canale diretto partner) | — | — | Fuori da questa mappa per scelta esplicita dell'autore — vedi conversazione, non documentato qui |
+| Ascend 910B | AutoDL | Ascend 910B (zona dedicata) | — | **Corretto 2026-08-16**: AutoDL ha aperto una zona dedicata Ascend 910B con deploy diretto via `vLLM` (`vllm-ascend`) — l'attrito non è più "riscrivere su MindSpore" (informazione precedente, superata). L'attrito reale è più sottile: `vllm-ascend` è un plugin con dipendenze CANN specifiche sotto il cofano, non un semplice swap di endpoint su vLLM vanilla |
 
 **Caveat**: prezzi e disponibilità trovati via ricerca al momento della
 stesura, non confermati sulle pagine live dei singoli provider — trattare
 come direzionali, verificare prima di impegnare budget reale. Nessuno di
 questi canali è stato testato end-to-end da questo progetto.
 
-## 3. Il punto operativo più utile
+**Nota**: esiste anche un canale diretto verso Ascend 910B/910C tramite
+partnership tecnologica dell'autore — deliberatamente non dettagliato qui
+su richiesta esplicita, vedi conversazione. Non in tabella per non
+introdurre una riga senza provider/prezzo/istanza in un documento
+operativo pensato per essere scansionato rapidamente.
+
+## 3. Egress e trasferimento dati — il costo nascosto
+
+Spostare pesi di modelli (7B-13B+ o shard di esperti MoE) tra provider per
+confronti comparativi può costare più del compute stesso se non
+verificato prima. Dati confermati, non tutti i provider:
+
+| Provider | Egress | Storage persistente | Note |
+|---|---|---|---|
+| RunPod | **$0** — nessun costo di egress verso internet | Network volume: $0.07/GB/mese (<1TB), $0.05/GB/mese (>1TB) | Vantaggio concreto: 5TB di pesi scaricati costano $0 qui contro ~$450 su AWS/~$600 su GCP. Caveat: alcuni host della Community Cloud possono avere costi di rete sottostanti non coperti da questa garanzia |
+| Koyeb | 100GB/mese gratis, poi **$0.04/GB** | non verificato | Da mettere in conto se si spostano ripetutamente pesi verso/da un'istanza Tenstorrent |
+| TensorWave, Hot Aisle, Luchentech, Suanlix, Zhiqi Cloud, AutoDL | **non verificato** | **non verificato** | Da controllare prima di un test reale — non presumere gratuità per analogia con RunPod |
+
+**Implicazione pratica**: per confronti cross-provider (es. stesso shard di
+esperti su RunPod/AMD vs Koyeb/Tenstorrent), il costo di trasferimento va
+verificato quanto quello di calcolo — RunPod è gratis in uscita, Koyeb no,
+gli altri sono ignoti.
+
+## 4. Il punto operativo più utile
 
 **Tenstorrent via Koyeb** è l'elemento con il maggior rapporto segnale/costo
 di questa mappa: consente di testare la tesi Galaxy/multi-scheda di issue #8
@@ -65,7 +96,16 @@ d'acquisto. Resta valido il caveat tecnico già registrato in issue #8: lo
 stack attuale (`GPUTransfer`, `EAT`/`Tier`) è CUDA-specifico e andrebbe
 astratto comunque, indipendentemente da dove si affitta l'hardware.
 
-## 4. Manutenzione
+**Prima di impegnare budget reale su questa istanza**: il prezzo di
+`TT-Loudbox` non è pubblico (§2, "non trovato" non è un dato mancante da
+completare via ricerca, è un limite reale della fonte) — va richiesto
+direttamente a Koyeb (contatto/signup) prima di pianificare qualunque
+test. Un conto è se costa $10/ora (compatibile con un budget da
+ricercatore indipendente), un altro se costa $50/ora (richiederebbe
+ripensare la strategia di test, es. partire dal singolo `TT-n300s` invece
+del `TT-Loudbox` a 4 schede).
+
+## 5. Manutenzione
 
 Questo documento è dichiaratamente instabile nel tempo (prezzi/provider
 cambiano su base mensile) — a differenza di `silicon_landscape_watch.md`
