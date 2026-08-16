@@ -5,6 +5,8 @@ A heterogeneous multi-tier memory fabric for MoE and LLM inference. Hot AI objec
 Developed under the internal codename **OSX** ("Operating System for Experts") — a system-level framework for managing the lifecycle of experts in Mixture-of-Experts (MoE) large language models. It treats experts as first-class objects governed by a dedicated runtime, with hierarchical memory placement, predictive prefetching, gating-aware scheduling, and adaptive replication.
 
 > *Current release: **Tekniska** (v0.5.0-dev) — August 13, 2026 — previous: Oskarshamn (v0.4.0-dev), Eketorp (v0.3.0-dev), Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev). Sprint 4 complete; Sprint 5 (PoC delivery + paper, codename **Berg**) in planning — see [`osx-poc/reports/sprint5_berg_plan.md`](osx-poc/reports/sprint5_berg_plan.md).*
+>
+> *Related work: how vMemoryFabric's paged memory fabric compares to Petals (P2P pipeline parallelism) and ExLlamaV2/tabbyAPI (local heterogeneous multi-GPU split) — see [`osx-poc/reports/related_work_petals_exllama.md`](osx-poc/reports/related_work_petals_exllama.md) (Italian).*
 
 ---
 
