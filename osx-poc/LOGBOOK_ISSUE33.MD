@@ -496,3 +496,150 @@ one more `workflow_dispatch` run with the fix in place.
 Next session: re-run `full-gpu-tests` (project owner triggers) to get real
 `bench_cpu_kernel.py` numbers off the Z8, then proceed to Fase 2 as
 planned above.
+
+---
+
+## 2026-08-17 — Fase 2: pool CPU-resident (DDR4) wired into GCSGWorker, parallelo al pool GPU
+
+**Release:** none — solo codice/test, nessuna integrazione col routing reale
+(Fase 3, non ancora iniziata).
+
+### What we set out to do
+
+Fase 2 del piano: "CPU-resident wrapper mirroring `_ShadowExpertINT4`'s
+`__call__(hidden_states, layer_id)` API, weights pinned in DDR4, never
+`.to('cuda')`" — wiring nel costruttore dello shadow pool di GCSGWorker,
+parallelo al pool GPU esistente, non un suo sostituto. Sessione girata
+direttamente su questa macchina (Z8-G4-RTX3090, accesso diretto a Docker/gh
+locale confermato) invece che tramite CI, per iterare più rapidamente.
+
+### What we did
+
+Mappato con un agente Explore il resto di `gcsg.py` (righe 1007-1700, non
+lette nella sessione Fase 1), `tier/manager.py`, `tier/policies.py`, `eat/`
+prima di scrivere codice — confermato che `route_forward()` non esiste
+ancora da nessuna parte (è nome pianificato per Fase 3, non un refuso), che
+`SEEPolicy` non è mai stata riusata per hot/cold routing (Fase 0 resta solo
+piano, mai implementata), e che `TierManager.promote_live_tensor()` non ha
+un ramo "resta in DDR4" (coerente: quella logica è Fase 3, Fase 2 non deve
+inventarla).
+
+Implementato in `scheduler/gcsg.py`:
+- `GCSGWorker.__init__`: nuovo `self._cpu_shadow_pool: dict[int, object] = {}`,
+  parallelo a `self._shadow_pool` (GPU).
+- `GCSGWorker._build_cpu_shadow_pool(layers, expert_ids)`: stesso loop di
+  estrazione/quantizzazione del path 1 (FusedMoE fp16 grezzo) in
+  `_load_shadow_pool()`, ma senza il `.to("cuda")` forzato del fix
+  2026-08-12 — i pesi restano dove sono. Nessuna classe nuova:
+  `_ShadowExpertINT4` è già device-agnostic (Fase 1, confermato su hardware
+  reale), riusata così com'è. Non forza mai `.cpu()` nemmeno se un peso
+  risultasse già CUDA-resident (caso raro, modello non offloaded) — un D2H
+  esplicito sarebbe una decisione di eviction, fuori scope qui.
+- `_load_shadow_pool()`: dopo aver costruito il pool GPU per il path 1,
+  se `self._tier_manager` è wired (opt-in, stesso principio del resto del
+  wiring issue #17), costruisce ANCHE il pool CPU per gli stessi
+  `expert_ids`. Solo path 1 — i path 2/3 (Marlin, AWQ ModuleList) delegano
+  a kernel CUDA reali mai validati su CPU, fuori scope.
+- `refresh_shadow_pool_selection()`: ora svuota anche `_cpu_shadow_pool`
+  prima di ricaricare (altrimenti expert_id rimossi dalla nuova selezione
+  resterebbero fantasma nel pool CPU).
+
+Test aggiunti in `tests/test_scheduler.py` (`TestGCSGCpuShadowPool`, 5
+test): pool CPU costruito in parallelo al pool GPU quando tier_manager è
+wired (con conferma diretta via device tracking — GPU pool promosso a
+`cuda`, CPU pool mai toccato, resta `cpu`); pool CPU vuoto senza
+tier_manager (comportamento di default invariato); `_build_cpu_shadow_pool`
+usato end-to-end con tensori reali produce un forward CPU corretto e
+finito; `refresh_shadow_pool_selection()` svuota entrambi i pool.
+
+**Due bug reali trovati scrivendo questi test (non nella review, nel primo
+run)**:
+1. `refresh_shadow_pool_selection()`'s nuovo `self._cpu_shadow_pool.clear()`
+   rompeva un test PRE-ESISTENTE (`test_refresh_reloads_when_selection_changes`)
+   con `AttributeError` — il worker di quel test è costruito da un
+   `_make_worker()` scritto prima di questa integrazione, senza
+   `_cpu_shadow_pool` assegnato. Fix: `getattr(self, "_cpu_shadow_pool", None)`
+   difensivo, stesso pattern già usato in questo file per `_tier_manager`/
+   `_n_experts_cached` su worker costruiti via `__new__()` nei test.
+2. Assunzione sbagliata nel mio stesso test: contavo 4 chiamate a
+   `_quantize_int4` per pool (2 expert × 2 layer), dimenticando che w13 e
+   w2 sono due chiamate separate — il conteggio reale è 8. Corretto
+   l'assert, non il codice (il codice era giusto, il test no).
+
+Full suite verificata su hardware reale (questa macchina, RTX 3090 + CUDA
+12.1.1 nel container): 133 passed, 3 skipped, 0 failed — nessuna
+regressione. `ruff check` pulito sui file toccati (un solo warning
+pre-esistente e non correlato in `test_scheduler.py`, import block
+un-sorted, non causato da questa sessione).
+
+**Trovato en passant, non risolto qui**: i target del Makefile
+(`test`, `test-scheduler`, `lint`, `typecheck`, ecc.) sono rotti come
+scritti — girano con `docker compose run` il cui WORKDIR nel container è
+`/workspace` (repo root, bind mount), ma il codice vive sotto
+`/workspace/osx-poc/`. `make test-scheduler` fallisce con
+"file or directory not found: tests/test_scheduler.py". CI non ha mai
+esercitato questo bug perché `ci.yml` non usa affatto il Makefile — chiama
+`docker compose run` direttamente con un wrapper `bash -c "cd osx-poc && ..."`
+esplicito. Aggirato in questa sessione passando il path completo
+(`osx-poc/tests/...`) invece di usare `make`. Non in scope per Fase 2, non
+fixato qui — issue aperta:
+https://github.com/danielesalpietro/vMemoryFabric/issues/40
+
+**Trovato anche in questa sessione (prima di iniziare Fase 2), non
+correlato al lavoro DDR4**: il disco `D:` della macchina (dove vive
+`docker_data.vhdx`, il disco WSL2 di Docker Desktop) è a 395 GB usati su
+477 GB totali, ~81 GB liberi (17%). `docker system df`: 183.1 GB immagini
+(68.98 GB reclaimable), 148 GB volumi locali (49.31 GB reclaimable), 31.3 GB
+build cache (20.99 GB reclaimable), 689 MB container fermi (100%
+reclaimable). Il grosso non appartiene a vMemoryFabric — immagini/volumi di
+altri progetti sulla stessa macchina condivisa (`moe-infinity`,
+`vllm-openai`, `vllm-granite`, `ollama_data`, `tabby_data`, container fermi
+di `mike-for-dummies`/`grastorp`/`private-ai-coding`/`anythingllm`/
+`open-webui`); il volume proprio di questo progetto (`vmemoryfabric_nvme-data`)
+pesa 49.31 GB. Possibile collegamento (non dimostrato) con la domanda
+parcheggiata nella sessione 2026-08-16 sul perché `docker compose build`
+impiegasse ~26 minuti su `full-gpu-tests` — il build cache reclaimable
+risale a "4 settimane fa" (non evictato), quindi più probabile un
+degrado da pressione disco che un'eviction reale, ma non verificato a
+fondo. Nessuna pulizia eseguita (distruttivo, tocca dati di altri
+progetti sulla stessa macchina condivisa) — issue aperta:
+https://github.com/danielesalpietro/vMemoryFabric/issues/41
+
+### Result
+
+Fase 2 chiusa: il meccanismo di costruzione del pool CPU-resident esiste,
+è opt-in (zero rischio per il path di default), riusa `_ShadowExpertINT4`
+senza modifiche, e non tocca in nessun modo la decisione di routing (che
+resta Fase 3). Verificato su hardware reale, non solo in sandbox.
+
+### Why this matters
+
+Questo è il primo punto in cui DDR4 diventa effettivamente un sito di
+compute utilizzabile all'interno di GCSGWorker, non solo una dimostrazione
+isolata (Fase 1). Il pool CPU esiste ora accanto a quello GPU pronto per
+Fase 3 a decidere quando instradarci — senza che Fase 2 abbia dovuto
+anticipare quella decisione (hot/cold routing, `route_forward()`) o il
+criterio di selezione (Fase 0, SEEPolicy reuse), entrambi ancora non
+implementati.
+
+### Current state
+
+- `scheduler/gcsg.py`: `_cpu_shadow_pool`, `_build_cpu_shadow_pool()`,
+  wiring in `_load_shadow_pool()`/`refresh_shadow_pool_selection()`.
+- `tests/test_scheduler.py`: `TestGCSGCpuShadowPool` (5 test), tutti verdi
+  su hardware reale insieme al resto della suite (133 passed / 3 skipped).
+- Makefile: target rotti (path relativi assumono WORKDIR sbagliato),
+  non fixato qui — issue #40.
+- Disco D: della macchina al 17% libero (81/477 GB), non correlato al
+  lavoro DDR4, nessuna pulizia eseguita — issue #41.
+- Fase 0 (criterio hot/cold via SEEPolicy) e Fase 3 (routing reale,
+  `route_forward()`, assert su `GPUTransfer.to_vram()` mai chiamato per
+  expert instradati a freddo) restano da fare, in quest'ordine o quello
+  che il project owner preferisce.
+- Branch: `claude/ddr4-ram-processing-unzseh`.
+
+Next session: Fase 0 (definire il criterio hot/cold riusando `SEEPolicy`,
+pure unit test) o Fase 3 (routing in TierManager/GCSGWorker) — decisione
+del project owner. Fase 3 dipende concettualmente da Fase 0 (serve un
+criterio prima di poter instradare), quindi Fase 0 è la scelta più naturale
+se non diversamente indicato.

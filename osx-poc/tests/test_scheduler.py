@@ -696,6 +696,177 @@ class TestGCSGTierManagerWiring:
         assert calls == []
 
 
+# ── CPU-resident shadow pool (2026-08-17, issue #33 Fase 2) ───────────────────
+#
+# Pool DDR4-resident parallelo al pool GPU esistente — stesso principio di
+# TestGCSGTierManagerWiring: GCSGWorker.__new__() + attributi a mano,
+# TierManager reale (torch importabile basta, non serve CUDA). La garanzia
+# "mai .to('cuda')" si verifica negando l'assunzione del fix 2026-08-12 (pesi
+# offloaded restano CPU-resident finché non promossi esplicitamente) — vedi
+# _build_cpu_shadow_pool()/_load_shadow_pool() in gcsg.py.
+
+class TestGCSGCpuShadowPool:
+
+    @staticmethod
+    def _real_tier_manager(tmp_path):
+        return TestGCSGTierManagerWiring._real_tier_manager(tmp_path)
+
+    @staticmethod
+    def _make_worker(tier_manager=None, shadow_pool_size=2):
+        worker = TestGCSGTierManagerWiring._make_worker(tier_manager, shadow_pool_size)
+        worker._cpu_shadow_pool = {}
+        return worker
+
+    @staticmethod
+    def _fake_offloaded_fused_layers(num_layers, num_experts):
+        """Stesso fake di
+        TestGCSG.test_load_shadow_pool_moves_offloaded_fused_weights_to_gpu_before_quantizing
+        (path 1, FusedMoE fp16 grezzo con expert offloaded — CPU-resident
+        per costruzione), estratto come helper riusabile: sia il pool GPU
+        (invariato) sia il nuovo pool CPU condividono lo stesso setup."""
+        class _FakeOffloadedTensor:
+            def __init__(self, device_type):
+                self.device = SimpleNamespace(type=device_type)
+
+            def to(self, device):
+                assert device == "cuda"
+                return _FakeOffloadedTensor("cuda")
+
+        class _FakeWeightData:
+            def __getitem__(self, expert_id):
+                return _FakeOffloadedTensor("cpu")
+
+        class _FakeFusedExperts:
+            def __init__(self):
+                self.num_experts = num_experts
+                self.w13_weight = SimpleNamespace(data=_FakeWeightData())
+                self.w2_weight = SimpleNamespace(data=_FakeWeightData())
+
+        return [
+            SimpleNamespace(block_sparse_moe=SimpleNamespace(experts=_FakeFusedExperts()))
+            for _ in range(num_layers)
+        ]
+
+    def test_load_shadow_pool_builds_parallel_cpu_pool_when_tier_manager_wired(
+        self, tmp_path, monkeypatch,
+    ):
+        """Con un TierManager wired, _load_shadow_pool() costruisce ANCHE un
+        pool CPU-resident per gli stessi expert_ids del pool GPU —
+        parallelo, non sostitutivo (self._shadow_pool resta invariato).
+        Stesso monkeypatch di _quantize_int4 di
+        TestGCSG.test_load_shadow_pool_moves_offloaded_fused_weights_to_gpu_before_quantizing,
+        qui usato per distinguere le due popolazioni per device visto."""
+        seen_devices = []
+
+        def _fake_quantize(weight):
+            seen_devices.append(weight.device.type)
+            return weight, 1.0
+
+        monkeypatch.setattr(gcsg_module, "_quantize_int4", _fake_quantize)
+
+        layers = self._fake_offloaded_fused_layers(num_layers=2, num_experts=8)
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=layers)),
+            ),
+        )
+
+        worker._load_shadow_pool()
+
+        assert set(worker._shadow_pool.keys()) == {0, 1}
+        assert set(worker._cpu_shadow_pool.keys()) == {0, 1}
+
+        # 2 layer * 2 expert * 2 tensori (w13 + w2) = 8 chiamate per pool:
+        # GPU pool promosso a cuda (fix 2026-08-12), CPU pool mai toccato —
+        # resta al device originale ("cpu", come lo restituisce _FakeWeightData).
+        assert seen_devices.count("cuda") == 8
+        assert seen_devices.count("cpu") == 8
+
+    def test_load_shadow_pool_cpu_pool_stays_empty_without_tier_manager(
+        self, monkeypatch,
+    ):
+        """Comportamento di default invariato: senza TierManager nessun
+        pool CPU viene costruito — stesso principio opt-in del resto del
+        wiring issue #17."""
+        monkeypatch.setattr(gcsg_module, "_quantize_int4", lambda w: (w, 1.0))
+
+        layers = self._fake_offloaded_fused_layers(num_layers=1, num_experts=4)
+        worker = self._make_worker(tier_manager=None, shadow_pool_size=2)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=layers)),
+            ),
+        )
+
+        worker._load_shadow_pool()
+
+        assert set(worker._shadow_pool.keys()) == {0, 1}
+        assert worker._cpu_shadow_pool == {}
+
+    def test_build_cpu_shadow_pool_produces_working_forward(self):
+        """Non solo "non solleva": il pool costruito è realmente
+        utilizzabile end-to-end (estrazione dello slice
+        w13_weight.data[expert_id]/w2_weight.data[expert_id] inclusa, non
+        solo la costruzione diretta di _ShadowExpertINT4 come in
+        test_cpu_kernel.py) — stesso schema di
+        TestShadowExpertINT4CPU.test_runs_on_cpu_without_cuda (Fase 1)."""
+        import torch
+
+        generator = torch.Generator().manual_seed(0)
+        hidden, intermediate, num_layers, num_experts = 16, 32, 2, 4
+        w13 = torch.randn(num_experts, 2 * intermediate, hidden, generator=generator)
+        w2 = torch.randn(num_experts, hidden, intermediate, generator=generator)
+        layers = [
+            SimpleNamespace(block_sparse_moe=SimpleNamespace(experts=SimpleNamespace(
+                num_experts=num_experts,
+                w13_weight=SimpleNamespace(data=w13),
+                w2_weight=SimpleNamespace(data=w2),
+            )))
+            for _ in range(num_layers)
+        ]
+        worker = self._make_worker(tier_manager=None)
+
+        cpu_pool = worker._build_cpu_shadow_pool(layers, expert_ids=[1, 2])
+
+        assert set(cpu_pool.keys()) == {1, 2}
+        hidden_states = torch.randn(4, hidden, generator=generator)
+        for shadow in cpu_pool.values():
+            output = shadow(hidden_states, layer_id=0)
+            assert output.device.type == "cpu"
+            assert not output.is_cuda
+            assert output.shape == (4, hidden)
+            assert torch.isfinite(output).all()
+
+    def test_refresh_shadow_pool_selection_clears_cpu_pool_too(self, tmp_path):
+        """refresh_shadow_pool_selection() svuota self._shadow_pool prima
+        di ricaricare (vedi TestGCSGTierManagerWiring) — deve fare lo
+        stesso per self._cpu_shadow_pool, altrimenti expert_id rimossi
+        dalla nuova selezione resterebbero fantasma nel pool CPU."""
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(4):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        worker._n_experts_cached = 4
+        worker._shadow_pool = {0: object(), 1: object()}
+        worker._cpu_shadow_pool = {0: object(), 1: object()}
+
+        cleared = {}
+
+        def _fake_load():
+            cleared["shadow_pool"] = dict(worker._shadow_pool)
+            cleared["cpu_shadow_pool"] = dict(worker._cpu_shadow_pool)
+        worker._load_shadow_pool = _fake_load
+
+        for _ in range(3):
+            mgr.eat.access(expert_id=3, shard_idx=0)   # selezione cambia -> reload
+
+        worker.refresh_shadow_pool_selection()
+
+        assert cleared == {"shadow_pool": {}, "cpu_shadow_pool": {}}
+
+
 # ── Marlin path TierManager wiring (2026-08-12, issue #17) ────────────────────
 #
 # Solo _marlin_pool_shard_key() è pura logica testabile qui — il resto

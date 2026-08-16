@@ -792,6 +792,19 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
           automatico — richiede prima il profiling di
           promote()/evict() su hardware reale (Sprint 4 sotto-obiettivo 4).
 
+    Issue #33 Fase 2 — pool CPU-resident (2026-08-17): quando un
+    TierManager è wired e il path 1 (FusedMoE fp16 grezzo) è in uso,
+    _load_shadow_pool() costruisce ANCHE self._cpu_shadow_pool —
+    _build_cpu_shadow_pool() esegue lo stesso loop di estrazione/
+    quantizzazione del pool GPU ma senza il `.to("cuda")` forzato: i pesi
+    restano DDR4-resident, _ShadowExpertINT4 li usa senza modifiche (già
+    device-agnostic, Fase 1). Parallelo a self._shadow_pool, non un suo
+    sostituto — QUALI expert instradare a quale pool resta una decisione
+    di routing non ancora implementata (Fase 3, route_forward()). Solo il
+    path 1 è coperto: i path 2/3 (Marlin, AWQ ModuleList) delegano a
+    kernel CUDA reali (quant_method.apply()) mai validati su CPU, fuori
+    scope per questa fase.
+
     Stato di verifica, dichiarato esplicitamente per lo stesso motivo di
     ogni altra claim in questo file: la logica pura Python (selezione,
     seeding, aggregazione hotness) è la stessa testabile via CPU unit test
@@ -867,6 +880,11 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         self._tier_manager = tier_manager if tier_manager is not None else type(self)._pending_tier_manager
         self._n_experts_cached: int | None = None
         self._shadow_pool: dict[int, object] = {}
+        # Issue #33 Fase 2 — pool CPU-resident (DDR4), parallelo a
+        # _shadow_pool (GPU), non un suo sostituto: vedi
+        # _build_cpu_shadow_pool()/_load_shadow_pool() per come/quando
+        # viene popolato (solo con self._tier_manager wired).
+        self._cpu_shadow_pool: dict[int, object] = {}
         self._gate_hook_handles: list[object] = []
 
         # Osservabilità smoke-test (2026-08-09) — non usata dal path di
@@ -1104,6 +1122,22 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                 "path=FusedMoE+INT4-simulato.",
                 len(expert_ids), expert_ids, len(layers),
             )
+            # Issue #33 Fase 2: pool CPU-resident parallelo, stessi
+            # expert_ids, stessa classe _ShadowExpertINT4 (device-agnostic,
+            # Fase 1) — mai promosso a CUDA. Solo con un TierManager wired:
+            # è lavoro di compute-offload DDR4, non ha senso costruirlo
+            # senza un tier system a monte. Vedi _build_cpu_shadow_pool()
+            # per il perché niente .to('cuda') qui.
+            if getattr(self, "_tier_manager", None) is not None:
+                self._cpu_shadow_pool.update(
+                    self._build_cpu_shadow_pool(layers, expert_ids),
+                )
+                log.info(
+                    "GCSG: CPU shadow pool (DDR4-resident, issue #33) "
+                    "caricato — %d expert (%s) su %d layer.",
+                    len(self._cpu_shadow_pool), sorted(self._cpu_shadow_pool),
+                    len(layers),
+                )
         else:
             missing = [e for e in expert_ids if e not in self._shadow_pool]
             if missing:
@@ -1121,6 +1155,46 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                     "(issue #16).",
                     len(loaded), loaded, len(layers),
                 )
+
+    def _build_cpu_shadow_pool(
+        self, layers: list[Any], expert_ids: list[int],
+    ) -> dict[int, object]:
+        """Issue #33 Fase 2 — mirror CPU-resident del path 1 (FusedMoE fp16
+        grezzo), parallelo a self._shadow_pool (GPU), non un suo sostituto.
+
+        Stesso loop di estrazione/quantizzazione della sezione `is_fused` in
+        _load_shadow_pool(), ma SENZA il `.to("cuda")` forzato (bug fix
+        2026-08-12, vedi commento lì) — i pesi restano dove sono. Nessuna
+        classe nuova: _ShadowExpertINT4.__call__() è già device-agnostic
+        (Fase 1, confermato su Xeon 6244 reale, non solo in sandbox — vedi
+        LOGBOOK_ISSUE33.MD), un forward su pesi CPU-resident gira su CPU
+        senza modifiche al kernel.
+
+        Non forza `.cpu()` su un peso che risultasse già CUDA-resident
+        (modello non sotto cpu_offload_gb — caso raro nell'uso reale target
+        di questo lavoro): questo metodo non chiama MAI `.to()`, in nessuna
+        direzione — sceglie solo di non fare la promozione che fa il path
+        GPU sopra. Un D2H esplicito per liberare VRAM sarebbe una decisione
+        di eviction, fuori scope per Fase 2 (il routing hot/cold è Fase 3 —
+        _select_shadow_expert_ids() decide solo QUALI expert_id entrano
+        qui, non la loro residenza fisica).
+
+        Chiamato solo quando self._tier_manager è wired (vedi
+        _load_shadow_pool) — opt-in, stesso principio del resto del wiring
+        issue #17: comportamento invariato quando tier_manager è None.
+        """
+        cpu_pool: dict[int, object] = {}
+        for expert_id in expert_ids:
+            per_layer_w13 = []
+            per_layer_w2 = []
+            for layer in layers:
+                experts_module = layer.block_sparse_moe.experts
+                w13 = experts_module.w13_weight.data[expert_id]
+                w2 = experts_module.w2_weight.data[expert_id]
+                per_layer_w13.append(_quantize_int4(w13))
+                per_layer_w2.append(_quantize_int4(w2))
+            cpu_pool[expert_id] = _ShadowExpertINT4(per_layer_w13, per_layer_w2)
+        return cpu_pool
 
     # ── M1/M2 wiring (2026-08-12, issue #17) ────────────────────────────────────
 
@@ -1255,6 +1329,12 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
             new_ids, sorted(self._shadow_pool.keys()),
         )
         self._shadow_pool.clear()
+        # getattr difensivo — stesso motivo di _tier_manager/_n_experts_cached
+        # sopra: un GCSGWorker di test costruito via __new__() prima di questa
+        # integrazione (issue #33 Fase 2) non ha _cpu_shadow_pool assegnato.
+        cpu_pool = getattr(self, "_cpu_shadow_pool", None)
+        if cpu_pool is not None:
+            cpu_pool.clear()
         self._load_shadow_pool()
 
     def _should_pin_transfers(self) -> bool:
