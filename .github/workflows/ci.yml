@@ -77,3 +77,12 @@ jobs:
         with:
           name: bench-tier-result
           path: osx-poc/bench_tier_result.json
+
+      - name: Run issue #33 Fase 1 (CPU kernel) benchmark on target hardware
+        run: docker compose run --rm osx-dev bash -c "cd osx-poc && PYTHONPATH=src python benchmarks/bench_cpu_kernel.py > bench_cpu_kernel_result.json"
+
+      - name: Upload CPU kernel benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-cpu-kernel-result
+          path: osx-poc/bench_cpu_kernel_result.json
