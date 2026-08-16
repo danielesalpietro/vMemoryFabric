@@ -12,6 +12,10 @@ report sperimentale: nessun benchmark è stato eseguito in questo repository.
 su hardware eterogeneo (Petals, ExLlamaV2/V3 + tabbyAPI) e l'approccio di `vMemoryFabric` +
 `grastorp` (progetto correlato, non incluso in questo repository).
 
+**Vedi anche:** [`component_reuse_analysis.md`](component_reuse_analysis.md) — quali
+componenti di questi progetti sono concretamente riusabili nel codice attuale di
+`vMemoryFabric`, e perché sì o perché no.
+
 ---
 
 ## 1. Petals (P2P Swarm & Pipeline Parallelism)
