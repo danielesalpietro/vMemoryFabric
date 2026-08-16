@@ -1116,3 +1116,126 @@ esplicitamente attivare il flag (`configure_cpu_offload(True)` o
 `enable_cpu_offload=True`) per esercitare davvero il path CPU — senza,
 misurerebbe solo il comportamento di sempre (GPU-only), non quello che
 Fase 5 deve validare.
+
+---
+
+## 2026-08-17 (continued) — Fase 5: impatto aggregato reale, e un bug di device mai esercitato prima
+
+**Release:** nuovo `benchmarks/bench_hybrid.py` + target Makefile
+`bench-hybrid`. Un fix reale a codice di produzione (`route_forward()`),
+non solo benchmark — vedi sotto.
+
+### What set out to do
+
+Fase 5: misurare l'impatto end-to-end reale di `enable_cpu_offload=True`
+(non solo il dispatch isolato di Fase 4, che non dice nulla sul costo
+AGGREGATO di spostare traffico reale dal pool GPU veloce al pool CPU più
+lento) — su hardware reale, con un mix di traffico realistico tra un
+expert "caldo" e uno "freddo" a parità di shadow_pool_size=2
+(produzione).
+
+### What we did
+
+Scritto `benchmarks/bench_hybrid.py`: due expert reali (shadow_pool_size
+di produzione), traffico sintetico diviso per una quota "fredda"
+configurabile (5%/10%/25%/50%), stesso traffico confrontato in due
+scenari — `enable_cpu_offload=False` (baseline, entrambi su GPU) vs
+`=True` (l'expert freddo su CPU) — via `route_forward()` reale, non
+mockato.
+
+**Bug reale trovato AL PRIMO LANCIO** (non in un unit test isolato — lo
+stesso principio "hardware reale trova bug che il sandbox non trova" già
+visto in Fase 1 sul generator): `route_forward()` passava
+`hidden_states` intatto al pool CPU senza mai controllarne il device.
+Nei test di Fase 2/3, `hidden_states` era sempre già CPU-resident per
+costruzione (stesso device dei pesi CPU del test) — mai esercitato il
+caso reale, dove `hidden_states` arriva CUDA-resident dalla forward pass
+del modello (l'hook `.gate` gira dentro un modello che vive su GPU).
+Crash: `RuntimeError: Expected all tensors to be on the same device,
+cuda:0 and cpu` — lo stesso identico sintomo del bug 2026-08-12 sui PESI
+(mai forzato `.to('cuda')` nel path 1 prima di quel fix), stavolta
+sull'INPUT, mai sui pesi. Fix in `route_forward()`: `hidden_states =
+hidden_states.cpu()` immediatamente prima della sola chiamata al pool
+CPU, se non già CPU-resident — un solo D2H di un batch a una riga, non
+dell'intero modello.
+
+2 test nuovi (`TestGCSGRouteForward`): normalizzazione CUDA→CPU prima
+del dispatch a freddo (fake minimale, nessuna CUDA reale richiesta —
+stesso principio del fake usato per il bug fix 2026-08-12 sui pesi), e
+il complementare (nessuna copia inutile se già CPU-resident). Due test
+preesistenti aggiornati (usavano una stringa `"hs"` come hidden_states,
+che non ha `.device` — sostituita con `torch.Tensor` reali dove il
+codice ora vi accede).
+
+**Risultato del benchmark** (dopo il fix, RTX 3090 + CUDA 12.1.1, 500
+call simulate per scenario, dimensioni sintetiche 512×1536 — stessa
+frazione di Mixtral reale di Fase 1):
+
+| cold_share | rallentamento aggregato |
+|---|---|
+| 5% | 1.27× |
+| 10% | 1.34× |
+| 25% | 1.85× |
+| 50% | 1.43× |
+
+A differenza di Fase 4 (overhead di dispatch trascurabile, ~0.08%),
+l'impatto AGGREGATO qui è reale e non banale: anche solo il 5% di
+traffico instradato a freddo costa ~27% di rallentamento — il gap
+GPU/CPU per-chiamata (~7-10×, Fase 1) domina la media pesata anche con
+poca coda fredda. La quota 50% ha un rallentamento minore della quota
+25% (1.43× contro 1.85×) — non un errore di misura confermato ma
+nemmeno indagato a fondo: possibile rumore di sistema tra run (il
+baseline stesso a 50% è più lento del baseline a 25%, 2492 vs 3405
+calls/s), da rivedere con più campioni se questo numero diventa
+decisionale.
+
+**Deviazione dichiarata, non ancora risolta**: dimensioni sintetiche —
+a queste taglie la GPU è probabilmente bound sul lancio del kernel, non
+sul compute reale (nota già in Fase 1: "GPU shows the same flatness,
+kernel-launch-overhead bound... not compute bound"), quindi il gap
+misurato qui potrebbe restringersi a scala reale
+(`OSX_BENCH_HIDDEN=4096 OSX_BENCH_INTERMEDIATE=14336`) se il compute
+reale della GPU cresce più del previsto. Non rilanciato a scala reale in
+questa sessione.
+
+Full suite: 159 passed, 3 skipped, 0 failed (+2 test nuovi, +2
+aggiornati). `ruff check` pulito.
+
+### Result
+
+Fase 5 chiusa (prima iterazione, dimensioni sintetiche): l'impatto
+aggregato di `enable_cpu_offload=True` è misurabile e reale, non
+trascurabile come l'overhead di dispatch di Fase 4 — conferma diretta
+che la decisione di tenerlo spento di default (sessione precedente) era
+corretta, non solo prudente. Trovato e corretto en passant un bug di
+produzione reale (device mismatch sull'input), non solo raccolto un
+numero.
+
+### Why this matters
+
+Fase 4 e Fase 5 rispondono a due domande diverse che potevano sembrare
+la stessa: "il meccanismo di dispatch costa qualcosa?" (no, trascurabile)
+contro "il routing REALE del traffico verso CPU costa qualcosa?" (sì,
+misurabilmente). Senza Fase 5, il flag `enable_cpu_offload` sarebbe
+sembrato "sicuro da accendere sempre" sulla sola base di Fase 4 — invece
+resta, giustamente, una scelta esplicita con un trade-off reale da
+valutare caso per caso (VRAM risparmiata contro latenza aggregata persa),
+non una funzionalità gratuita.
+
+### Current state
+
+- `scheduler/gcsg.py`: `route_forward()` normalizza hidden_states su CPU
+  prima del dispatch a freddo (bug fix).
+- `benchmarks/bench_hybrid.py` aggiunto, `make bench-hybrid`.
+- `tests/test_scheduler.py`: 2 test nuovi, 2 aggiornati.
+- Suite completa 159 passed / 3 skipped, lint pulito.
+- Numeri a dimensioni sintetiche, non ancora a scala reale Mixtral.
+- Branch: `claude/ddr4-ram-processing-unzseh`.
+
+Next session: rilancio di `bench_hybrid.py` a scala reale
+(`OSX_BENCH_HIDDEN=4096 OSX_BENCH_INTERMEDIATE=14336`) per confermare o
+smentire se il gap GPU/CPU si restringe — decisivo per capire se
+`enable_cpu_offload=True` sia mai la scelta giusta in produzione, o solo
+uno strumento di misura/ricerca. In parallelo, discussione aperta con il
+project owner su una configurazione RunPod (Linux reale, niente limiti
+WSL2) per validazione indipendente — GPU/CPU/RAM ancora da decidere.

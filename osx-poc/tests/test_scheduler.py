@@ -955,15 +955,78 @@ class TestGCSGRouteForward:
         assert calls == [("gpu", "hs", 3)]
 
     def test_route_forward_dispatches_cold_expert_to_cpu_pool(self):
+        """hidden_states è un torch.Tensor CPU reale, non una stringa
+        (come prima del bug fix sotto): route_forward() ora chiama
+        .device su hidden_states prima di dispatchare a freddo — vedi
+        test_route_forward_moves_cuda_hidden_states_to_cpu_before_cold_dispatch
+        per il caso che ha trovato il bug."""
+        import torch
         calls = []
         worker = self._make_worker()
         worker._shadow_pool = {0: lambda hs, lid: calls.append(("gpu", hs, lid))}
         worker._cpu_shadow_pool = {0: lambda hs, lid: calls.append(("cpu", hs, lid))}
         worker._hot_expert_ids = set()   # 0 non è "caldo" -> freddo
 
-        worker.route_forward(expert_id=0, layer_id=3, hidden_states="hs")
+        hidden_states = torch.zeros(1)
+        worker.route_forward(expert_id=0, layer_id=3, hidden_states=hidden_states)
 
-        assert calls == [("cpu", "hs", 3)]
+        assert calls == [("cpu", hidden_states, 3)]
+
+    def test_route_forward_moves_cuda_hidden_states_to_cpu_before_cold_dispatch(self):
+        """Bug reale trovato in benchmarks/bench_hybrid.py (Fase 5, non in
+        un unit test isolato): hidden_states nel path reale arriva
+        CUDA-resident dalla forward pass del modello — un expert
+        instradato a freddo deve normalizzarlo su CPU prima di passarlo a
+        pesi CPU-resident, altrimenti lo stesso "Expected all tensors to
+        be on the same device" del bug 2026-08-12 sui pesi (vedi
+        _load_shadow_pool()), stavolta sull'input. Fake minimale, nessuna
+        CUDA reale richiesta — stesso principio di
+        TestGCSG.test_load_shadow_pool_moves_offloaded_fused_weights_to_gpu_before_quantizing."""
+        class _FakeCudaTensor:
+            def __init__(self, device_type):
+                self.device = SimpleNamespace(type=device_type)
+                self.cpu_calls = 0
+
+            def cpu(self):
+                self.cpu_calls += 1
+                return _FakeCudaTensor("cpu")
+
+        received = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: received.append(("gpu", hs))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: received.append(("cpu", hs))}
+        worker._hot_expert_ids = set()   # freddo
+
+        cuda_hidden_states = _FakeCudaTensor("cuda")
+        worker.route_forward(expert_id=0, layer_id=0, hidden_states=cuda_hidden_states)
+
+        assert cuda_hidden_states.cpu_calls == 1
+        assert len(received) == 1
+        pool, received_hs = received[0]
+        assert pool == "cpu"
+        assert received_hs.device.type == "cpu"
+        assert received_hs is not cuda_hidden_states   # normalizzato, non l'oggetto CUDA originale
+
+    def test_route_forward_does_not_call_cpu_on_already_cpu_hidden_states(self):
+        """Complementare al test sopra: nessuna copia/chiamata .cpu()
+        inutile se hidden_states è già CPU-resident."""
+        class _FakeCpuTensor:
+            def __init__(self):
+                self.device = SimpleNamespace(type="cpu")
+
+            def cpu(self):
+                raise AssertionError(".cpu() non doveva essere chiamato su un tensore già CPU")
+
+        received = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: None}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: received.append(hs)}
+        worker._hot_expert_ids = set()
+
+        cpu_hidden_states = _FakeCpuTensor()
+        worker.route_forward(expert_id=0, layer_id=0, hidden_states=cpu_hidden_states)
+
+        assert received == [cpu_hidden_states]   # stesso oggetto, nessuna copia inutile
 
     def test_route_forward_falls_back_to_gpu_when_not_in_cpu_pool(self):
         """Path 2/3 (Marlin/AWQ) — Fase 2 non costruisce un pool CPU per
@@ -982,14 +1045,17 @@ class TestGCSGRouteForward:
     def test_route_forward_falls_back_to_cpu_when_not_in_gpu_pool(self):
         """Caso limite (oggi non raggiunto da _load_shadow_pool(), che
         costruisce i due pool per gli stessi expert_id nel path 1): un
-        expert presente solo nel pool CPU deve comunque funzionare."""
+        expert presente solo nel pool CPU deve comunque funzionare.
+        hidden_states è un torch.Tensor CPU reale — route_forward() vi
+        accede .device anche in questo ramo di fallback."""
+        import torch
         calls = []
         worker = self._make_worker()
         worker._shadow_pool = {}
         worker._cpu_shadow_pool = {0: lambda hs, lid: calls.append("cpu")}
         worker._hot_expert_ids = {0}   # "caldo", ma non c'è pool GPU
 
-        worker.route_forward(expert_id=0, layer_id=0, hidden_states="hs")
+        worker.route_forward(expert_id=0, layer_id=0, hidden_states=torch.zeros(1))
 
         assert calls == ["cpu"]
 

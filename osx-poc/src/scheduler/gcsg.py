@@ -1369,6 +1369,20 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
 
         Returns:
             Output del forward, dalla residenza scelta.
+
+        BUG REALE (2026-08-17, trovato scrivendo benchmarks/bench_hybrid.py
+        — Fase 5, non un unit test isolato): hidden_states nel path reale
+        arriva dalla forward pass del modello, quindi è CUDA-resident (il
+        forward hook `.gate` gira dentro un modello che vive su GPU) — un
+        expert instradato a freddo lo passava intatto a pesi CPU-resident,
+        stesso "Expected all tensors to be on the same device" del bug
+        2026-08-12 sui PESI (vedi commento nel loop path 1 di
+        _load_shadow_pool()), stavolta sull'INPUT. Nessun test di Fase 2/3
+        l'aveva mai esercitato: usavano sempre hidden_states CPU-resident
+        per costruzione (stesso device dei pesi CPU del test). Fix: sposta
+        hidden_states su CPU immediatamente prima della sola chiamata al
+        pool CPU — un D2H di un batch a una riga, non dell'intero modello,
+        stesso costo che qualunque altro compute-offload CPU pagherebbe.
         """
         # getattr difensivo — stesso motivo di _RoutedShadowPool.__contains__:
         # un worker di test pre-Fase-2/3 non ha _cpu_shadow_pool/
@@ -1378,11 +1392,15 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         in_gpu_pool = expert_id in self._shadow_pool
         in_cpu_pool = expert_id in cpu_pool
 
-        if in_gpu_pool and in_cpu_pool and expert_id not in hot_expert_ids:
+        route_to_cpu = (
+            (in_gpu_pool and in_cpu_pool and expert_id not in hot_expert_ids)
+            or (in_cpu_pool and not in_gpu_pool)
+        )
+        if route_to_cpu:
+            if hidden_states.device.type != "cpu":
+                hidden_states = hidden_states.cpu()
             return cpu_pool[expert_id](hidden_states, layer_id)
-        if in_gpu_pool:
-            return self._shadow_pool[expert_id](hidden_states, layer_id)
-        return cpu_pool[expert_id](hidden_states, layer_id)
+        return self._shadow_pool[expert_id](hidden_states, layer_id)
 
     # ── M1/M2 wiring (2026-08-12, issue #17) ────────────────────────────────────
 
