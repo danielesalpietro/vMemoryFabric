@@ -909,3 +909,121 @@ end-to-end su hardware reale, `bench_hybrid.py`) — decisione del project
 owner. Il piano originale gate-a Fase 4 su "skip se l'overhead è
 trascurabile rispetto al tempo di compute AVX-512" — quel numero non
 esiste ancora.
+
+---
+
+## 2026-08-17 (continued) — Fase 4: overhead di dispatch trascurabile, job ring scartato (doppia motivazione)
+
+**Release:** nuovo `benchmarks/bench_route_forward.py` + target Makefile
+`bench-route-forward`. Nessuna modifica a codice di produzione — Fase 4 è
+per definizione un gate di misura, non un'implementazione.
+
+### What we set out to do
+
+Il gate esplicito del piano: misurare l'overhead del round-trip
+in-process (route_forward()/_RoutedShadowPool, Fase 3) prima di decidere
+se serve davvero un meccanismo di sincronizzazione separato stile
+`exllamav3/model/moe_cpu_host.py` (`MoeCpuHost`) — skip se l'overhead è
+trascurabile rispetto al tempo di compute AVX-512 già misurato in Fase 1.
+
+### What we did
+
+**Chiarito prima di misurare, su richiesta del project owner, cosa
+consiste davvero il job ring di MoeCpuHost** (rileggendo
+`component_reuse_analysis.md` §2.1 e `related_work_petals_exllama.md`
+§2, recuperati la sessione precedente): un processo separato possiede i
+pesi in un'arena di memoria host pinned/huge-page; comunica col processo
+GPU tramite un job ring in `multiprocessing.shared_memory` con
+`cuda_host_register` per il DMA; gli esperti "caldi" vengono streammati
+verso la GPU, i "freddi" calcolati in loco su CPU con AVX-512. Il pezzo
+strutturalmente rilevante qui è `cuda_host_register`/pinned memory — è
+esattamente il meccanismo che l'architettura a due processi userebbe per
+evitare un vero round-trip.
+
+**Secondo argomento, sollevato dal project owner prima di lanciare
+qualunque benchmark**: siamo su WSL2, e questo stesso codebase ha già una
+storia concreta di instabilità con pin_memory lì — non un'ipotesi
+astratta. `_should_pin_transfers()` (`gcsg.py:1469-1483`) ritorna `False`
+esplicitamente sotto WSL2 (`in_wsl()`), e la ragione è documentata: il
+fix issue #10/#16 (2026-08-10) aveva isolato un crash CUDA "illegal
+memory access" che non era nel kernel Marlin ma in
+`vllm.model_executor.models.utils.maybe_offload_to_cpu()` — una copia
+H2D asincrona non sicura sotto WSL2 senza pin_memory, mai validata sotto
+carico sostenuto lì. Il job ring di MoeCpuHost dipende dallo stesso
+meccanismo (`cuda_host_register`) che questo progetto ha già dovuto
+disattivare per instabilità reale, non per cautela. Questo è un motivo
+qualitativo per scartare il job ring INDIPENDENTE dal numero di overhead
+— vale anche se il dispatch in-process risultasse costoso.
+
+**Misura quantitativa**: `benchmarks/bench_route_forward.py`, tre
+sezioni — `raw_dict_call` (baseline pre-Fase-3), `route_forward()`
+(nuova indirection Fase 3), `run_shadow_full` (l'intero path reale via
+`GCSGGuard.run_shadow()` + `_RoutedShadowPool`, incluso il ranking degli
+expert) — confrontate contro `compute_reference` (tempo reale di
+`_ShadowExpertINT4` su CPU, stessa metodologia di `bench_cpu_kernel.py`
+Fase 1, ricalcolato nello stesso run per un confronto pulito).
+
+**Bug reale trovato PRIMA di fidarsi del primo risultato** (non nella
+review, il primo run del benchmark stesso): le pool di dispatch usavano
+`_ShadowExpertINT4` REALI (pesi random, matmul veri), non callable no-op
+— il benchmark misurava compute due volte, non dispatch. Sintomo
+osservato prima di capire la causa: il container è rimasto a 686% CPU
+per ~9 minuti (verificato con `docker exec ... ps aux` +
+`nvidia-smi`, non un'assunzione — il processo era vivo e attivamente
+occupato, non bloccato) — coerente con 180.000+ forward reali da
+~2.6ms l'uno (2 pool GPU/CPU + run_shadow, tutte e tre le sezioni
+chiamavano la stessa `_ShadowExpertINT4` vera). Primo risultato (scartato):
+tutte e tre le sezioni ~3.2ms, identiche al compute reference — la
+"conclusione" che ne seguiva ("overhead non trascurabile") era
+matematicamente vera ma basata su un confronto rotto (compute contro
+compute, non dispatch contro compute). Fix: callable no-op
+(`lambda hs, layer_id: hs`) nelle due pool per la sola sezione
+dispatch_overhead, `compute_reference` tenuto separato e reale.
+
+**Risultato corretto**, hardware reale (RTX 3090, CUDA 12.1.1, dimensioni
+sintetiche 512×1536 come Fase 1):
+
+| Sezione | p50 |
+|---|---|
+| `raw_dict_call` | 0.082 μs |
+| `route_forward()` | 0.33 μs |
+| `run_shadow_full` (path reale) | 2.5 μs |
+| `compute_reference` | 3000 μs (3.0 ms) |
+
+Overhead di dispatch come frazione del tempo di compute: **~0.08%** — tre
+ordini di grandezza sotto, non un margine ambiguo.
+
+### Result
+
+Fase 4 chiusa: **non serve il job ring stile MoeCpuHost**, per doppia
+motivazione indipendente — quantitativa (overhead di dispatch
+trascurabile, ~0.08% del tempo di compute) e qualitativa (il meccanismo
+di pinning su cui si reggerebbe è già noto instabile su questo hardware
+sotto WSL2, issue #10/#16). L'architettura in-process di Fase 2/3 resta
+quella giusta, non un compromesso temporaneo.
+
+### Why this matters
+
+Chiude esplicitamente il gate che il piano originale aveva posto prima di
+qualunque lavoro su un meccanismo di sincronizzazione separato — evita di
+costruire (o anche solo prototipare su RunPod/Linux reale) un pezzo di
+infrastruttura complesso per un problema di overhead che non esiste,
+sovrapposto a un rischio di stabilità reale e già documentato su questa
+piattaforma. Il bug trovato nel benchmark stesso è un promemoria diretto
+del principio "misura prima di ottimizzare" applicato ricorsivamente:
+anche lo strumento di misura va verificato prima di fidarsi del numero
+che produce.
+
+### Current state
+
+- `benchmarks/bench_route_forward.py` aggiunto, `make bench-route-forward`.
+- Nessuna modifica a codice di produzione — Fase 4 era un gate, ora
+  chiuso con esito "skip".
+- Suite completa invariata: 150 passed / 3 skipped, lint pulito.
+- Branch: `claude/ddr4-ram-processing-unzseh`.
+
+Next session: Fase 5 — benchmark end-to-end su hardware reale
+(`bench_hybrid.py`, mirror di `bench_tier.py`), sul runner
+`Z8-G4-RTX3090` via `full-gpu-tests`. Con Fase 4 chiusa a "skip", Fase 5
+misura l'intero pipeline così com'è (Fase 0-3), senza dover prima
+integrare un meccanismo di sync che si è appena deciso di non costruire.

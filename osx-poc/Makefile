@@ -52,6 +52,9 @@ bench-tier:
 bench-cpu-kernel:
 	$(RUN) python benchmarks/bench_cpu_kernel.py
 
+bench-route-forward:
+	$(RUN) python benchmarks/bench_route_forward.py
+
 # ── Diagnostic repros (manual, not wired into CI) ───────────────────────────────
 # Requires the real checkpoint on disk (/data/nvme/models/mixtral-instruct-awq)
 # and a real GPU — not CI-safe (some variants are designed to crash, that's the
