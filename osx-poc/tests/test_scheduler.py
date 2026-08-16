@@ -867,6 +867,208 @@ class TestGCSGCpuShadowPool:
         assert cleared == {"shadow_pool": {}, "cpu_shadow_pool": {}}
 
 
+# ── Hot/cold routing (2026-08-17, issue #33 Fase 3) ────────────────────────────
+#
+# route_forward()/_RoutedShadowPool decidono, per un expert_id già presente in
+# entrambi i pool (Fase 2), quale residenza eseguire — usando la
+# classificazione di Fase 0 (SEEPolicy.classify_hot_cold(), issue #21-informed,
+# vedi LOGBOOK_ISSUE33.MD). Stesso principio di test di TestGCSGTierManagerWiring:
+# GCSGWorker.__new__() + attributi a mano, TierManager reale.
+
+class TestGCSGRouteForward:
+
+    @staticmethod
+    def _make_worker(tier_manager=None, shadow_pool_size=2):
+        return TestGCSGCpuShadowPool._make_worker(tier_manager, shadow_pool_size)
+
+    @staticmethod
+    def _real_tier_manager(tmp_path):
+        return TestGCSGTierManagerWiring._real_tier_manager(tmp_path)
+
+    # ── route_forward(): dispatch puro, nessun _load_shadow_pool() coinvolto ──
+
+    def test_route_forward_dispatches_hot_expert_to_gpu_pool(self):
+        calls = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: calls.append(("gpu", hs, lid))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: calls.append(("cpu", hs, lid))}
+        worker._hot_expert_ids = {0}
+
+        worker.route_forward(expert_id=0, layer_id=3, hidden_states="hs")
+
+        assert calls == [("gpu", "hs", 3)]
+
+    def test_route_forward_dispatches_cold_expert_to_cpu_pool(self):
+        calls = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: calls.append(("gpu", hs, lid))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: calls.append(("cpu", hs, lid))}
+        worker._hot_expert_ids = set()   # 0 non è "caldo" -> freddo
+
+        worker.route_forward(expert_id=0, layer_id=3, hidden_states="hs")
+
+        assert calls == [("cpu", "hs", 3)]
+
+    def test_route_forward_falls_back_to_gpu_when_not_in_cpu_pool(self):
+        """Path 2/3 (Marlin/AWQ) — Fase 2 non costruisce un pool CPU per
+        loro: expert presente solo nel pool GPU, la classificazione hot/
+        cold (anche se dicesse "freddo") non ha un'alternativa da usare."""
+        calls = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: calls.append("gpu")}
+        worker._cpu_shadow_pool = {}
+        worker._hot_expert_ids = set()   # "freddo", ma non c'è pool CPU
+
+        worker.route_forward(expert_id=0, layer_id=0, hidden_states="hs")
+
+        assert calls == ["gpu"]
+
+    def test_route_forward_falls_back_to_cpu_when_not_in_gpu_pool(self):
+        """Caso limite (oggi non raggiunto da _load_shadow_pool(), che
+        costruisce i due pool per gli stessi expert_id nel path 1): un
+        expert presente solo nel pool CPU deve comunque funzionare."""
+        calls = []
+        worker = self._make_worker()
+        worker._shadow_pool = {}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: calls.append("cpu")}
+        worker._hot_expert_ids = {0}   # "caldo", ma non c'è pool GPU
+
+        worker.route_forward(expert_id=0, layer_id=0, hidden_states="hs")
+
+        assert calls == ["cpu"]
+
+    # ── _refresh_hot_cold_classification() ───────────────────────────────────
+
+    def test_refresh_hot_cold_defaults_all_hot_without_traffic(self, tmp_path):
+        """Cold start onesto: EAT seeded ma access_count=0 ovunque (o EAT
+        vuota) -> TUTTI gli expert_id dei due pool restano "caldi",
+        comportamento pre-Fase-3 invariato (GPU-only) — non instradare
+        tutto a freddo su un segnale che non esiste ancora, stesso
+        principio di _select_shadow_expert_ids()."""
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr)
+        worker._shadow_pool = {0: object(), 1: object()}
+        worker._cpu_shadow_pool = {0: object(), 1: object()}
+
+        worker._refresh_hot_cold_classification()
+
+        assert worker._hot_expert_ids == {0, 1}
+
+    def test_refresh_hot_cold_without_tier_manager_defaults_all_hot(self):
+        worker = self._make_worker(tier_manager=None)
+        worker._shadow_pool = {0: object()}
+        worker._cpu_shadow_pool = {0: object()}
+
+        worker._refresh_hot_cold_classification()
+
+        assert worker._hot_expert_ids == {0}
+
+    def test_refresh_hot_cold_uses_real_traffic(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(4):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        for _ in range(5):
+            mgr.eat.access(expert_id=2, shard_idx=0)   # 2 è nettamente il più caldo
+        worker = self._make_worker(tier_manager=mgr)
+        worker._shadow_pool = {i: object() for i in range(4)}
+        worker._cpu_shadow_pool = {i: object() for i in range(4)}
+
+        worker._refresh_hot_cold_classification()
+
+        assert 2 in worker._hot_expert_ids
+
+    # ── _RoutedShadowPool ─────────────────────────────────────────────────────
+
+    def test_routed_shadow_pool_contains_union_of_both_pools(self):
+        worker = self._make_worker()
+        worker._shadow_pool = {0: object()}
+        worker._cpu_shadow_pool = {1: object()}
+        pool = gcsg_module._RoutedShadowPool(worker)
+
+        assert 0 in pool
+        assert 1 in pool
+        assert 2 not in pool
+
+    # ── Integrazione con _load_shadow_pool()/_evaluate_gcsg_for_rows() ────────
+
+    def test_load_shadow_pool_refreshes_hot_cold_classification(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(gcsg_module, "_quantize_int4", lambda w: (w, 1.0))
+        layers = TestGCSGCpuShadowPool._fake_offloaded_fused_layers(
+            num_layers=2, num_experts=8,
+        )
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=layers)),
+            ),
+        )
+
+        worker._load_shadow_pool()
+
+        # Nessun traffico EAT reale ancora -> cold start onesto, entrambi
+        # gli expert_id selezionati restano "caldi".
+        assert worker._hot_expert_ids == {0, 1}
+
+    def test_evaluate_gcsg_for_rows_routes_cold_expert_to_cpu_pool_never_touching_gpu_pool(
+        self, tmp_path,
+    ):
+        """La versione testata di quello che issue #33 Fase 3 chiedeva
+        esplicitamente: un expert instradato a freddo non deve MAI
+        attraversare il pool GPU (e quindi mai GPUTransfer.to_vram()/
+        TierManager.promote_live_tensor(), che vivono solo dietro le
+        callable del pool GPU) — end-to-end da _evaluate_gcsg_for_rows()
+        (hook .gate reale) fino al dispatch, non solo da route_forward()
+        isolato."""
+        import torch
+
+        gpu_calls = []
+        cpu_calls = []
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=1)
+        worker.guard = GCSGGuard(
+            theta_gate=0.5, theta_entropy=0.9, theta_contamination=1.0,
+            shadow_pool_size=1, check_vram=False,
+        )
+        worker._shadow_pool = {0: lambda hs, lid: gpu_calls.append((hs.shape, lid))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: cpu_calls.append((hs.shape, lid))}
+        worker._hot_expert_ids = set()   # expert 0 classificato "freddo"
+        worker._current_row_request_ids = ["req-0"]
+
+        # Logit fortemente piccato su expert 0 -> supera should_activate_shadow.
+        router_logits = torch.tensor([[10.0, -10.0, -10.0]])
+        hidden_states = torch.randn(1, 4096)
+
+        worker._evaluate_gcsg_for_rows(router_logits, hidden_states, layer_id=7)
+
+        assert cpu_calls == [((1, 4096), 7)]
+        assert gpu_calls == []   # mai toccato il pool GPU per questo expert
+
+    def test_evaluate_gcsg_for_rows_routes_hot_expert_to_gpu_pool(self, tmp_path):
+        import torch
+
+        gpu_calls = []
+        cpu_calls = []
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=1)
+        worker.guard = GCSGGuard(
+            theta_gate=0.5, theta_entropy=0.9, theta_contamination=1.0,
+            shadow_pool_size=1, check_vram=False,
+        )
+        worker._shadow_pool = {0: lambda hs, lid: gpu_calls.append((hs.shape, lid))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: cpu_calls.append((hs.shape, lid))}
+        worker._hot_expert_ids = {0}   # expert 0 classificato "caldo"
+        worker._current_row_request_ids = ["req-0"]
+
+        router_logits = torch.tensor([[10.0, -10.0, -10.0]])
+        hidden_states = torch.randn(1, 4096)
+
+        worker._evaluate_gcsg_for_rows(router_logits, hidden_states, layer_id=7)
+
+        assert gpu_calls == [((1, 4096), 7)]
+        assert cpu_calls == []
+
+
 # ── Marlin path TierManager wiring (2026-08-12, issue #17) ────────────────────
 #
 # Solo _marlin_pool_shard_key() è pura logica testabile qui — il resto

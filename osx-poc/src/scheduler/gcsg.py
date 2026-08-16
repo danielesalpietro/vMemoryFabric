@@ -110,7 +110,7 @@ import pynvml  # provided by the `nvidia-ml-py` package (requirements.txt) —
 # see tests/test_tier.py, tests/test_eat.py). Safe at module scope, unlike
 # the local vllm imports below (see docstring above).
 from eat import Tier
-from tier import TierManager
+from tier import SEEPolicy, TierManager
 
 log = logging.getLogger(__name__)
 
@@ -676,6 +676,41 @@ class _MarlinFusedShadowExpert:
         )
 
 
+class _RoutedShadowPool:
+    """Issue #33 Fase 3 — adapter dict-like passato a GCSGGuard.run_shadow()
+    al posto di un dict semplice, per decidere per-expert se instradare al
+    pool GPU o al pool CPU/DDR4-resident (issue #33 Fase 2) — senza toccare
+    run_shadow() stesso, che non sa nulla di GPU/CPU: vede solo un oggetto
+    che risponde a `expert_id in pool` e `pool[expert_id](hidden_states,
+    layer_id)`, esattamente il contratto che già rispettava con un dict
+    semplice. Stesso principio "zero rischio per il path già validato" di
+    ogni altra estensione in questo file.
+
+    La decisione vera vive in GCSGWorker.route_forward() — vedi il suo
+    docstring per la logica hot/cold e i fallback.
+    """
+
+    def __init__(self, worker: GCSGWorker) -> None:
+        self._worker = worker
+
+    def __contains__(self, expert_id: int) -> bool:
+        # getattr difensivo su _cpu_shadow_pool — non self._worker._cpu_shadow_pool
+        # diretto: un worker di test costruito via __new__() prima
+        # dell'integrazione Fase 2/3 (es. TestGCSG._make_worker(), che non
+        # assegna _base né _cpu_shadow_pool) cadrebbe altrimenti in
+        # __getattr__, che richiede _base — stesso motivo già documentato
+        # altrove in questo file per _tier_manager/_n_experts_cached.
+        return (
+            expert_id in self._worker._shadow_pool
+            or expert_id in getattr(self._worker, "_cpu_shadow_pool", {})
+        )
+
+    def __getitem__(self, expert_id: int) -> Callable[[Any, int], Any]:
+        def _call(hidden_states: Any, layer_id: int) -> Any:
+            return self._worker.route_forward(expert_id, layer_id, hidden_states)
+        return _call
+
+
 class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-testabile
     """Worker vLLM con GCSG cablato.
 
@@ -885,6 +920,15 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         # _build_cpu_shadow_pool()/_load_shadow_pool() per come/quando
         # viene popolato (solo con self._tier_manager wired).
         self._cpu_shadow_pool: dict[int, object] = {}
+        # Issue #33 Fase 3 — quali expert_id (tra quelli presenti in
+        # ENTRAMBI i pool) sono "caldi" in questo momento: vedi
+        # _refresh_hot_cold_classification()/route_forward(). Policy
+        # dedicata (non tier_manager._policy, privata e potenzialmente
+        # LRUPolicy se use_see=False — questa decisione è concettualmente
+        # separata dall'eviction VRAM di TierManager, anche se riusa la
+        # stessa formula di score via SEEPolicy.classify_hot_cold, Fase 0).
+        self._hot_cold_policy = SEEPolicy()
+        self._hot_expert_ids: set[int] = set()
         self._gate_hook_handles: list[object] = []
 
         # Osservabilità smoke-test (2026-08-09) — non usata dal path di
@@ -1138,6 +1182,11 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                     len(self._cpu_shadow_pool), sorted(self._cpu_shadow_pool),
                     len(layers),
                 )
+                # Issue #33 Fase 3: ricalcola subito la classificazione
+                # hot/cold per i due pool appena costruiti — vedi il
+                # docstring del metodo per il perché non ad ogni
+                # route_forward().
+                self._refresh_hot_cold_classification()
         else:
             missing = [e for e in expert_ids if e not in self._shadow_pool]
             if missing:
@@ -1195,6 +1244,86 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                 per_layer_w2.append(_quantize_int4(w2))
             cpu_pool[expert_id] = _ShadowExpertINT4(per_layer_w13, per_layer_w2)
         return cpu_pool
+
+    def _refresh_hot_cold_classification(self) -> None:
+        """Issue #33 Fase 3 — ricalcola self._hot_expert_ids da hotness EAT
+        reale, via SEEPolicy.classify_hot_cold() (Fase 0).
+
+        Chiamata solo qui e in refresh_shadow_pool_selection() — NON ad
+        ogni route_forward() (potenzialmente una volta per token):
+        tier_manager.eat.get_tier(Tier.DDR4) scansiona l'intera tabella,
+        stesso motivo per cui _select_shadow_expert_ids()/_shadow_pool
+        stesso sono ricalcolati solo al load/refresh esplicito, non ad
+        ogni forward — vedi il commento gemello lì.
+
+        Fallback onesto a cold start (nessuna entry EAT ancora, o
+        self._tier_manager assente): TUTTI gli expert_id del pool restano
+        "caldi" — comportamento pre-Fase-3 invariato (GPU-only) invece di
+        instradare tutto a freddo su un segnale che non esiste ancora.
+        Stesso principio già usato da _select_shadow_expert_ids() per il
+        suo fallback round-robin.
+        """
+        tier_manager = getattr(self, "_tier_manager", None)
+        entries = tier_manager.eat.get_tier(Tier.DDR4) if tier_manager is not None else []
+        if not entries:
+            self._hot_expert_ids = set(self._shadow_pool) | set(self._cpu_shadow_pool)
+            return
+        # getattr difensivo — stesso motivo di _tier_manager sopra: un
+        # worker di test costruito via __new__() prima di questa
+        # integrazione (issue #33 Fase 3) non ha _hot_cold_policy assegnato.
+        policy = getattr(self, "_hot_cold_policy", None) or SEEPolicy()
+        hot_ids, _cold_ids = policy.classify_hot_cold(entries)
+        self._hot_expert_ids = set(hot_ids)
+
+    def route_forward(self, expert_id: int, layer_id: int, hidden_states: Any) -> Any:
+        """Issue #33 Fase 3 — dispatcha la chiamata shadow per expert_id al
+        pool GPU (self._shadow_pool, VRAM) o al pool CPU/DDR4-resident
+        (self._cpu_shadow_pool, Fase 2), secondo la classificazione hot/cold
+        più recente (self._hot_expert_ids, Fase 0 via
+        _refresh_hot_cold_classification()).
+
+        Il Tier enum NON viene toccato qui — un expert instradato a freddo
+        resta logicamente Tier.DDR4 in EAT, come richiesto dal piano
+        originale: questo metodo sceglie solo quale callable eseguire, non
+        modifica alcuno stato di tiering. Un expert_id "freddo" non
+        attraversa mai GPUTransfer.to_vram()/TierManager.promote_live_tensor()
+        per questa chiamata — self._cpu_shadow_pool è costruito da
+        _build_cpu_shadow_pool() (Fase 2), che non chiama mai .to() in
+        nessuna direzione (vedi il suo docstring).
+
+        Fallback quando un expert_id non è in entrambi i pool (es. path
+        2/3 — Marlin/AWQ — dove Fase 2 non costruisce un pool CPU, o un
+        expert presente solo in uno dei due per qualunque altro motivo):
+        usa qualunque pool lo contenga, ignorando la classificazione —
+        meglio un forward funzionante nell'unica residenza disponibile che
+        nessun forward.
+
+        Args:
+            expert_id:     Expert da eseguire (deve essere presente in
+                           almeno uno dei due pool — non verificato qui,
+                           è responsabilità del chiamante, stesso
+                           contratto di un dict semplice indicizzato con
+                           una chiave assente).
+            layer_id:      Layer corrente (un "expert i" ha pesi diversi
+                           per layer).
+            hidden_states: Input del forward per il layer corrente.
+
+        Returns:
+            Output del forward, dalla residenza scelta.
+        """
+        # getattr difensivo — stesso motivo di _RoutedShadowPool.__contains__:
+        # un worker di test pre-Fase-2/3 non ha _cpu_shadow_pool/
+        # _hot_expert_ids assegnati.
+        cpu_pool = getattr(self, "_cpu_shadow_pool", {})
+        hot_expert_ids = getattr(self, "_hot_expert_ids", set())
+        in_gpu_pool = expert_id in self._shadow_pool
+        in_cpu_pool = expert_id in cpu_pool
+
+        if in_gpu_pool and in_cpu_pool and expert_id not in hot_expert_ids:
+            return cpu_pool[expert_id](hidden_states, layer_id)
+        if in_gpu_pool:
+            return self._shadow_pool[expert_id](hidden_states, layer_id)
+        return cpu_pool[expert_id](hidden_states, layer_id)
 
     # ── M1/M2 wiring (2026-08-12, issue #17) ────────────────────────────────────
 
@@ -1737,8 +1866,17 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                 # broadcasting, producendo silenziosamente un output 1D
                 # anziché sollevare un errore — sbagliato allo stesso modo,
                 # solo senza un crash che lo segnalasse.
+                # _RoutedShadowPool(self) (issue #33 Fase 3), non
+                # self._shadow_pool diretto: decide per-expert se
+                # instradare a GPU o al pool CPU/DDR4-resident (Fase 2)
+                # senza che run_shadow() debba saperne nulla — vedi
+                # _RoutedShadowPool/route_forward(). Costruito qui invece
+                # che cacheato in __init__: oggetto stateless (una sola
+                # referenza a self), zero costo reale, e non richiede che
+                # ogni worker di test costruito via __new__() lo assegni
+                # a mano.
                 self.guard.run_shadow(
-                    ctx, self._shadow_pool,
+                    ctx, _RoutedShadowPool(self),
                     hidden_states=hidden_states[row_idx : row_idx + 1], layer_id=layer_id,
                 )
 

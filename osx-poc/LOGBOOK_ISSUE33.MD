@@ -775,3 +775,137 @@ Next session: Fase 3 — wiring di `classify_hot_cold()` in
 `TierManager`/`GCSGWorker` (`route_forward()`), test che asserisce
 `GPUTransfer.to_vram()` mai chiamato per un expert instradato a freddo
 (il pool CPU di Fase 2 è già pronto a riceverlo).
+
+---
+
+## 2026-08-17 (continued) — merge report issue #32 su develop, poi Fase 3: routing hot/cold reale
+
+**Release:** merge di 4 commit doc-only su `develop` (fast-forward), più
+codice/test per Fase 3 su questo branch — nessuna integrazione vLLM live.
+
+### Merge dei report issue #32 su develop
+
+Prima di Fase 3, il project owner ha chiesto di valutare il merge del
+branch `claude/petals-exllama-heterogeneous-v0frr4` (dove vivono i due
+report citati sopra) — "se non crea problemi, procedi". Verificato:
+`develop` è ancestor diretto del branch (nessuna divergenza, fast-forward
+puro), diff limitato a `README.md` (+30 righe, registra il sub-progetto
+"Marstrand" nella roadmap) e ai due nuovi file di report — zero modifiche
+a codice esistente, zero rischio di conflitto. Pushato come fast-forward
+diretto (`git push origin origin/claude/petals-exllama-heterogeneous-v0frr4:develop`),
+senza checkout locale. `develop` ora a `1bee282`. Branch sorgente non
+cancellato (non l'ho creato io — stesso principio già seguito per gli
+altri branch di sessione).
+
+### What we set out to do
+
+Fase 3: wiring reale in `GCSGWorker` di `classify_hot_cold()` (Fase 0) sui
+due pool costruiti in Fase 2 — `route_forward()`, senza toccare il `Tier`
+enum, con test che verifica che un expert instradato a freddo non
+attraversi mai la promozione GPU.
+
+### What we did
+
+Implementato in `scheduler/gcsg.py`:
+- `_RoutedShadowPool`: adapter dict-like (`__contains__`/`__getitem__`)
+  passato a `GCSGGuard.run_shadow()` al posto di `self._shadow_pool`
+  diretto — `run_shadow()` resta byte-per-byte invariato, non sa nulla di
+  GPU/CPU. Costruito inline al call site in `_evaluate_gcsg_for_rows()`
+  (oggetto stateless, zero costo reale), non cacheato in `__init__` —
+  scelta deliberata per non richiedere che ogni worker di test lo
+  assegni a mano.
+- `GCSGWorker.route_forward(expert_id, layer_id, hidden_states)`: decide
+  GPU vs CPU per un expert presente in entrambi i pool usando
+  `self._hot_expert_ids`, con fallback a "qualunque pool lo contenga" se
+  l'expert manca da uno dei due (oggi non raggiunto dal path 1, che
+  costruisce sempre gli stessi expert_id in entrambi — ma testato
+  comunque come contratto esplicito del metodo).
+- `GCSGWorker._refresh_hot_cold_classification()`: ricalcola
+  `self._hot_expert_ids` da `SEEPolicy.classify_hot_cold()` su
+  `tier_manager.eat.get_tier(Tier.DDR4)` — chiamata solo al load/refresh
+  del pool (non ad ogni `route_forward()`, potenzialmente una volta per
+  token: `EAT.get_tier()` scansiona l'intera tabella, stesso motivo per
+  cui `_select_shadow_expert_ids()` non si ricalcola ad ogni forward).
+  Fallback a cold start: TUTTI gli expert_id restano "caldi" (GPU-only,
+  comportamento pre-Fase-3) invece di instradare tutto a freddo su un
+  segnale che non esiste ancora — stesso principio del round-robin di
+  `_select_shadow_expert_ids()`.
+- Wired in `_load_shadow_pool()` (subito dopo aver costruito il pool CPU)
+  e in `_evaluate_gcsg_for_rows()` (dispatch reale via
+  `_RoutedShadowPool`).
+
+**Bug reale trovato scrivendo i test (terza sessione di fila con almeno
+un bug al primo run)**: `_refresh_hot_cold_classification()` accedeva a
+`self._hot_cold_policy` senza `getattr` difensivo — `AttributeError` su
+un worker di test costruito via `__new__()` con EAT non vuota (il ramo
+cold-start/EAT-vuota lo aggirava per caso, senza mai raggiungere quella
+riga, motivo per cui solo UN test su undici l'ha esposto). Fix:
+`getattr(self, "_hot_cold_policy", None) or SEEPolicy()`, stesso pattern
+difensivo già usato ovunque in questo file per worker costruiti senza
+passare da `__init__()`.
+
+11 test nuovi in `TestGCSGRouteForward` (`tests/test_scheduler.py`):
+dispatch caldo/freddo puro su `route_forward()`, fallback quando un
+expert manca da uno dei due pool, classificazione default cold-start
+(tutti caldi) con e senza `tier_manager`, classificazione da traffico EAT
+reale, `_RoutedShadowPool.__contains__` sull'unione dei due pool,
+integrazione `_load_shadow_pool()` -> classificazione popolata, e i due
+test end-to-end richiesti dal piano: un expert freddo instradato via
+`_evaluate_gcsg_for_rows()` (hook `.gate` reale) tocca SOLO la callable
+del pool CPU, mai quella GPU (la garanzia "mai `GPUTransfer.to_vram()`"
+dimostrata per dispatch — quella funzione vive solo dietro le callable
+del pool GPU, mai istanziata/chiamata nel path freddo) — e il caso
+speculare per un expert caldo.
+
+Full suite su hardware reale: 150 passed, 3 skipped, 0 failed (153
+raccolti, +11 da questa sessione). `ruff check` pulito sui file toccati
+dopo un fix minore (quote superflue su un type hint stringato, `UP037` —
+`from __future__ import annotations` le rende inutili); stesso singolo
+warning pre-esistente non correlato su `test_scheduler.py`.
+
+### Result
+
+Fase 3 chiusa: il routing hot/cold è reale, non solo la struttura (Fase
+0) o il meccanismo di costruzione (Fase 2) — un expert classificato
+freddo gira davvero su CPU/DDR4 senza mai toccare la GPU, verificato
+end-to-end, non solo per costruzione. Le quattro fasi centrali del piano
+originale (0, 1, 2, 3) sono ora tutte chiuse.
+
+### Why this matters
+
+Questo chiude il ciclo che issue #33 aveva aperto: DDR4 non è più solo
+"passive storage/staging" (l'audit del 2026-08-16 che aveva confermato la
+claim originale dell'issue) — è un sito di compute REALMENTE raggiungibile
+dal routing reale del sistema, con un criterio di selezione tracciabile
+fino al codice sorgente di un sistema di produzione (exllamav3) invece che
+inventato, e senza aver dovuto toccare l'invariante che l'intero file
+protegge gelosamente (Tier enum, `_promote_module_via_tier_manager`,
+zero rischio per il path GPU già validato).
+
+### Current state
+
+- `scheduler/gcsg.py`: `_RoutedShadowPool`, `GCSGWorker.route_forward()`,
+  `_refresh_hot_cold_classification()`, wiring in `_load_shadow_pool()`/
+  `_evaluate_gcsg_for_rows()`.
+- `tests/test_scheduler.py`: `TestGCSGRouteForward` (11 test).
+- `develop`: aggiornato con i report issue #32 (fast-forward, 4 commit).
+- Suite completa 150 passed / 3 skipped su hardware reale, lint pulito.
+- Non ancora verificato su un vero engine vLLM/checkpoint reale (stesso
+  limite dichiarato per ogni altra parte "logica pura" di questo file —
+  `_promote_module_via_tier_manager`/`_build_marlin_tensor_promoter`
+  restano gli unici pezzi CUDA-touching mai eseguiti su hardware reale
+  in QUESTA integrazione, non toccati da Fase 0-3).
+- `hot_fraction` (default 0.5 in `classify_hot_cold()`) non calibrato —
+  issue #24 (misura transfer-vs-compute reale) resta aperta e non gated
+  da questo lavoro.
+- Fase 4 (valutare se serve il job ring stile `MoeCpuHost`, o se
+  l'in-process round-trip di Fase 2/3 basta) e Fase 5 (benchmark
+  end-to-end reale) restano da fare.
+- Branch: `claude/ddr4-ram-processing-unzseh`.
+
+Next session: Fase 4 (misurare l'overhead del round-trip in-process prima
+di decidere se serve un meccanismo di sync separato) o Fase 5 (benchmark
+end-to-end su hardware reale, `bench_hybrid.py`) — decisione del project
+owner. Il piano originale gate-a Fase 4 su "skip se l'overhead è
+trascurabile rispetto al tempo di compute AVX-512" — quel numero non
+esiste ancora.
