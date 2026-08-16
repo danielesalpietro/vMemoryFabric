@@ -128,9 +128,8 @@ vMemoryFabric/                  (repo root)
     ├── src/
     │   ├── eat/              # M1 — Expert Access Table
     │   │   ├── types.py      #   EATEntry, Tier, ExpertID, SHARD_SIZE_MB
-    │   │   ├── bloom.py      #   BloomFilter 2-level
     │   │   ├── slab.py       #   SlabAllocator (DDR4 / future PMEM)
-    │   │   └── eat.py        #   ExpertAccessTable (main class)
+    │   │   └── eat.py        #   ExpertAccessTable — selectable locking strategy (issue #23)
     │   ├── tier/             # M2 — EMH Tier Manager
     │   │   ├── io.py         #   AsyncNVMeIO (asyncio proxy for io_uring)
     │   │   ├── gpu.py        #   GPUTransfer (DDR4 → VRAM, no pinned)
@@ -167,9 +166,9 @@ vMemoryFabric/                  (repo root)
 | 0      | Environment + skeleton | 1–2 | ✅ **Karlshamn** (100%) |
 | 1      | M1 — EAT               | 3–4 | ✅ **Möllstorp** (~92%) |
 | 2      | M2 — Tier Manager      | 5–6 | ✅ **Eketorp** (~85%) |
-| 3      | M3 — Expert Scheduler  | 7–8 | 🟡 in progress (~80%) — **Oskarshamn** |
-| 4      | Integration + benchmarks | 9–12 | ✅ **Tekniska** (100%) (branch `Sprint-4-Tekniska`) |
-| 5      | PoC delivery + paper   | 13–16 | 🟡 planning (~10%) — **Berg** |
+| 3      | M3 — Expert Scheduler  | 7–8 | ✅ **Oskarshamn** (100%) — merged into `develop` 2026-08-14 (PR #9) |
+| 4      | Integration + benchmarks | 9–12 | ✅ **Tekniska** (100%) — merged into `develop` 2026-08-14 (PR #29) |
+| 5      | PoC delivery + paper   | 13–16 | 🟡 planning — **Berg** |
 | 6      | Telemetry + observability dashboard | TBD | 🔲 pending (~10%) — **Stockholm** |
 
 Percentages are grounded in code/test/hardware verification, not label
@@ -177,6 +176,22 @@ carry-over — updated 2026-08-13 with Sprint 4 (Tekniska) complete: all 7
 sub-goals of issue #17 closed, including two real bugs found and fixed on
 real hardware along the way (Marlin's TierManager transfer, path 1 under
 real offload) and a final MMLU quality number for every wired path.
+
+**Correction (2026-08-14):** Sprint 3 (Oskarshamn) and Sprint 4 (Tekniska)
+were both "done" by the criteria above for days before either reached
+`develop` — the real implementation lived on `Sprint-3-Oskarshamn` and
+`claude/sprint-5-berg-plan-e4dsc3` (not `Sprint-4-Tekniska`, which never
+existed as a branch), unmerged. `develop` itself was still running the
+Sprint 0/1 stub implementations of M2/M3 (`raise NotImplementedError`)
+this whole time. Both branches, plus the two that were cut from them
+(`claude/log-folder-organization-uh5f1a`, `claude/rlock-data-quality-9pcxzq`),
+were merged in sequence via PRs #9, #29, #25, #26 — resolving conflicts
+that were themselves informative: mostly a one-time repo-wide `ruff --fix`
+(PR #11) colliding line-for-line with unrelated feature work, plus one
+real design conflict (the Bloom filter's removal vs. a since-superseded
+fix for its false-positive leak, PR #13, closed rather than merged). See
+`osx-poc/reports/sprint5_berg_plan.md` §0 for the extended version of the
+issue-tracker-hygiene rule this prompted.
 
 **Sprint 1 (Möllstorp, ~92%):** M1 (EAT) is implemented and unit-tested.
 Three real, measured defects were left open across two subsequent
