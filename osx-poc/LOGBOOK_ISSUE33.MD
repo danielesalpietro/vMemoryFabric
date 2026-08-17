@@ -1330,3 +1330,77 @@ a scala reale lì (visto che WSL2 comunque non blocca questo benchmark
 specifico — nessun pin_memory coinvolto — un pod RunPod serve qui solo
 per una CPU AVX-512 diversa/più rappresentativa, non per aggirare un
 limite di questa macchina).
+
+---
+
+## 2026-08-17 (continued) — pod RunPod per issue #33 provisionato: Malmö
+
+**Release:** nessuna — solo setup, in preparazione all'esecuzione reale del
+piano di test concordato (Punto 2: regressione baseline 16/32/64/570 ×2;
+Punto 3: conferma esplicita del no-op CPU-offload su path 2/3 a 16/32).
+
+### Pod, dal project owner (non ancora verificato via SSH — vedi sotto)
+
+```
+Pod name:        vMemoryFabric - Malmö - CPU Offload DDR
+GPU:              RTX A6000 x1 (GA102, CC 8.6 — stessa famiglia di
+                  RTX 3090/A5000, 48GB VRAM invece di 24, solo margine
+                  in più rispetto alla memory math esistente)
+vCPU:             9 (Intel Xeon Gold 6342 @ 2.80GHz — Ice Lake-SP, 3ª
+                  gen Xeon Scalable — a differenza dell'AMD EPYC 7763
+                  di Sprint 4, gli Ice Lake Xeon Scalable hanno AVX-512
+                  nativo; DA VERIFICARE via /proc/cpuinfo appena su, non
+                  assunto dalla scheda prodotto, stessa disciplina di
+                  sempre)
+Memory:           50 GB
+Container disk:   50 GB
+Pod volume:       128 GB, mount path /data/nvme diretto (a differenza di
+                  Sprint 4, dove il Network Volume si montava forzato su
+                  /workspace e serviva un `ln -s` manuale — qui non
+                  serve, parte già allineato a MODEL_PATH/TierManager)
+Pricing:          $0.53/hr compute + $0.007/hr container storage +
+                  $0.018/hr volume storage = $0.55/hr totale
+Base image:       ghcr.io/danielesalpietro/vmemoryfabric:sprint-4-tekniska
+                  (precedente a issue #33 — serve git checkout dei
+                  sorgenti freschi, vedi sotto, non un rebuild immagine:
+                  i layer pesanti CUDA/torch/vLLM non sono cambiati)
+```
+
+**Nome**: continua la convenzione di codename svedesi già in uso nel
+progetto (Sprint: Karlshamn...Stockholm, Berg, Marstrand) — Malmö per il
+lavoro CPU-offload DDR4 di issue #33 specificamente, non un nuovo Sprint
+numerato.
+
+**Checkpoint**: quasi certamente il volume è vuoto (stesso caso di
+Sprint 4, primo pod) — non un problema pratico questa volta, confermato
+dal project owner: il download da HuggingFace su RunPod è nell'ordine
+dei secondi, non richiede pianificazione anticipata come temuto
+inizialmente.
+
+### Non ancora risolto: accesso SSH
+
+Stesso problema ricorrente già documentato in `LOGBOOK.md` 2026-08-11
+("Access: SSH only, no direct network path from this Claude session" —
+l'egress di rete di questa sessione è allowlisted a domini specifici,
+`runpod.io`/`api.runpod.io` danno `403` dal proxy dell'ambiente, SSH
+diretto sulla porta 22 va in timeout). Il project owner aggiorna la
+chiave SSH da console web RunPod per darmi accesso diretto — non ancora
+completato al momento di questo log.
+
+### Current state
+
+- Pod in fase di provisioning/setup, non ancora verificato via SSH.
+- Nessuna delle verifiche pianificate (AVX-512 reale, spazio disco,
+  sincronizzazione sorgenti) ancora eseguita — solo le specifiche
+  dichiarate dal project owner, non confermate da comandi reali su
+  questa macchina.
+- Piano di test concordato (Punto 2 + Punto 3, comandi già preparati
+  nella sessione precedente) pronto a partire appena l'accesso è
+  disponibile.
+- Branch: `claude/ddr4-ram-processing-unzseh`.
+
+Next session: appena l'SSH è disponibile — verificare AVX-512
+(`/proc/cpuinfo`), spazio disco (`df -h`), sincronizzare i sorgenti
+(`git fetch && git checkout claude/ddr4-ram-processing-unzseh`), poi
+eseguire il piano di test già concordato (Punto 2 baseline ×2, Punto 3
+conferma no-op a 16/32).
