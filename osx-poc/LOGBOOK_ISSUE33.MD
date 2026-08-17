@@ -3175,3 +3175,20 @@ per capire se è overhead di dispatch, allocazione, o genuino limite di
 throughput per-core di questo tipo di istanza RunPod, prima di
 proporre un fix. Non bloccante: la feature resta opt-in e sicura anche
 senza quella risposta.
+
+**Direzione proposta dal project owner, non ancora scoping-ata**: la
+sessione di oggi ha misurato prestazioni ad-hoc (thread count, tempo
+per-chiamata) senza un framework sistematico — l'idea è produrre due
+report distinti e riutilizzabili invece di continuare a misurare cose
+diverse ogni volta: (1) un **performance-test** che caratterizzi
+sistematicamente il "terreno di gioco" hardware di un pod (CPU: core
+reali/AVX support/throughput matmul isolato, RAM: banda/latenza,
+GPU/VRAM: già ben coperto da telemetria esistente, PCIe: banda
+pinned/pageable — `bench_pcie_bandwidth_wsl2.py` già esiste ma mai
+eseguito su RunPod), e (2) un **performance-tuning** che usi quei dati
+per proporre configurazioni (thread count, batch size, ecc.) invece di
+tentativi isolati come il test A/B di oggi. Non ancora deciso: formato
+dei report, se vivono come script in `scripts/`, dove si inserisce
+rispetto al lavoro esistente (`bench_pcie_bandwidth_wsl2.py`,
+`bench_hybrid.py`, `bench_route_forward.py` — verificare sovrapposizioni
+prima di iniziare, non duplicare).
