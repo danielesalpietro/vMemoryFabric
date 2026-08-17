@@ -394,6 +394,15 @@ innocuo ma fonte di confusione inutile.
   offload), questo file ne è solo l'indice operativo.
 - `reports/` — report finali per issue/sprint chiusi (non aggiornati
   live, solo a chiusura).
+- `benchmarks/perf_test_hardware.py` + `benchmarks/perf_tuning_report.py`
+  (`make perf-test-hardware` / `make perf-tuning-report`, issue #33
+  "continued 19") — framework riutilizzabile per caratterizzare
+  CPU/RAM/GPU/PCIe di un host/pod e derivarne raccomandazioni (thread
+  count, budget RAM CPU-pool, verdetto cpu-offload). Rieseguirlo su un
+  pod/host NUOVO invece di ripetere a mano un test A/B thread-count o un
+  microbenchmark GFLOPS isolato — è esattamente il lavoro che quei due
+  script fanno già, con l'esito annotato contro i dati già noti (range
+  24-26x pipeline / 44.6x isolato) invece di un numero isolato.
 - Questo file va aggiornato ogni volta che emerge un nuovo "known
   issue" riutilizzabile (sezione 5) o una nuova pratica di processo che
   vale la pena rendere default (sezioni 1-4, 6) — non lasciarlo fermo

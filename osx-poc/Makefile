@@ -58,6 +58,18 @@ bench-route-forward:
 bench-hybrid:
 	$(RUN) python benchmarks/bench_hybrid.py
 
+# ── Performance framework (issue #33, riutilizzabile oltre l'issue) ────────────
+# perf-test-hardware caratterizza CPU/RAM/GPU/PCIe di questo host/pod;
+# perf-tuning-report legge quel JSON e produce raccomandazioni (thread count,
+# budget RAM CPU-pool, verdetto cpu-offload) — vedi i docstring dei due script
+# per come sono ancorati ai dati già misurati in LOGBOOK_ISSUE33.MD.
+
+perf-test-hardware:
+	$(RUN) python benchmarks/perf_test_hardware.py
+
+perf-tuning-report:
+	$(RUN) sh -c "python benchmarks/perf_test_hardware.py | python benchmarks/perf_tuning_report.py"
+
 # ── Diagnostic repros (manual, not wired into CI) ───────────────────────────────
 # Requires the real checkpoint on disk (/data/nvme/models/mixtral-instruct-awq)
 # and a real GPU — not CI-safe (some variants are designed to crash, that's the
@@ -121,6 +133,8 @@ help:
 	@echo "  make test-cpu-kernel pytest issue #33 Fase 1 (CPU kernel, no GPU needed)"
 	@echo "  make bench        Benchmark M1 + M2"
 	@echo "  make bench-cpu-kernel  Benchmark issue #33 Fase 1 (CPU forward throughput)"
+	@echo "  make perf-test-hardware  Caratterizza CPU/RAM/GPU/PCIe di questo host/pod (issue #33)"
+	@echo "  make perf-tuning-report  Raccomandazioni (thread/RAM/cpu-offload) da perf-test-hardware"
 	@echo "  make gpu-repro-issue10  Diagnostic repros, issue #10 offload crash (manual, one at a time)"
 	@echo "  make lint         Ruff linter"
 	@echo "  make typecheck    mypy"

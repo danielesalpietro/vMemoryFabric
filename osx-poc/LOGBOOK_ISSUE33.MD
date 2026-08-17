@@ -3358,3 +3358,135 @@ richieste' o un timer, mai deciso quale"). Non implementato in questa
 sessione — prerequisiti: il dato di costo promote/evict (verificare se
 esiste già), un thread/timer di background in `GCSGWorker`, e una
 decisione tra cadenza fissa (60s) vs. basata su conteggio richieste.
+
+---
+
+## 2026-08-17 (continued 19) — framework performance-test/performance-tuning, scoping-ato e implementato
+
+**Release:** sì — `benchmarks/perf_test_hardware.py` (nuovo),
+`benchmarks/perf_tuning_report.py` (nuovo), `Makefile` (due nuovi target
++ help). Nessuna modifica a `scheduler/gcsg.py` o ad altro codice di
+produzione — sessione di tooling, non di sviluppo GCSG.
+
+### What we set out to do
+
+Riprendere la direzione proposta a fine "continued 18" ma mai
+scoping-ata: invece di misure ad-hoc ripetute ogni volta (thread A/B,
+GFLOPS isolati, PCIe — ognuna con la propria metodologia), costruire due
+report riutilizzabili — un **performance-test** che caratterizzi
+sistematicamente CPU/RAM/GPU/VRAM/PCIe di un host/pod, e un
+**performance-tuning** che ne derivi raccomandazioni.
+
+### What we did
+
+1. **Verificate le sovrapposizioni prima di iniziare** (richiesto
+   esplicitamente in "continued 18"): letti `bench_cpu_kernel.py`
+   (Fase 1), `bench_route_forward.py` (Fase 4), `bench_hybrid.py`
+   (Fase 5), `bench_pcie_bandwidth_wsl2.py`, `bench_awq_cpu_pipeline.py`.
+   Nessuno caratterizza l'hardware in modo generico — sono tutti legati
+   a un path di codice GCSG specifico. Nessuna duplicazione.
+2. **`benchmarks/perf_test_hardware.py`** — quattro sezioni, sempre
+   `{"status": "done"|"skipped", ...}`, mai un numero inventato (stesso
+   pattern di `bench_cpu_kernel.py`):
+   - `cpu`: core cgroup-aware (`_read_cgroup_cpu_count()`, nuovo —
+     gemello CPU di `_read_cgroup_available_gb()`, che non aveva un
+     equivalente per la CPU nel codebase), flag AVX2/AVX-512/AVX-512-VNNI
+     letti da `/proc/cpuinfo` (non dedotti dal nome CPU — esattamente
+     l'errore fatto in "continued 17" con l'EPYC 7C13), throughput
+     matmul isolato (GFLOPS) a batch 1/8/32.
+   - `ram`: GB cgroup-aware (riusa `_read_cgroup_available_gb()` da
+     `scheduler.gcsg`, già in produzione), banda copy GB/s.
+   - `gpu`: singola lettura NVML (nome, VRAM, driver, compute
+     capability) + la STESSA identica operazione matmul della sezione
+     cpu (stessa funzione condivisa `_bench_matmul_gflops(device)`), per
+     un rapporto CPU/GPU comparabile, non due metodologie diverse.
+   - `pcie`: pinned/pageable H2D/D2H a varie dimensioni, generalizzato
+     da `bench_pcie_bandwidth_wsl2.py` (creato per un dubbio specifico a
+     WSL2, mai eseguito altrove prima di "continued 17") — inline,
+     nessun cross-import tra script (stessa convenzione di
+     `bench_awq_cpu_pipeline.py`).
+3. **`benchmarks/perf_tuning_report.py`** — legge il JSON del primo,
+   produce raccomandazioni ancorate a fatti già misurati per issue #33,
+   non euristiche generiche: verdetto cpu-offload (rapporto GFLOPS
+   CPU/GPU, annotato contro il range già osservato 24-26x
+   pipeline/44.6x isolato), thread count che distingue esplicitamente
+   pool-build (parallelizzabile) da forward per-token (falsificato che
+   aiuti, §5.11 del bootstrap), budget RAM CPU-pool (stesse costanti di
+   `GCSGWorker._check_cpu_ram_budget()`, ~3GB/expert path1 e ~21.5GB/
+   expert path AWQ), flag PCIe (sotto 3GB/s pinned = sospetto
+   WSL2/GPU-PV), e un segnale (non un'implementazione — la direzione
+   "batching GEMV→GEMM" resta scelta non presa in questa sessione) sul
+   guadagno potenziale batchando, rapporto GFLOPS batch32/batch1.
+4. **Due nuovi target Makefile** (`perf-test-hardware`,
+   `perf-tuning-report`) + entry in `make help`, stesso stile di
+   `bench-cpu-kernel`.
+5. **Eseguito realmente sullo Z8 (Xeon Gold 6244 + RTX 3090)**, non solo
+   compilato — sia a dimensioni sintetiche di default sia a dimensioni
+   Mixtral reali (`OSX_BENCH_HIDDEN=4096 OSX_BENCH_INTERMEDIATE=14336`),
+   `ruff check` pulito, suite `pytest` completa (168 test, invariata)
+   ancora verde.
+
+### Result
+
+Il framework produce un segnale genuinamente calibrato, non solo
+"gira senza errori": a dimensioni sintetiche piccole (default,
+hidden=512/intermediate=1536) il rapporto CPU/GPU misurato sullo Z8 è
+solo **1.7x** — e `perf_tuning_report.py` lo segnala correttamente come
+**"FUORI dal range già osservato"** (24-26x sul pod RunPod, AMD EPYC
+7C13 SENZA AVX-512) invece di assumere che le conclusioni si
+trasferiscano. A dimensioni Mixtral reali, lo stesso host produce
+**16.9x** — **"coerente con il range già osservato"**. La differenza
+tra i due numeri sullo STESSO host (1.7x vs 16.9x, solo cambiando le
+dimensioni della matmul) è di per sé un dato utile: conferma che il
+confronto CPU/GPU è sensibile alla dimensione del problema, non solo
+all'hardware — motivo per cui il tool espone `OSX_BENCH_HIDDEN`/
+`OSX_BENCH_INTERMEDIATE` invece di un solo numero fisso.
+
+Altri numeri raccolti sullo Z8 in questa run (per riferimento, non
+normativi — lo scopo del tool è essere rieseguito, non produrre un
+numero "canonico" una volta sola): 28 core cgroup, AVX-512F presente
+(NO AVX-512-VNNI), 432GB RAM cgroup disponibile (135 expert path1/18
+expert path AWQ nel budget), banda copy RAM ~19.5 GB/s, PCIe pinned
+~11-12 GB/s H2D/D2H (nessun tetto WSL2/GPU-PV rilevato su questo host —
+coerente con l'assenza del warning `pin_memory=False`, questo è Docker
+Desktop nativo, non lo stesso ambiente WSL2 problematico di
+"continued 16"), segnale batching ~8-12x (core CPU oggi idle durante il
+forward single-token, coerente con la causa già isolata in
+"continued 17").
+
+### Why this matters
+
+- L'obiettivo esplicito del project owner ("due report riutilizzabili
+  invece di misure ad-hoc") è centrato: la prossima volta che serve un
+  numero di questo tipo (nuovo pod, nuovo host, dopo un cambio hardware)
+  non serve reinventare la metodologia — `make perf-test-hardware &&
+  make perf-tuning-report` (o lo stesso via pipe) la restituisce in un
+  formato consistente.
+- Il framework non sostituisce il ragionamento — lo automatizza dove il
+  ragionamento è già stabilito (es. "non aumentare i thread per il
+  forward per-token", falsificato con dati in "continued 17") e lo
+  segnala esplicitamente come incerto dove non lo è (il verdetto
+  cpu-offload si auto-qualifica come coerente o meno col range noto,
+  invece di spacciare un numero isolato per una conclusione).
+- Nessun rischio per il path di produzione: zero modifiche a
+  `scheduler/gcsg.py`, solo due nuovi script standalone + Makefile.
+
+### Current state
+
+- Codice: da committare e pushare su `claude/ddr4-ram-processing-unzseh`
+  (PR #42 verso `develop`) subito dopo questo entry.
+- File temporanei di smoke-test (`_smoke_hw.json`, `_smoke_hw_real.json`,
+  creati dentro il container per la verifica end-to-end) già rimossi,
+  non nel diff.
+- Non ancora fatto, deliberatamente fuori scope di questa sessione:
+  eseguire il framework su un pod RunPod reale (solo Z8 misurato qui) —
+  utile prossimo passo per confrontare il rapporto CPU/GPU su hardware
+  senza AVX-512, il caso che ha originato tutta l'indagine performance.
+
+Next session: nessuna azione bloccante. Se si riprende issue #33 sulla
+performance: rieseguire `make perf-tuning-report` su un pod RunPod
+(AMD EPYC, no AVX-512) per confermare che il verdetto torni coerente col
+range già noto (24-26x), poi scegliere tra le direzioni ancora aperte
+(issue #27 EPM, refresh periodico 60s, batching GEMV→GEMM — quest'ultima
+ora con un segnale quantitativo concreto da questo stesso framework,
+~8-12x sullo Z8, invece di essere solo un'ipotesi).
