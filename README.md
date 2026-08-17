@@ -4,7 +4,7 @@ A heterogeneous multi-tier memory fabric for MoE and LLM inference. Hot AI objec
 
 Developed under the internal codename **OSX** ("Operating System for Experts") — a system-level framework for managing the lifecycle of experts in Mixture-of-Experts (MoE) large language models. It treats experts as first-class objects governed by a dedicated runtime, with hierarchical memory placement, predictive prefetching, gating-aware scheduling, and adaptive replication.
 
-> *Current release: **Tekniska** (v0.5.0-dev) — August 13, 2026 — previous: Oskarshamn (v0.4.0-dev), Eketorp (v0.3.0-dev), Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev). Sprint 4 complete; Sprint 5 (PoC delivery + paper, codename **Berg**) in planning — see [`osx-poc/reports/sprint5_berg_plan.md`](osx-poc/reports/sprint5_berg_plan.md).*
+> *Current release: **Tekniska** (v0.5.0-dev), last updated August 17, 2026 — previous: Oskarshamn (v0.4.0-dev), Eketorp (v0.3.0-dev), Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev). Sprint 4 complete; Sprint 5 (PoC delivery + paper, codename **Berg**, in progress since Aug 13) — see [`osx-poc/reports/sprint5_berg_plan.md`](osx-poc/reports/sprint5_berg_plan.md). Issue #33 (DDR4 compute-offload tier), opened mid-Berg, has correctness closed and performance measured but open — see Sprint 5 below and PR [#42](https://github.com/danielesalpietro/vMemoryFabric/pull/42).*
 
 ---
 
@@ -406,6 +406,34 @@ sandbox CI and on real hardware (`Z8-G4-RTX3090`, `full-gpu-tests` run
 #150) — see "Known limitations / open issues" below and
 `osx-poc/reports/poc_final_report.md` §1.2 for the full before/after
 numbers. #2 and #23 are closed.
+
+**Issue #33 — DDR4 compute-offload tier**, exploratory work opened
+mid-Berg (2026-08-16) and substantial by the time this README caught up
+with it (~22 working sessions, `osx-poc/LOGBOOK_ISSUE33.MD`): a
+CPU/DDR4-resident shadow-expert path for cold MoE experts, kept
+entirely opt-in and off by default (`GCSGWorker(enable_cpu_offload=...)`,
+zero behavior change unless enabled). **Correctness is closed**:
+`_ShadowExpertINT4` needed no new CPU kernel (device-agnostic by
+construction), and a CPU-side AWQ dequant path was added for the
+project's real quantized checkpoint (path 1 alone never touches it) —
+verified numerically against the real CUDA AWQ kernel, then on real
+hardware across three independent GPU-only/CPU-only/mixed comparisons,
+all landing at identical accuracy and identical shadow-activation
+counts. **Performance is not production-ready**: the CPU forward is
+17–570× slower than GPU, depending on host — root-caused to a
+genuinely memory-bandwidth-bound single-row GEMV (not a config bug),
+backed by a new reusable characterization tool
+(`benchmarks/perf_test_hardware.py` + `perf_tuning_report.py`,
+`make perf-test-hardware`/`perf-tuning-report`, 38 unit tests)
+validated on three real hosts — see
+[`logs/runpod_perf_framework_validation_20260817/COMPARISON_ANALYSIS.md`](logs/runpod_perf_framework_validation_20260817/COMPARISON_ANALYSIS.md).
+Counter-intuitive finding from that comparison: newer hardware made the
+gap *worse*, not better, on the one H200 pod measured — see issue #33's
+row in "Known limitations / open issues" below and follow-on issue
+[#45](https://github.com/danielesalpietro/vMemoryFabric/issues/45).
+Branch `claude/ddr4-ram-processing-unzseh`, PR
+[#42](https://github.com/danielesalpietro/vMemoryFabric/pull/42) into
+`develop`, open — not yet merged.
 
 Sprint 6 (Stockholm) is a new leg, added without reordering or reweighting
 Sprints 0–5 above — those stay exactly as planned. Named deliberately:
