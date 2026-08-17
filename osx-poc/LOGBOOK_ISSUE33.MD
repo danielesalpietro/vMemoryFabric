@@ -2011,3 +2011,90 @@ genuinamente utile, non un problema già risolto altrove e ignorato.
 
 Next session: come sopra — Passo 2 del proof-of-path (parità numerica),
 usando `fused_moe_kernel_gptq_awq` come riferimento.
+
+---
+
+## 2026-08-17 (continued 8) — Cambio di prospettiva discusso: CPU-first invece di GPU-first, aperta issue #44
+
+**Release:** nessuna — solo discussione + housekeeping (issue tracker).
+
+### What we set out to do
+
+Il project owner ha posto una domanda di fondo, non incrementale: e se
+invertissimo la prospettiva? Oggi issue #33 è GPU-first (modello
+VRAM-resident, Fase 6 aggiunge CPU offload opt-in per i soli expert
+freddi). E se fosse **CPU-first** — modello DDR4-resident per
+costruzione, GPU come acceleratore/cache solo per il sottoinsieme caldo?
+
+### What we did
+
+Discussione (nessuna ricerca nuova — riusa i finding già raccolti su
+MoE-Infinity nella sessione OpenVINO di oggi). Valutazione:
+
+**A favore**: coerente con la gerarchia EMH che il progetto dichiara
+(NVMe→DDR4→VRAM, promozione verso l'alto — non "VRAM con overflow").
+Sostenuto dai numeri reali già raccolti per issue #33: Z8 centinaia di GB
+DDR4 vs 24GB VRAM, pod Malmö 503GiB RAM vs 46GB VRAM (`logs/malmo_runpod/
+SUMMARY.md`) — un modello CPU-first non ha mai pressione di memoria GPU
+per costruzione, elimina l'aritmetica fragile di "quanti shadow expert
+entrano in VRAM" che oggi esiste solo perché il modello parte
+GPU-resident (`GCSGGuard.__init__`, memory math in `gcsg.py`).
+
+**Il punto decisivo**: MoE-Infinity (già valutato per Fase 6/OpenVINO,
+sessione precedente) non è solo "rilevante come riferimento di design" —
+è **esattamente** l'architettura CPU-first con cache GPU
+activation-aware che questa domanda descrive, già maturo e benchmarked.
+Decisione di principio: se si procede, si eredita il design (e dove
+possibile il codice, licenza MIT da riverificare puntualmente prima di
+qualunque porting) di MoE-Infinity, non lo si reinventa da zero dentro
+`TierManager`/`GCSGWorker` — stesso principio già seguito per `MoeCpuHost`
+di exllamav3 nell'apertura originale di issue #33.
+
+**Perché è issue separata, non estensione di Fase 6**: Fase 6 è
+incrementale dentro l'architettura GPU-first esistente (path canonico
+invariato). Questa domanda tocca *quale tier è quello canonico* — stessa
+classe di decisione di #43 (sostituire un motore), non "aggiungere un
+percorso opt-in". Trattarla come parte di Fase 6 avrebbe rischiato di
+far deragliare il proof-of-path già in corso (sessione parallela,
+Passo 2 pendente) dentro una domanda architetturale molto più grande.
+
+Aperta **issue #44** (sub-issue di #33): contesto, motivazione coi numeri
+reali, principio "eredita MoE-Infinity, non reinventare", proposta di
+interfaccia non-distruttiva (`GCSGWorker.configure_serving_mode(mode:
+"gpu_first"|"cpu_first")`, default invariato), criteri di non-avvio
+(aspettare l'esito di Fase 6; oppure un caso reale dove GPU-first con
+overflow selettivo smette di bastare per capacità, non solo velocità;
+oppure conferma puntuale della licenza MoE-Infinity prima di qualunque
+porting di codice).
+
+### Result
+
+Nessuna decisione di procedere — la domanda è registrata con un percorso
+di valutazione esplicito invece di restare una divagazione a voce.
+Entrambe le issue #43 e #44 condividono lo stesso principio: non
+bloccare/deragliare Fase 6a (proof-of-path in corso nella sessione
+parallela) per esplorare alternative più grandi, ma non perdere il filo
+del ragionamento nel frattempo.
+
+### Why this matters
+
+Con due sessioni attive sullo stesso branch, il rischio concreto di una
+domanda architetturale di questa portata era di competere per attenzione
+col lavoro di implementazione già a metà (Passo 2 del proof-of-path) o di
+essere dimenticata a fine sessione. Un'issue con criteri di rientro
+espliciti — stesso pattern già usato per #43 — risolve entrambi i
+problemi.
+
+### Current state
+
+- Issue #44 aperta, sub-issue di #33 (ora 2 sub-issue: #43 OpenVINO, #44
+  CPU-first/MoE-Infinity).
+- Nessuna modifica a codice in questa sessione.
+- Verificato via `git fetch` prima di scrivere e prima di pushare: nessun
+  commit nuovo dalla sessione parallela nel frattempo — nessun conflitto.
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session: seguire il thread principale (Passo 2 del proof-of-path,
+sessione parallela) — #43 e #44 restano in attesa dei rispettivi criteri
+di rivalutazione, non prossimi passi attivi.
