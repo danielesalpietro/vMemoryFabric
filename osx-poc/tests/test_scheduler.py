@@ -1284,6 +1284,39 @@ class TestGCSGRouteForward:
 
         assert calls == [("gpu", "hs", 3)]
 
+    def test_route_forward_force_cpu_env_var_overrides_hot_classification(self, monkeypatch):
+        """OSX_GCSG_FORCE_CPU_ROUTE (issue #33, 2026-08-17 — benchmark
+        "solo CPU" controllato, richiesto dal project owner per
+        confrontare GPU-only/CPU-only/misto sullo stesso n=16): quando
+        impostata, un expert "caldo" ma presente nel pool CPU deve
+        comunque essere instradato a CPU."""
+        import torch
+        monkeypatch.setenv("OSX_GCSG_FORCE_CPU_ROUTE", "1")
+        calls = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: calls.append(("gpu", hs, lid))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: calls.append(("cpu", hs, lid))}
+        worker._hot_expert_ids = {0}   # "caldo" -> andrebbe su GPU senza l'override
+
+        hidden_states = torch.zeros(1)
+        worker.route_forward(expert_id=0, layer_id=3, hidden_states=hidden_states)
+
+        assert calls == [("cpu", hidden_states, 3)]
+
+    def test_route_forward_force_cpu_env_var_absent_keeps_default_behavior(self, monkeypatch):
+        """Assenza della env var: comportamento invariato bit per bit —
+        expert caldo va su GPU come sempre."""
+        monkeypatch.delenv("OSX_GCSG_FORCE_CPU_ROUTE", raising=False)
+        calls = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: calls.append(("gpu", hs, lid))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: calls.append(("cpu", hs, lid))}
+        worker._hot_expert_ids = {0}
+
+        worker.route_forward(expert_id=0, layer_id=3, hidden_states="hs")
+
+        assert calls == [("gpu", "hs", 3)]
+
     def test_route_forward_dispatches_cold_expert_to_cpu_pool(self):
         """hidden_states è un torch.Tensor CPU reale, non una stringa
         (come prima del bug fix sotto): route_forward() ora chiama

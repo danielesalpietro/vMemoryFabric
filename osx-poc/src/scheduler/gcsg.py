@@ -95,6 +95,7 @@ Hook vLLM — verificato contro il sorgente reale di vllm==0.6.6.post1
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -1736,10 +1737,20 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         in_gpu_pool = expert_id in self._shadow_pool
         in_cpu_pool = expert_id in cpu_pool
 
-        route_to_cpu = (
-            (in_gpu_pool and in_cpu_pool and expert_id not in hot_expert_ids)
-            or (in_cpu_pool and not in_gpu_pool)
-        )
+        # Debug/benchmark-only override (issue #33, 2026-08-17): a cold
+        # start (nessun traffico EAT reale ancora) la classificazione
+        # hot/cold è quasi arbitraria — non c'è un modo pulito, coi soli
+        # flag esistenti, di ottenere un confronto controllato "solo CPU"
+        # a fianco di "solo GPU" (--enable-cpu-offload assente) e "misto"
+        # (comportamento normale). Env var opt-in, non letta da nessun
+        # path di produzione — invariato bit per bit quando assente/falsy.
+        if os.environ.get("OSX_GCSG_FORCE_CPU_ROUTE") and in_cpu_pool:
+            route_to_cpu = True
+        else:
+            route_to_cpu = (
+                (in_gpu_pool and in_cpu_pool and expert_id not in hot_expert_ids)
+                or (in_cpu_pool and not in_gpu_pool)
+            )
         if route_to_cpu:
             if hidden_states.device.type != "cpu":
                 hidden_states = hidden_states.cpu()
