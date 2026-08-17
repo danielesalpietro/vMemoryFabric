@@ -217,6 +217,19 @@ def main() -> None:
              "still call this open).",
     )
     parser.add_argument(
+        "--enable-cpu-offload", action="store_true",
+        help="Opt-in, default off (issue #33 Fase 4: deliberatamente "
+             "disaccoppiato da --wire-tier-manager, non basta wirare un "
+             "TierManager da solo — vedi GCSGWorker.configure_cpu_offload()/ "
+             "_pending_enable_cpu_offload in scheduler/gcsg.py per il "
+             "perché). Attiva il routing CPU/DDR4-resident: gli expert "
+             "classificati 'freddi' (SEEPolicy.classify_hot_cold(), Fase 0) "
+             "girano su CPU invece che essere promossi in VRAM. Richiede "
+             "--wire-tier-manager per avere effetto — senza, il pool CPU "
+             "non viene mai costruito e questo flag è un no-op silenzioso "
+             "(stesso comportamento difensivo di _load_shadow_pool()).",
+    )
+    parser.add_argument(
         "--results-file", type=str, default=None,
         help="Se impostato (solo con --chunk-size), scrive una riga JSON per "
              "blocco completato — indice, range prompt, accuratezza del "
@@ -273,12 +286,23 @@ def main() -> None:
         _log("--wire-tier-manager: TierManager/EAT wired via "
              "GCSGWorker.configure_tier_manager().")
 
+    if args.enable_cpu_offload and not args.wire_tier_manager:
+        _log("ATTENZIONE: --enable-cpu-offload senza --wire-tier-manager — "
+             "no-op silenzioso, il pool CPU/DDR4-resident non verrà mai "
+             "costruito (issue #33 Fase 2/4 richiede entrambi). Probabile "
+             "errore d'uso, non un errore del programma.")
+    GCSGWorker.configure_cpu_offload(args.enable_cpu_offload)
+    if args.enable_cpu_offload:
+        _log("--enable-cpu-offload: routing CPU/DDR4-resident (issue #33) "
+             "attivato via GCSGWorker.configure_cpu_offload(True).")
+
     if args.quantization is not None:
         quantization = args.quantization
     else:
         quantization = "awq" if args.wire_tier_manager else "awq_marlin"
     _log(f"Loading {MODEL_PATH} via GCSGWorker (shadow execution active — issues #10/#16), "
-         f"quantization={quantization}, wire_tier_manager={args.wire_tier_manager}...")
+         f"quantization={quantization}, wire_tier_manager={args.wire_tier_manager}, "
+         f"cpu_offload_enabled={args.enable_cpu_offload}...")
     from vllm import LLM, SamplingParams
 
     llm = LLM(
@@ -359,6 +383,7 @@ def main() -> None:
                         "shadow_activations_cumulative": guard_stats_now["shadow_activations"],
                         "elapsed_s": time.monotonic() - START,
                         "tier_manager_wired": args.wire_tier_manager,
+                        "cpu_offload_enabled": args.enable_cpu_offload,
                         "quantization": quantization,
                     }) + "\n")
                     results_fh.flush()
@@ -395,6 +420,7 @@ def main() -> None:
                 "shadow_activations_cumulative": guard_stats_now["shadow_activations"],
                 "elapsed_s": time.monotonic() - START,
                 "tier_manager_wired": args.wire_tier_manager,
+                "cpu_offload_enabled": args.enable_cpu_offload,
                 "quantization": quantization,
             }) + "\n")
             fh.flush()
