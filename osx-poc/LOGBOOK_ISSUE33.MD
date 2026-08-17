@@ -2713,3 +2713,309 @@ validazione confermato (16→32→64→full 570 domande MMLU) con
 (28 core/436GB RAM/RTX3090 già disponibili) — confrontare i tempi
 WITH/WITHOUT il flag alla scala piena, oltre alla sola correttezza
 (accuracy MMLU già nota dover restare invariata, Fase 5/#17).
+
+---
+
+## 2026-08-17 (continued 15) — Registro interventi live: prima run reale cpu-offload su path AWQ, mai completata, indizio forte trovato
+
+**Release:** nessuna modifica a codice committata in questa sessione
+(solo script/telemetria locali, non ancora in git — vedi tabella sotto).
+Registro richiesto esplicitamente dal project owner ("memorizza tutte le
+change impostate... timestamp a mano, per valutare impatto ed eventuali
+rollback") — formato tabellare invece del solito prosa, per essere
+riutilizzabile come checklist di rollback.
+
+### What we set out to do
+
+Primo tentativo di eseguire il pattern di validazione confermato
+(16→32→64→full) con `--enable-cpu-offload` genuinamente attivo sul path
+AWQ (Fase 6a Passo 3, appena committato — 652b31a). Partito dal primo
+gradino (n=16). Il project owner ha chiesto in parallelo: raccolta
+telemetria host/docker/GPU con timestamp mappabili alle fasi del run, e
+verifica della banda PCIe reale (non solo il traffico osservato dal
+workload attuale).
+
+### Registro interventi, con timestamp reali
+
+| # | Timestamp (locale, +02:00) | Intervento | Stato attuale | Note rollback |
+|---|---|---|---|---|
+| 1 | 2026-08-17 13:46:06 | Commit `652b31a` — Fase 6a Passo 3 (dequant AWQ collegato a GCSGWorker), già pushato su `claude/ddr4-ram-processing-unzseh` | **Permanente** — in git, PR #42 | `git revert 652b31a` se necessario |
+| 2 | ~13:47 | Primo tentativo run n=16 `--enable-cpu-offload` (container `...4601a24ea13a`), SENZA tuning thread | **Terminato manualmente** (`docker stop`) a ~14:11, dopo 23.5 min senza risultato | n/a — container `--rm`, nessuna traccia residua. Log conservato come `run_n16_KILLED_thread_starved_23min_no_result.log` |
+| 3 | ~13:54:52 | Avvio sampler telemetria HOST (CPU/RAM/GPU), script `logs/z8_local/telemetry_fase6a/host_sampler.ps1`, processo PowerShell staccato (`Start-Process -WindowStyle Hidden`), tetto 7200s | **Attivo** — terminerà da solo verso le 15:54:52 se non fermato prima | `Stop-Process` sul PID, o atteso self-timeout. Script non committato (solo locale) |
+| 4 | ~13:55:03 | Avvio sampler `docker stats`, script `/tmp/docker_stats_sampler.sh` (bash, `nohup`+`disown`), tetto 7200s | **Attivo** — terminerà verso le 15:55 | Script vive in `/tmp` DENTRO il container dev (non nel repo, non persistente oltre il riavvio WSL2) — se serve riprodurlo va ricreato |
+| 5 | 14:11:22 | Secondo tentativo run n=16, questa volta con `-e OMP_NUM_THREADS=28 -e MKL_NUM_THREADS=28` passati sia a `docker compose run` sia inline prima del comando Python (container `...e37af10a082f`) | **Terminato forzatamente** (`docker kill`) alle 14:47:46, dopo 35.5 min (T+2130s) — MAI completato, nessun risultato prodotto | Nessuna traccia residua (container `--rm`). Flag non persistiti in nessun file — da riapplicare manualmente ad ogni run finché non si decide di metterli in `docker-compose.yml`/nello script |
+| 6 | ~14:22:17 | Avvio sampler PCIe (`nvidia-smi dmon -s t`), script `logs/z8_local/telemetry_fase6a/pcie_sampler.ps1`, tetto 7200s | **Attivo** — terminerà verso le 16:22 | Come #3, `Stop-Process` o self-timeout. Script non committato |
+| 7 | ~14:35 | Creato `osx-poc/scripts/bench_pcie_bandwidth_wsl2.py` (microbenchmark pinned vs pageable, CPU↔GPU, isolato da vLLM) | **Non ancora eseguito** — file presente, non committato | File nuovo, safe da rimuovere se non serve più |
+| 8 | 14:41:35–14:47:46 | Watchdog interno dello script (`--watchdog-timeout` default 1800s) ha tentato SIGTERM poi SIGKILL su se stesso (PID 1 del container) — **entrambi inefficaci**, il processo è rimasto vivo altri ~10 min oltre il SIGKILL loggato | **Osservato, non ancora corretto nel codice** | Nessuna modifica di codice fatta — solo osservazione. Fix eventuale: il watchdog di `eval_mmlu_gcsg.py` andrebbe ridisegnato per non fare affidamento su self-SIGKILL da PID 1 in un namespace container (vedi "Why this matters") |
+| 9 | 14:47:46 | `docker kill` da HOST (fuori dal container) sul container del punto #5 — riuscito immediatamente, a differenza del self-SIGKILL interno | Container rimosso (`--rm`) | n/a |
+
+Telemetria raccolta finora (file ancora attivi, righe correnti al
+momento di scrivere): `host_perf.csv` (297 righe), `gpu_telemetry.csv`
+(297 righe), `docker_stats.csv` (267 righe), `pcie_throughput.csv` (294
+righe) — tutte in `logs/z8_local/telemetry_fase6a/`, timestamp ISO,
+cadenza 10s (5s per PCIe).
+
+### What we did (sintesi tecnica)
+
+Nessuna delle due run n=16 è arrivata a un risultato. La prima (senza
+tuning thread) è stata fermata manualmente dopo 23.5 min per applicare
+`OMP_NUM_THREADS=28`/`MKL_NUM_THREADS=28` (richiesta esplicita del
+project owner, per escludere che il collo di bottiglia fosse
+sotto-parallelizzazione banale). La seconda, CON quel tuning, non solo
+non ha finito prima ma è arrivata al timeout interno di 30 minuti dello
+script stesso (`--watchdog-timeout` default) senza produrre risultato,
+ed è stata terminata a forza da fuori. Il tuning thread ha mostrato un
+miglioramento parziale ma non decisivo (CPU container: ~270% senza
+tuning → picchi 350-440% con tuning, mai vicino ai 28 core disponibili).
+
+Durante l'attesa, indagati due indizi:
+- **PCIe reale**: `nvidia-smi dmon -s t` funziona su questa RTX 3090
+  (non tutte le metriche NVML sono ristrette su GeForce) — traffico
+  osservato ~2.3 GB/s TX / ~800 MB/s RX, ma BURSTY, non uno stream
+  continuo. Discussa e respinta l'ipotesi che questo numero rappresenti
+  un "tetto" imposto da WSL2/GPU-PV: un workload che non sta cercando
+  di saturare il bus non misura il bus, misura solo se stesso — serve
+  il microbenchmark dedicato (`bench_pcie_bandwidth_wsl2.py`, creato ma
+  non ancora eseguito) per un numero vero.
+- **Casting silenzioso in `_ShadowExpertINT4.__call__()`** (indizio più
+  concreto, non ancora verificato con un profiler ma ad alta
+  confidenza): `w13 = w13_q.to(hidden_states.dtype) * w13_scale`
+  progettato per pesi INT8/INT4 compatti (Fase 1), dove il cast è quasi
+  gratuito. Sul path fp32-cache di Fase 6a, `w13_q` è GIÀ un tensore
+  fp32 di centinaia di MB — questa riga rialloca e ricalcola l'intero
+  tensore ad ogni singola chiamata (ogni token, ogni layer, ogni expert
+  freddo), invece di un costo one-time. Scala con
+  token × layer × expert-freddi, non con la dimensione del pool — il
+  candidato più forte finora per spiegare 35+ minuti senza risultato su
+  soli 16 prompt.
+
+### Result
+
+Nessun numero di accuratezza/tempo utilizzabile da questa sessione di
+run — entrambi i tentativi n=16 sono falliti a produrre un
+completamento. Ma il tempo non è stato sprecato: telemetria completa
+raccolta per tutta la finestra (utile per il post-mortem), un bug
+concreto identificato per lettura del codice (non ancora fixato), e un
+comportamento infrastrutturale nuovo scoperto (self-SIGKILL da PID 1
+inefficace sotto questo setup Docker/WSL2).
+
+### Why this matters
+
+Tre risultati distinti, tutti azionabili:
+1. **Il casting bug è la priorità**: va corretto in
+   `_ShadowExpertINT4.__call__()` PRIMA di ritentare qualunque run —
+   continuare a misurare tempi su un bug di performance noto produrrebbe
+   numeri che andrebbero ributtati via appena il fix arriva. Short-circuit
+   proposto: se `w13_q.dtype == hidden_states.dtype` e `w13_scale == 1.0`,
+   saltare cast+moltiplicazione e usare `w13_q` direttamente.
+2. **Watchdog interno non affidabile**: `eval_mmlu_gcsg.py` non può
+   più contare su un self-SIGKILL per garantire che un run non superi
+   `--watchdog-timeout` — serve un meccanismo di stop esterno (quello che
+   abbiamo appena usato manualmente, `docker kill` da host) finché la
+   causa raw non è isolata. Rilevante per QUALUNQUE run futuro non
+   presidiato (es. un batch 16→32→64→full lasciato girare incustodito).
+3. **PCIe non ancora un sospetto qualificato**: il traffico osservato
+   non è stato dimostrato essere un limite, solo un sintomo — non vale
+   la pena investire su pinned memory finché il casting bug (causa più
+   probabile e già isolata via lettura del codice) non è escluso.
+
+### Current state
+
+- Codice di produzione: invariato dal commit 652b31a (nessun fix
+  applicato ancora al casting bug).
+- File nuovi non committati: `osx-poc/scripts/bench_pcie_bandwidth_wsl2.py`,
+  `logs/z8_local/telemetry_fase6a/` (2 script PowerShell + 4 CSV in
+  crescita), `logs/z8_local/mmlu_fase6a_cpu_offload/run_n16.log` (run
+  fallita, MAI completata) e
+  `run_n16_KILLED_thread_starved_23min_no_result.log` (prima run
+  fallita).
+- Processi in background ancora attivi (vedi tabella): sampler
+  host/GPU (~15:54:52), sampler docker stats (~15:55), sampler PCIe
+  (~16:22) — tutti con tetto automatico, nessuno richiede intervento
+  immediato.
+- Nessun container Docker residuo — entrambi i tentativi di run sono
+  stati puliti (`--rm` + stop/kill espliciti).
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session (o proseguimento stessa sessione): applicare il
+short-circuit nel casting di `_ShadowExpertINT4.__call__()` (o una
+variante dedicata per il path fp32-cache), poi ritentare n=16 — solo
+DOPO quel fix ha senso rimettere in coda 32→64→full. Il microbenchmark
+PCIe (`bench_pcie_bandwidth_wsl2.py`) resta un passo indipendente,
+utile ma non bloccante.
+
+### Correzione (stessa sessione, poco dopo): la vera causa dominante era già in LOGBOOK.md, non ancora controllata
+
+Il project owner ha segnalato di controllare `LOGBOOK.md` (non
+`LOGBOOK_ISSUE33.MD`) prima di continuare a teorizzare — richiesta
+seguita, e ha cambiato la lettura. Entrambe le run n=16 di oggi
+mostrano, identico, questo warning (mai controllato finché non
+segnalato):
+
+```
+WARNING ... Using 'pin_memory=False' as WSL is detected. This may slow down the performance.
+```
+
+`LOGBOOK.md` (sessioni 2026-08-11/12, Sprint 4 Tekniska) documenta
+ESATTAMENTE questa stessa patologia, già diagnosticata e già risolta
+una volta: un run completo da 570 domande sotto WSL2
+(`pin_memory=False` forzato) ha impiegato **una notte intera**
+(18 slice da 32, orchestrate separatamente proprio per aggirare stall
+imprevedibili — una slice worst-case da sola ~30 minuti), mentre lo
+STESSO carico su RunPod (Linux reale, `pin_memory=True` reale) ha
+impiegato **~35-40 minuti per l'INTERO run da 570** — non 16 domande,
+570. Il project owner conferma inoltre un dato più recente: ~9 minuti
+su RunPod per un carico comparabile a oggi. La causa non è nuova né
+specifica a Fase 6a: è la stessa limitazione strutturale di WSL2 già
+isolata mesi fa ("il collo di bottiglia WSL2 non è mai stato
+intrinseco al modello o a GCSGWorker" — `LOGBOOK.md`, entry
+2026-08-11 "the stall was never a deadlock").
+
+**Questo cambia l'ordine di priorità** stabilito poco sopra in questo
+stesso entry: il casting bug in `_ShadowExpertINT4.__call__()` resta
+un'inefficienza reale (trovata per lettura del codice, non ancora
+smentita), ma quasi certamente NON è la causa dominante dei 35+ minuti
+senza risultato — questo progetto ha già evidenza diretta che
+`pin_memory=False` sotto WSL2, da solo, trasforma minuti in notti
+intere, su un carico ben più grande (570 domande, non 16) e su un path
+che non ha nulla a che fare con il casting di Fase 6a. Stesso principio
+per le due piste aperte sopra (thread tuning, banda PCIe): entrambe
+probabilmente confuse dalla stessa causa di fondo, non piste da
+scartare ma da riconsiderare come secondarie.
+
+**Implicazione pratica**: continuare a inseguire i tempi di
+cpu-offload in locale sotto WSL2 rischia di ripetere lo stesso errore
+già fatto e già corretto una volta in questo progetto — misurare (e
+provare a ottimizzare) un artefatto dell'ambiente invece del codice.
+La strada già battuta e già validata per QUALUNQUE misura di tempo
+affidabile su questo tipo di carico è RunPod (Linux reale, pinning
+vero) — non un nuovo esperimento, una richiamata di una conclusione
+già presa. Il fix del casting bug resta comunque legittimo da
+applicare (corregge uno spreco reale indipendente dall'ambiente), ma
+la validazione 16→32→64→full va spostata su hardware Linux reale
+prima di trarre conclusioni sui tempi, non ripetuta ancora in locale.
+
+---
+
+## 2026-08-17 (continued 16) — Report onesto di sessione: cosa è andato, cosa no, stato per il rollback
+
+**Release:** sì — `src/scheduler/gcsg.py` (fix memoization),
+`logs/z8_local/telemetry_fase6a/` (telemetria + SUMMARY.md).
+
+Richiesto esplicitamente dal project owner prima di procedere oltre:
+"aggiornare tutta la documentazione, recuperare tutti i log e
+telemetria, fare un primo report onesto su cosa è andato e cosa no;
+committare e pushare". Questo entry è quel report — separato dal
+racconto cronologico sopra per essere leggibile come bilancio, non
+come narrazione.
+
+### Cosa è andato bene
+
+- **Fase 6a Passo 3 (commit `652b31a`)**: il dequant AWQ è ora
+  realmente collegato a `GCSGWorker` — non più solo script standalone.
+  Verificato NUMERICAMENTE due volte contro il kernel CUDA reale su
+  layer/expert diversi (errore relativo L2 0.00048 e 0.00056, entrambi
+  ben sotto la soglia 1e-2). Questo è un risultato solido, non rimesso
+  in discussione da nulla successo oggi — i problemi di oggi sono tutti
+  di TEMPO/AMBIENTE, non di correttezza matematica.
+- **23 nuovi test**, isolati per layer, 168 test totali verdi, ruff
+  pulito.
+- **Trovato e corretto un bug di performance reale**: `_ShadowExpertINT4
+  .__call__()` ricalcolava cast+scale dell'intero tensore ad ogni
+  chiamata invece che una volta sola — fix (memoization per
+  layer_id+dtype) applicato, numericamente identico al comportamento
+  precedente (verificato: scale è sempre 1.0 su entrambi i path, quindi
+  cast-una-volta produce lo stesso tensore fp16 di cast-ad-ogni-chiamata),
+  168/168 test ancora verdi dopo il fix.
+- **Telemetria completa raccolta**: host CPU/RAM, GPU, PCIe RX/TX,
+  docker stats — tutti timestampati, tutti in
+  `logs/z8_local/telemetry_fase6a/` con `SUMMARY.md`.
+- **Inventario hardware chiarito**: confermato che lo Z8 ha 4 moduli
+  Intel Optane DC Persistent Memory (`NMA1XXD128GPS`, ~505GB nominali)
+  in Memory Mode al 100% (`Get-PmemPhysicalDevice`: tutti a 0GB
+  persistent), non semplice DDR4 — rilevante per l'interpretazione di
+  qualunque numero di RAM/tier futuro su questa macchina.
+- **Trovato un comportamento infrastrutturale reale**: self-SIGKILL da
+  PID 1 dentro il container non termina il processo sotto questo setup
+  Docker/WSL2 (osservato, non ancora spiegato con certezza) —
+  `docker kill` da host invece funziona immediatamente. Rilevante per
+  qualunque watchdog interno futuro.
+
+### Cosa NON è andato
+
+- **Nessuna delle due run n=16 con `--enable-cpu-offload` è arrivata a
+  un risultato.** Prima run: 23.5 minuti, killata manualmente. Seconda
+  run (con thread tuning): 35+ minuti, arrivata al timeout interno
+  dello script (30 min) e killata da fuori. **Zero numeri di
+  accuracy/tempo utilizzabili da oggi per la validazione 16→32→64→full.**
+- **Causa più probabile identificata TARDI, non subito**: solo dopo che
+  il project owner ha richiamato esplicitamente `LOGBOOK.md`, abbiamo
+  controllato il warning `pin_memory=False` (presente su ENTRAMBE le
+  run fin dall'inizio, mai controllato prima) e collegato la lentezza
+  alla stessa patologia WSL2 già nota da mesi. Prima di quel momento
+  questa sessione ha inseguito tre ipotesi alternative (thread
+  under-utilization, banda PCIe, casting bug) — la terza è risultata un
+  bug reale ma quasi certamente non la causa dominante di oggi, le
+  prime due probabilmente confuse dalla stessa causa di fondo mai
+  controllata per prima. Lezione operativa, non solo tecnica: quando un
+  sintomo somiglia a uno già visto, controllare la storia PRIMA di
+  ipotizzare cause nuove — non fatto qui fino a quando richiesto
+  esplicitamente.
+- **Il fix del casting NON è stato verificato end-to-end**: risolve un
+  problema reale trovato per lettura del codice, i test unitari
+  restano verdi, ma non abbiamo (ancora) rilanciato un run reale per
+  misurare quanto effettivamente riduce il tempo — non lo sapremo con
+  certezza finché non gira un run vero, probabilmente su hardware
+  dove `pin_memory` funziona (RunPod), per non confondere ancora una
+  volta l'effetto del fix con l'effetto dell'ambiente.
+- **PCIe non risolto**: `bench_pcie_bandwidth_wsl2.py` creato ma mai
+  eseguito — la domanda "quanto della banda osservata è un tetto reale
+  vs. quanto è solo il workload attuale" resta aperta.
+- **Nessuna misura di impatto aggregato cpu-offload disponibile**:
+  l'obiettivo originale della giornata (16→32→64→full) resta a zero
+  progressi concreti in termini di numeri, nonostante ~1.5 ore di
+  tentativi.
+
+### Stato per eventuale rollback
+
+| Cosa | Stato | Rollback |
+|---|---|---|
+| Commit `652b31a` (Fase 6a Passo 3) | pushato, permanente | `git revert 652b31a` |
+| Fix memoization `_ShadowExpertINT4` | locale, non ancora committato in questo report (committato a fine di questo stesso entry — vedi sotto) | `git revert` sul commit che lo introduce |
+| `osx-poc/scripts/bench_pcie_bandwidth_wsl2.py` | locale, non eseguito, safe da rimuovere | `rm` — nessuna dipendenza da nessun altro file |
+| `logs/z8_local/telemetry_fase6a/*.csv` + `SUMMARY.md` | locale, dati storici, da conservare | nessuno — sono un registro, non codice attivo |
+| `logs/z8_local/mmlu_fase6a_cpu_offload/run_n16*.log` | locale, run fallite, conservate come evidenza | nessuno |
+| `OMP_NUM_THREADS=28`/`MKL_NUM_THREADS=28` | NON persistito in nessun file — era solo un flag `-e` sulla singola invocazione di `docker compose run` | nessuna azione necessaria, già "rollback automatico" (non sopravvive oltre il comando che l'ha usato) |
+| Sampler PowerShell/bash di telemetria | fermati esplicitamente (host+PCIe via `Stop-Process`, docker-stats lasciato al suo self-timeout ~15:55) | nessuno, già fermati o auto-terminano |
+| `.wslconfig` (`memory=444GB`, `processors=28`) | invariato da sessioni precedenti, non toccato oggi | n/a, fuori scope di questo report |
+
+### Why this matters
+
+Il project owner ha chiesto esplicitamente onestà prima di procedere —
+questo report la mantiene: oggi non ha prodotto NESSUN numero di
+performance cpu-offload utilizzabile, nonostante il codice di
+produzione (Fase 6a Passo 3) sia solido e verificato. Il tempo speso
+non è stato inutile — un bug reale trovato e corretto, un
+comportamento infrastrutturale documentato, telemetria completa
+raccolta, e soprattutto la conferma che l'ambiente locale (WSL2) non è
+quello giusto per misurare i tempi di questo carico, cosa che il
+progetto aveva già imparato una volta e stava per re-imparare da capo.
+
+### Current state
+
+- Codice: fix di memoization applicato in `_ShadowExpertINT4`
+  (`src/scheduler/gcsg.py`), 168/168 test verdi, ruff pulito. Non
+  ancora committato al momento di scrivere questo entry — commit e
+  push seguono subito dopo.
+- Nessun container Docker residuo, nessun processo di telemetria
+  ancora attivo (tranne il self-timeout innocuo del sampler docker
+  stats).
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session: eseguire la validazione 16→32→64→full su RunPod (non più
+in locale sotto WSL2), col fix di memoization già incluso — prima
+run vera capace di produrre sia un numero di tempo sia
+un'accuratezza confrontabile con la baseline. `bench_pcie_bandwidth_wsl2.py`
+resta un passo indipendente e non bloccante.

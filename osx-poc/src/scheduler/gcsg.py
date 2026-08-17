@@ -518,6 +518,23 @@ class _ShadowExpertINT4:
         w2_weight[e]: (hidden_size, intermediate_size) — down_proj.
     Entrambi in layout nn.Linear-style (out_features, in_features): il
     forward usa x @ w.T, non x @ w.
+
+    Cast+scale memoizzati per (layer_id, dtype) (issue #33 Fase 6a,
+    2026-08-17 — trovato durante il primo run reale cpu-offload sul path
+    AWQ, mai completato in 35+ minuti su 16 prompt): `.to(dtype) * scale`
+    ricalcolava l'intero tensore w13/w2 ad OGNI chiamata, invece che una
+    volta sola. Sul path INT4 originale (Fase 1) questo era quasi gratis
+    (sorgente int8, piccola). Sul path fp32-cache di Fase 6a, il sorgente
+    è già un tensore fp32 di centinaia di MB per expert-layer — ricastarlo
+    e rimoltiplicarlo ad ogni token, per ogni layer, per ogni expert
+    freddo, è un costo che scala con token×layer×expert-freddi invece che
+    un costo one-time. Numericamente IDENTICO a prima: dato che lo scale
+    è sempre esattamente 1.0 su entrambi i path noti (INT4: il valore
+    reale è nella quantizzazione, non in uno scale runtime variabile;
+    fp32-cache: i pesi sono già in unità reali), castare una volta a
+    build-lazy invece che ad ogni call produce lo STESSO tensore fp16
+    finale — non un'approssimazione, solo lo stesso calcolo fatto una
+    volta anziché N.
     """
 
     def __init__(
@@ -527,14 +544,21 @@ class _ShadowExpertINT4:
     ) -> None:
         self._per_layer_w13 = per_layer_w13
         self._per_layer_w2 = per_layer_w2
+        self._resolved_cache: dict[tuple[int, Any], tuple[Any, Any]] = {}
 
     def __call__(self, hidden_states: Any, layer_id: int) -> Any:
         import torch.nn.functional as F
 
-        w13_q, w13_scale = self._per_layer_w13[layer_id]
-        w2_q, w2_scale = self._per_layer_w2[layer_id]
-        w13 = w13_q.to(hidden_states.dtype) * w13_scale
-        w2 = w2_q.to(hidden_states.dtype) * w2_scale
+        cache_key = (layer_id, hidden_states.dtype)
+        resolved = self._resolved_cache.get(cache_key)
+        if resolved is None:
+            w13_q, w13_scale = self._per_layer_w13[layer_id]
+            w2_q, w2_scale = self._per_layer_w2[layer_id]
+            w13 = w13_q.to(hidden_states.dtype) * w13_scale
+            w2 = w2_q.to(hidden_states.dtype) * w2_scale
+            resolved = (w13, w2)
+            self._resolved_cache[cache_key] = resolved
+        w13, w2 = resolved
 
         intermediate_size = w2.shape[-1]
         gate_up = hidden_states @ w13.T
