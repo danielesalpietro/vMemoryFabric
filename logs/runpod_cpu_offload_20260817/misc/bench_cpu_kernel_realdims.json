@@ -1,0 +1,64 @@
+{
+  "status": "done",
+  "issue": "#33 Fase 1",
+  "module": "_ShadowExpertINT4 (scheduler/gcsg.py) \u2014 CPU path",
+  "note": "dimensioni sintetiche hidden=4096 intermediate=14336, frazione di Mixtral reale (4096x14336) \u2014 vedi docstring di modulo per come rilanciare a scala reale su hardware reale",
+  "cpu": {
+    "hidden": 4096,
+    "intermediate": 14336,
+    "n_repeats": 30,
+    "batch_1": {
+      "latency": {
+        "p50_ms": 38.067199755460024,
+        "p95_ms": 42.232629377394915,
+        "p99_ms": 42.30926698073745
+      },
+      "gflops_at_p50": 9.255252245063444
+    },
+    "batch_8": {
+      "latency": {
+        "p50_ms": 94.37996428459883,
+        "p95_ms": 102.85205906257033,
+        "p99_ms": 103.5517998971045
+      },
+      "gflops_at_p50": 29.864095725875817
+    },
+    "batch_32": {
+      "latency": {
+        "p50_ms": 393.6832072213292,
+        "p95_ms": 405.9487250633538,
+        "p99_ms": 495.3968613408506
+      },
+      "gflops_at_p50": 28.63797323633766
+    }
+  },
+  "gpu_reference": {
+    "hidden": 4096,
+    "intermediate": 14336,
+    "n_repeats": 30,
+    "batch_1": {
+      "latency": {
+        "p50_ms": 0.8319900371134281,
+        "p95_ms": 0.8376901969313622,
+        "p99_ms": 0.9575877338647842
+      },
+      "gflops_at_p50": 423.4684554906116
+    },
+    "batch_8": {
+      "latency": {
+        "p50_ms": 1.0024080984294415,
+        "p95_ms": 1.0046577081084251,
+        "p99_ms": 1.0047266259789467
+      },
+      "gflops_at_p50": 2811.801193960921
+    },
+    "batch_32": {
+      "latency": {
+        "p50_ms": 1.0194568894803524,
+        "p95_ms": 1.0241377167403698,
+        "p99_ms": 1.0337079875171185
+      },
+      "gflops_at_p50": 11059.113208550527
+    }
+  }
+}

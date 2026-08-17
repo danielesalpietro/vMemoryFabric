@@ -3176,6 +3176,49 @@ throughput per-core di questo tipo di istanza RunPod, prima di
 proporre un fix. Non bloccante: la feature resta opt-in e sicura anche
 senza quella risposta.
 
+**Aggiornamento stessa sessione, poco dopo il push**: il microbenchmark
+"non ancora fatto" indicato sopra esisteva già (`benchmarks/
+bench_cpu_kernel.py`, mai eseguito a dimensioni reali su hardware reale
+prima d'ora) — eseguito su questo stesso pod RunPod con
+`OSX_BENCH_HIDDEN=4096 OSX_BENCH_INTERMEDIATE=14336` (dimensioni
+Mixtral reali):
+
+```
+CPU batch=1:  p50 37.04ms  (9.51 GFLOPS)
+GPU batch=1:  p50  0.83ms  (424.4 GFLOPS)  -> GPU 44.6x più veloce
+```
+
+**Risposta alla domanda aperta**: è un limite di throughput per-core
+genuino, non overhead di dispatch/allocazione — 9.5 GFLOPS per un
+matmul isolato, puro PyTorch, senza vLLM/GCSG nel mezzo, è già basso
+(coerente con l'assenza di AVX-512 su questo AMD EPYC 7C13/Zen3).
+**Ma non spiega tutto**: nella pipeline reale (route_forward() +
+GCSGWorker + vLLM) lo stesso identico forward costava ~100ms/chiamata,
+**~2.7x più del benchmark isolato (37ms)** — un gap di overhead reale
+non ancora spiegato (dispatch Python del path GCSG? contesa con la GPU
+che gira in parallelo? altro?), da investigare se si vuole spingere
+oltre la sola domanda "è la CPU o è il codice" (risposta: principalmente
+la CPU, ma non SOLO la CPU).
+
+Eseguito anche `scripts/bench_pcie_bandwidth_wsl2.py` (creato ieri,
+mai lanciato da nessuna parte finora): su questo pod RunPod, pinned
+D2H arriva a ~20-24 GB/s (oltre il teorico Gen3x16 ~15.75 GB/s — link
+più veloce o effetto di misura, non approfondito), pageable H2D/D2H
+~10-18 GB/s. **PCIe escluso come collo di bottiglia** su questo
+hardware — coerente con GPU idle allo 0% durante lo stallo osservato
+in tutta la sessione (il problema non è mai stato il trasferimento
+dati, è il compute CPU stesso).
+
+Risultati grezzi salvati in
+`logs/runpod_cpu_offload_20260817/misc/bench_cpu_kernel_realdims.json`
+e `.../bench_pcie.txt`.
+
+**Nuova richiesta del project owner**: per un test finale/definitivo
+servirebbe hardware bare-metal reale (non un'istanza RunPod condivisa/
+virtualizzata) — non ancora avviato, richiede una decisione su
+provider/costo da parte del project owner prima di procedere. Annotato
+come direzione, non un'azione presa in questa sessione.
+
 **Direzione proposta dal project owner, non ancora scoping-ata**: la
 sessione di oggi ha misurato prestazioni ad-hoc (thread count, tempo
 per-chiamata) senza un framework sistematico — l'idea è produrre due

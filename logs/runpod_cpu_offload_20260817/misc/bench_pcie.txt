@@ -1,0 +1,13 @@
+GPU: NVIDIA GeForce RTX 3090
+Gen3 x16 teorico: ~15.75 GB/s per direzione
+
+    size |   H2D pageable |   H2D pinned |   D2H pageable |   D2H pinned   (GB/s)
+--------------------------------------------------------------------------------
+     1MB |         9.30   |       5.20   |         7.09   |      22.80
+    16MB |        18.27   |      13.85   |        10.43   |      23.78
+    64MB |        17.24   |      17.89   |         9.91   |      22.01
+   256MB |        16.73   |      17.71   |        10.13   |      19.97
+  1024MB |        16.73   |      20.03   |        10.07   |      20.84
+
+Se pinned >> pageable e si avvicina a ~12-15 GB/s: DMA reale funziona sotto WSL2, nessun tetto strutturale.
+Se pinned non supera ~2-3 GB/s anche sui tensori grandi: supporto al sospetto di un collo di bottiglia WSL2/GPU-PV.
