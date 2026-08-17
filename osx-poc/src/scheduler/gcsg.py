@@ -115,6 +115,49 @@ from tier import SEEPolicy, TierManager
 log = logging.getLogger(__name__)
 
 
+def _read_cgroup_available_gb() -> float | None:
+    """RAM realmente disponibile per QUESTO processo, in GB — non
+    `/proc/meminfo`/psutil grezzo, che sotto Docker/RunPod riporta la RAM
+    TOTALE dell'host anche quando un limite cgroup molto più basso è
+    imposto al container (verificato 2026-08-17, pod RunPod issue #33:
+    host 1TB via `free`, limite cgroup reale 116GB — stesso principio
+    già noto per `nproc` vs. `cpu.cfs_quota_us`, vedi
+    BOOTSTRAP_ANTI_ALZHEIMER.md §5). Usato da
+    GCSGWorker._check_cpu_ram_budget() per dimensionare il CPU shadow
+    pool (issue #33 Fase 6a) sulla RAM che il container può davvero
+    usare, non su quella che vede.
+
+    Prova cgroup v1, poi v2, poi psutil (ambienti senza cgroup — CI,
+    macOS/dev locale). Ritorna None solo se nessuno dei tre è
+    leggibile — il chiamante allora non applica alcun cap (comportamento
+    invariato, stesso principio difensivo di GCSGGuard._check_vram_budget
+    quando NVML non è disponibile).
+    """
+    try:
+        with open("/sys/fs/cgroup/memory/memory.limit_in_bytes") as f:
+            limit = int(f.read().strip())
+        with open("/sys/fs/cgroup/memory/memory.usage_in_bytes") as f:
+            usage = int(f.read().strip())
+        if limit < (1 << 62):  # sentinel "nessun limite" cgroup v1 (~8 EiB)
+            return (limit - usage) / (1024 ** 3)
+    except (OSError, ValueError):
+        pass
+    try:
+        with open("/sys/fs/cgroup/memory.max") as f:
+            raw = f.read().strip()
+        if raw != "max":
+            with open("/sys/fs/cgroup/memory.current") as f:
+                usage = int(f.read().strip())
+            return (int(raw) - usage) / (1024 ** 3)
+    except (OSError, ValueError):
+        pass
+    try:
+        import psutil
+        return psutil.virtual_memory().available / (1024 ** 3)
+    except ImportError:
+        return None
+
+
 @dataclass
 class GatingContext:
     """Contesto gating per un singolo token/step.
@@ -545,9 +588,19 @@ class _ShadowExpertINT4:
         self._per_layer_w13 = per_layer_w13
         self._per_layer_w2 = per_layer_w2
         self._resolved_cache: dict[tuple[int, Any], tuple[Any, Any]] = {}
+        # GCSG DIAG (issue #33, 2026-08-17) — contatore/tempo cumulativo per
+        # capire se lo stallo di generate() (osservato DOPO che il pool è
+        # già costruito e "LLM ready" è già stampato) viene da QUESTO
+        # forward chiamato troppe volte / troppo lentamente, o da qualcos
+        # altro nel path (hook overhead, EAT bookkeeping, ecc.) — vedi
+        # LOGBOOK_ISSUE33.MD per il contesto completo.
+        self._diag_call_count = 0
+        self._diag_call_time_total = 0.0
 
     def __call__(self, hidden_states: Any, layer_id: int) -> Any:
         import torch.nn.functional as F
+
+        diag_t0 = time.monotonic()
 
         cache_key = (layer_id, hidden_states.dtype)
         resolved = self._resolved_cache.get(cache_key)
@@ -564,7 +617,19 @@ class _ShadowExpertINT4:
         gate_up = hidden_states @ w13.T
         gate, up = gate_up.split(intermediate_size, dim=-1)
         activated = F.silu(gate) * up
-        return activated @ w2.T
+        result = activated @ w2.T
+
+        self._diag_call_count += 1
+        self._diag_call_time_total += time.monotonic() - diag_t0
+        if self._diag_call_count <= 3 or self._diag_call_count % 200 == 0:
+            log.info(
+                "GCSG DIAG: shadow forward calls=%d cum_time=%.3fs "
+                "avg=%.5fs/call ultimo hidden_states.shape=%s layer=%d",
+                self._diag_call_count, self._diag_call_time_total,
+                self._diag_call_time_total / self._diag_call_count,
+                tuple(hidden_states.shape), layer_id,
+            )
+        return result
 
 
 class _AWQShadowExpert:
@@ -1358,8 +1423,11 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                 getattr(self, "_tier_manager", None) is not None
                 and getattr(self, "_cpu_offload_enabled", False)
             ):
+                cpu_expert_ids = self._check_cpu_ram_budget(
+                    expert_ids, per_expert_cpu_gb=3.0,
+                )
                 self._cpu_shadow_pool.update(
-                    self._build_cpu_shadow_pool(layers, expert_ids),
+                    self._build_cpu_shadow_pool(layers, cpu_expert_ids),
                 )
                 log.info(
                     "GCSG: CPU shadow pool (DDR4-resident, issue #33) "
@@ -1407,8 +1475,11 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                 getattr(self, "_tier_manager", None) is not None
                 and getattr(self, "_cpu_offload_enabled", False)
             ):
+                cpu_expert_ids = self._check_cpu_ram_budget(
+                    expert_ids, per_expert_cpu_gb=21.5,
+                )
                 self._cpu_shadow_pool.update(
-                    self._build_cpu_shadow_pool_awq(layers, expert_ids),
+                    self._build_cpu_shadow_pool_awq(layers, cpu_expert_ids),
                 )
                 log.info(
                     "GCSG: CPU shadow pool (DDR4-resident, issue #33 Fase 6a, "
@@ -1418,6 +1489,53 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                     len(layers),
                 )
                 self._refresh_hot_cold_classification()
+
+    @staticmethod
+    def _check_cpu_ram_budget(
+        candidate_expert_ids: list[int],
+        per_expert_cpu_gb:    float,
+        margin_gb:            float = 24.0,
+    ) -> list[int]:
+        """Adatta il numero di expert nel CPU shadow pool alla RAM host
+        REALE disponibile (issue #33, 2026-08-17 — trovato dopo un run
+        RunPod reale che ha saturato ~84% della RAM cgroup, 98GB/116GB,
+        senza mai completare un solo prompt su 16, vedi LOGBOOK_ISSUE33.MD).
+
+        Stesso principio di GCSGGuard._check_vram_budget, ma per la RAM
+        host invece della VRAM: degrada (costruisce meno expert) invece
+        di rischiare un OOM-kill a metà pool build, che perderebbe tutto
+        il lavoro fatto fino a quel punto E potenzialmente il processo
+        stesso (OOM-killer del kernel non distingue "quasi finito" da
+        "appena iniziato"). `per_expert_cpu_gb` varia per path: ~3GB per
+        _build_cpu_shadow_pool() (INT4 simulato, path 1), ~21.5GB per
+        _build_cpu_shadow_pool_awq() (fp32 cache, path AWQ — vedi
+        docstring lì per la derivazione, ~21GB misurati). `margin_gb`
+        default 24GB — modello attivo (~19GB su questo checkpoint) +
+        KV-cache + overhead vLLM/PyTorch non ancora osservati al momento
+        della chiamata (questo metodo gira PRIMA che generate() inizi).
+
+        Usa _read_cgroup_available_gb() (RAM libera nel cgroup, non
+        `/proc/meminfo` host grezzo — vedi la sua docstring per il
+        perché). Nessun cap applicato se non determinabile (ambienti
+        senza cgroup/psutil, es. alcuni CI) — comportamento invariato,
+        stesso principio difensivo del check VRAM gemello.
+        """
+        available_gb = _read_cgroup_available_gb()
+        if available_gb is None:
+            return candidate_expert_ids
+
+        budget_gb = available_gb - margin_gb
+        n_usable = max(0, int(budget_gb // per_expert_cpu_gb))
+        effective = candidate_expert_ids[:n_usable]
+        if len(effective) < len(candidate_expert_ids):
+            log.warning(
+                "GCSG: CPU shadow pool ridotto da %d a %d expert — %.1f GB "
+                "RAM disponibile (cgroup), %.1f GB margine riservato, "
+                "~%.1f GB/expert stimati.",
+                len(candidate_expert_ids), len(effective), available_gb,
+                margin_gb, per_expert_cpu_gb,
+            )
+        return effective
 
     def _build_cpu_shadow_pool(
         self, layers: list[Any], expert_ids: list[int],
@@ -1500,13 +1618,17 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
         logga un warning (stesso comportamento di qualunque altra
         eccezione in questo metodo, invariato da prima di Fase 6a).
         """
+        import time
+
         import torch
 
         cpu_pool: dict[int, object] = {}
         for expert_id in expert_ids:
+            expert_t0 = time.monotonic()
             per_layer_w13 = []
             per_layer_w2 = []
-            for layer in layers:
+            for layer_idx, layer in enumerate(layers):
+                layer_t0 = time.monotonic()
                 module = layer.block_sparse_moe.experts[expert_id]
                 w1 = _dequantize_awq_linear_to_fp32(module.w1)
                 w3 = _dequantize_awq_linear_to_fp32(module.w3)
@@ -1514,6 +1636,15 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                 w13 = torch.cat([w1, w3], dim=0).contiguous()
                 per_layer_w13.append((w13, 1.0))
                 per_layer_w2.append((w2, 1.0))
+                log.info(
+                    "GCSG DIAG: expert=%d layer=%d/%d dequant %.3fs",
+                    expert_id, layer_idx + 1, len(layers),
+                    time.monotonic() - layer_t0,
+                )
+            log.info(
+                "GCSG DIAG: expert=%d TOTALE %.3fs (%d layer)",
+                expert_id, time.monotonic() - expert_t0, len(layers),
+            )
             cpu_pool[expert_id] = _ShadowExpertINT4(per_layer_w13, per_layer_w2)
         return cpu_pool
 

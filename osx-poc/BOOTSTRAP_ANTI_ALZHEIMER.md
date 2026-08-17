@@ -207,6 +207,160 @@ problema è specifico a mmap su quel tipo di storage.
 load, mai mmap-are direttamente da un Network Volume. Pattern già
 gestito da `OSX_MMLU_MODEL_PATH` in `eval_mmlu_gcsg.py`.
 
+### 5.8 — RunPod: accesso SSH diretto per Claude Code (egress di questa sessione è allowlisted)
+
+L'egress di rete di una sessione Claude Code è allowlisted a domini
+specifici — `runpod.io`/`api.runpod.io` danno `403` dal proxy
+dell'ambiente, e il proxy `ssh.runpod.io` richiede comunque una PTY
+interattiva vera (fallisce con `Error: Your SSH client doesn't support
+PTY` da una shell non-interattiva). L'unico percorso che funziona è
+l'**IP pubblico diretto del pod + porta mappata** per la 22 (RunPod
+"Expose TCP Ports", eventualmente richiede un restart del pod se non
+era già attivo) — non l'endpoint proxy, non `.internal`.
+
+Keypair dedicata già esistente su questa macchina (riusata da Sprint 4
+in poi, non ricrearla): `~/.ssh/id_ed25519_runpod_sprint4` (+ `.pub`).
+Chiave pubblica:
+
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFacxFKKVMWddof4o2tQ9OgZsHkX4TuhsxaS1T2G6vwX vmemoryfabric-sprint4-runpod-20260811
+```
+
+**Azione**: appena il project owner ha accesso alla console web del pod
+(RunPod → pod → Connect → Start Web Terminal), fargli lanciare questo
+comando sul pod stesso (idempotente, append-only, imposta anche i
+permessi che `sshd` richiede):
+
+```bash
+mkdir -p ~/.ssh && echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFacxFKKVMWddof4o2tQ9OgZsHkX4TuhsxaS1T2G6vwX vmemoryfabric-sprint4-runpod-20260811" >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys
+```
+
+Aggiungere la chiave anche in Account → Settings → SSH Public Keys
+lato RunPod è utile per i PROSSIMI pod creati dopo l'aggiunta, ma non
+retroagisce su un pod già in esecuzione — per un pod già up, il comando
+sopra è il percorso affidabile.
+
+### 5.9 — `nproc`/`free`/`/proc/meminfo` dentro un pod RunPod mentono: mostrano l'HOST, non la quota cgroup
+
+Confermato di nuovo 2026-08-17 (pod RTX3090, dopo Malmö/RTX A6000 —
+pattern ricorrente, non un caso isolato): dentro il container `nproc`
+ha riportato 256 e `free -h` 1.0Ti totali — la topologia/RAM dell'HOST
+fisico condiviso, non quello che il cgroup di QUESTO pod può davvero
+usare. Il numero vero:
+
+```bash
+# CPU (cgroup v1 — controllare anche v2, /sys/fs/cgroup/cpu.max, se v1 assente)
+cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us /sys/fs/cgroup/cpu/cpu.cfs_period_us
+# core reali = quota_us / period_us
+
+# RAM (cgroup v1 — v2: /sys/fs/cgroup/memory.max e memory.current)
+cat /sys/fs/cgroup/memory/memory.limit_in_bytes /sys/fs/cgroup/memory/memory.usage_in_bytes
+```
+
+**Azione**: MAI usare `nproc`/`free` grezzi per calcolare
+`OMP_NUM_THREADS`/`MKL_NUM_THREADS` o per giudicare quanta RAM è
+disponibile per un pool CPU-resident — sempre i due comandi sopra
+prima di lanciare qualunque run che dipenda da questi numeri. Codice
+di produzione: `_read_cgroup_available_gb()` in `src/scheduler/gcsg.py`
+implementa già questa lettura corretta (v1→v2→psutil), riusarla invece
+di richiamare `psutil`/`os.cpu_count()` grezzi in nuovo codice.
+
+### 5.10 — `py-spy`/profiling live spesso bloccato su pod RunPod (manca SYS_PTRACE)
+
+`py-spy dump --pid <PID>` (e qualunque altro tool che richieda
+`ptrace`: `gdb attach`, `strace`, spesso anche `perf`) fallisce con
+"Permission Denied... SYS_PTRACE capability" su un pod RunPod — il
+container non è avviato con quella capability e non è modificabile
+dall'interno via SSH (servirebbe ricreare il pod con
+`--cap-add=SYS_PTRACE`, non un'opzione esposta dalla console RunPod
+standard). Verificato 2026-08-17, non un caso isolato del singolo pod.
+
+**Azione**: non perdere tempo a inseguire varianti di py-spy/gdb su un
+pod RunPod. Passare subito a instrumentare il codice stesso con
+`time.monotonic()`/`log.info()` nei punti sospetti (vedi il pattern
+già applicato in `_build_cpu_shadow_pool_awq()`, timing per-layer e
+per-expert) — più lento da iterare ma l'unico che funziona in questo
+ambiente.
+
+### 5.11 — CPU shadow pool (fp32 AWQ, Fase 6a): FALSIFICATO che fosse "solo WSL2" — causa reale isolata, non è la pool build
+
+Attenzione a non ri-applicare ciecamente la lezione di 5.1: il primo
+run reale con `--enable-cpu-offload` genuinamente attivo (path AWQ,
+Fase 6a Passo 3) su un pod RunPod **Linux reale, senza alcun warning
+`pin_memory=False`**, NON ha completato nemmeno 1 prompt su 16 in 600s.
+La causa NON è WSL2 (Linux reale, nessun warning). **Non è nemmeno la
+build del pool CPU** (prima ipotesi di questa stessa sezione, ora
+corretta: la build è VELOCE, ~44s/expert × 2 = ~88s totali, completa
+PRIMA che "LLM ready" venga stampato — misurato con timing dedicato,
+`grep 'GCSG DIAG.*TOTALE' <log>`).
+
+**Causa reale, isolata 2026-08-17**: il forward per-TOKEN di
+`_ShadowExpertINT4.__call__()` (una riga alla volta,
+`hidden_states.shape=(1, 4096)`, non batchato attraverso la sequenza)
+costa **~0.10s/chiamata**, costante — con migliaia di chiamate
+necessarie anche per n=16 prompt, questo da solo spiega minuti di
+wall time. **Testato e falsificato che sia thread-oversubscription**:
+`OMP_NUM_THREADS=27` vs `=2` allo stesso checkpoint (calls=200)
+producono lo STESSO avg (~0.10s/call) — il parallelismo aiuta la
+build del pool (tensori grandi) ma è irrilevante sul forward a
+singola riga. Sospetto più probabile, non ancora confermato: costo
+fisso per-chiamata (dispatch/allocazione PyTorch) o limite di
+throughput per-core genuino su questo tipo di istanza RunPod
+ottimizzata per GPU (vCPU condivise/deprioritizzate) — non un bug di
+configurazione facilmente risolvibile.
+
+**Risultato completo misurato** (pod RTX3090/AMD EPYC 7C13, 2026-08-17):
+n=16, 1133.1s (~18.9 min), accuracy 8/16 (50.0%),
+`shadow_activations=10081` — **identico byte-per-byte** al baseline
+no-op (stesso n, stessa selezione expert) in accuracy E conteggio
+attivazioni: correttezza numerica PROVATA su hardware reale, non solo
+in unit test. Performance: **25.7x più lento** del baseline senza
+offload sullo stesso n=16 (44.1s, Malmö) — non production-ready,
+estrapolato al full 570 sarebbe dell'ordine delle ore.
+
+**Azione**: se un run con `--enable-cpu-offload` sul path AWQ è lento,
+NON teorizzare thread-tuning o pool-build — sono già esclusi con dati.
+`grep 'GCSG DIAG: shadow forward calls' <log>` per vedere il tasso
+reale di chiamate/secondo. Un microbenchmark PyTorch puro (matmul
+1×4096 @ 4096×N su CPU, fuori da vLLM) è il prossimo passo se si vuole
+isolare dispatch-overhead vs. limite hardware genuino — non ancora
+fatto. Il cap RAM-aware (`_check_cpu_ram_budget()`) resta comunque
+utile (previene OOM su pool grandi) ma non tocca questo costo
+per-chiamata.
+
+### 5.12 — `scp` diretto di un file locale (Windows) su un pod: il diff esplode per via di CRLF
+
+Copiare un file modificato localmente (Windows, `core.autocrlf=true`,
+quindi working tree in CRLF) direttamente via `scp` sul checkout git
+del pod (Linux, blob committati in LF puro) produce un `git diff` che
+segna OGNI riga come cambiata, anche se le modifiche reali sono poche
+righe — il file trasferito ha `\r\n`, il blob tracciato ha `\n`. `git`
+normalmente gestisce questa conversione in modo trasparente su
+push/pull/checkout, ma `scp` la bypassa copiando i byte grezzi.
+
+**Azione**: dopo un `scp` diretto Windows→pod di un file di codice,
+SEMPRE `sed -i 's/\r$//' <file>` sul pod prima di fidarsi di
+`git diff --stat` per giudicare la dimensione della modifica. Meglio
+ancora: preferire `git push`/`git pull` quando possibile (gestisce la
+conversione da solo) — usare `scp` diretto solo per iterare più in
+fretta durante un debug attivo, come fatto qui.
+
+### 5.13 — SSH+nohup verso un pod: serve `< /dev/null`, non solo redirect di stdout/stderr
+
+Lanciare un processo in background su un pod via SSH con
+`nohup cmd > out.log 2>&1 &` (senza chiudere anche lo STDIN) fa restare
+appesa la sessione SSH stessa finché il processo backgrounded non
+termina — anche se il comando "in foreground" è già tornato. Causa:
+il processo figlio eredita comunque il file descriptor di stdin
+collegato al canale SSH, e SSH aspetta che TUTTI i descriptor del
+canale si chiudano, non solo che il comando visibile finisca.
+
+**Azione**: sempre `nohup cmd > out.log 2>&1 < /dev/null & disown` (non
+solo `> out.log 2>&1 &`) per lanciare un run lungo su un pod da uno
+script/tool non interattivo — altrimenti ogni lancio va in timeout e
+finisce nella coda dei task in background del tool, funzionalmente
+innocuo ma fonte di confusione inutile.
+
 ## 6. Come registrare le change nel logbook
 
 - Formato standard per entry narrative: **What we set out to do / What

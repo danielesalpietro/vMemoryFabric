@@ -8,7 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from eat import ExpertAccessTable, Tier
 from scheduler import AERManager, DomainLabel, GCSGGuard, PTPEPClassifier
 from scheduler import gcsg as gcsg_module
@@ -1077,6 +1076,93 @@ class TestBuildCpuShadowPoolAwq:
         assert output.device.type == "cpu"
         assert output.shape == (4, hidden)
         assert torch.isfinite(output).all()
+
+
+class TestCheckCpuRamBudget:
+    """Issue #33, 2026-08-17 — trovato dopo un run RunPod reale che ha
+    saturato ~84% della RAM cgroup (98GB/116GB) senza mai completare un
+    solo prompt: _check_cpu_ram_budget() deve ridurre gli expert_id
+    candidati quando la RAM host reale (non /proc/meminfo grezzo, vedi
+    _read_cgroup_available_gb) non basta, con lo stesso principio "degrada
+    invece di rischiare un OOM-kill" di GCSGGuard._check_vram_budget."""
+
+    def test_no_cap_when_ram_generous(self, monkeypatch):
+        monkeypatch.setattr(gcsg_module, "_read_cgroup_available_gb", lambda: 200.0)
+
+        effective = GCSGWorker._check_cpu_ram_budget(
+            [0, 1], per_expert_cpu_gb=21.5, margin_gb=24.0,
+        )
+
+        assert effective == [0, 1]
+
+    def test_caps_when_ram_tight(self, monkeypatch, caplog):
+        # 60GB disponibili, 24GB margine -> 36GB budget -> 1 solo expert
+        # a 21.5GB/expert (2 ne costerebbero 43GB, non entra).
+        monkeypatch.setattr(gcsg_module, "_read_cgroup_available_gb", lambda: 60.0)
+
+        with caplog.at_level(logging.WARNING, logger=gcsg_module.__name__):
+            effective = GCSGWorker._check_cpu_ram_budget(
+                [0, 1, 2], per_expert_cpu_gb=21.5, margin_gb=24.0,
+            )
+
+        assert effective == [0]
+        assert "ridotto da 3 a 1" in caplog.text
+
+    def test_zero_experts_when_no_room_at_all(self, monkeypatch):
+        monkeypatch.setattr(gcsg_module, "_read_cgroup_available_gb", lambda: 10.0)
+
+        effective = GCSGWorker._check_cpu_ram_budget(
+            [0, 1], per_expert_cpu_gb=21.5, margin_gb=24.0,
+        )
+
+        assert effective == []
+
+    def test_no_cap_when_ram_undeterminable(self, monkeypatch):
+        """Stesso principio difensivo del check VRAM gemello quando NVML
+        non è disponibile (es. CI senza cgroup/psutil): non bloccare."""
+        monkeypatch.setattr(gcsg_module, "_read_cgroup_available_gb", lambda: None)
+
+        effective = GCSGWorker._check_cpu_ram_budget(
+            [0, 1, 2], per_expert_cpu_gb=21.5, margin_gb=24.0,
+        )
+
+        assert effective == [0, 1, 2]
+
+
+class TestReadCgroupAvailableGb:
+    """_read_cgroup_available_gb() — v1 -> v2 -> psutil, con fallback a
+    None se nessuno leggibile (ambienti senza cgroup, es. macOS/CI)."""
+
+    def test_reads_cgroup_v1(self, tmp_path, monkeypatch):
+        v1_dir = tmp_path / "v1" / "memory"
+        v1_dir.mkdir(parents=True)
+        (v1_dir / "memory.limit_in_bytes").write_text(str(100 * 1024**3))
+        (v1_dir / "memory.usage_in_bytes").write_text(str(40 * 1024**3))
+
+        real_open = open
+
+        def _fake_open(path, *a, **kw):
+            path = str(path)
+            if path == "/sys/fs/cgroup/memory/memory.limit_in_bytes":
+                return real_open(v1_dir / "memory.limit_in_bytes", *a, **kw)
+            if path == "/sys/fs/cgroup/memory/memory.usage_in_bytes":
+                return real_open(v1_dir / "memory.usage_in_bytes", *a, **kw)
+            raise FileNotFoundError(path)
+
+        monkeypatch.setattr("builtins.open", _fake_open)
+
+        assert gcsg_module._read_cgroup_available_gb() == pytest.approx(60.0)
+
+    def test_falls_back_to_none_when_nothing_readable(self, monkeypatch):
+        def _always_missing(path, *a, **kw):
+            raise FileNotFoundError(path)
+
+        monkeypatch.setattr("builtins.open", _always_missing)
+        monkeypatch.setitem(
+            __import__("sys").modules, "psutil", None,
+        )
+
+        assert gcsg_module._read_cgroup_available_gb() is None
 
 
 class TestLoadShadowPoolAwqCpuPoolWiring:

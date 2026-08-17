@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import signal
 import sys
@@ -47,8 +48,21 @@ import time
 from collections import defaultdict
 
 from datasets import load_dataset
-
 from scheduler.gcsg import GCSGWorker
+
+# Senza questo, log.info()/log.warning() del modulo scheduler.gcsg (incluso
+# il timing diagnostico "GCSG DIAG" issue #33 Fase 6a) non vanno da nessuna
+# parte — il logging root di Python di default non ha handler, quindi solo
+# WARNING+ arriva al "last resort" handler su stderr, INFO va perso in
+# silenzio. Scoperto 2026-08-17 dopo tre run senza una sola riga "GCSG:" nel
+# log nonostante il codice le emettesse. stdout (non stderr) per finire
+# nello stesso file di `_log()` sotto quando entrambi sono redirect a uno
+# stesso file (`> log 2>&1`).
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    stream=sys.stdout,
+)
 
 MODEL_PATH = os.environ.get("OSX_MMLU_MODEL_PATH", "/data/nvme/models/mixtral-instruct-awq")
 LETTERS = ["A", "B", "C", "D"]

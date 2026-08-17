@@ -3019,3 +3019,159 @@ in locale sotto WSL2), col fix di memoization già incluso — prima
 run vera capace di produrre sia un numero di tempo sia
 un'accuratezza confrontabile con la baseline. `bench_pcie_bandwidth_wsl2.py`
 resta un passo indipendente e non bloccante.
+
+---
+
+## 2026-08-17 (continued 17) — prima run cpu-offload REALMENTE completata su RunPod: corretta ma 25.7x più lenta, causa isolata
+
+**Release:** sì — `src/scheduler/gcsg.py` (timing diagnostico, cap RAM
+CPU pool, `_read_cgroup_available_gb()`), `scripts/eval_mmlu_gcsg.py`
+(fix `logging.basicConfig` mancante), `tests/test_scheduler.py` (6
+nuovi test). Nessuna modifica al comportamento di default: entrambi i
+flag (`--wire-tier-manager`, `--enable-cpu-offload`) restano opt-in,
+default `False`, invariato dalla Fase 4 — vedi "Why this matters" per
+la verifica esplicita di questo punto.
+
+### What we set out to do
+
+Riprendere da dove "continued 16" si era fermato: eseguire
+16→32→64→full con `--enable-cpu-offload` reale su hardware Linux vero
+(RunPod), non più in locale sotto WSL2 — il bootstrap anti-Alzheimer
+(§5.1) segnalava esplicitamente di non ripetere l'errore di misurare
+un artefatto WSL2 invece del codice.
+
+### What we did (cronologia condensata — sessione lunga, molti passaggi)
+
+1. **Provisioning pod nuovo** (RTX3090, non più Malmö/RTX A6000 —
+   quel pod era già spento): accesso SSH impostato con la stessa
+   keypair dedicata (`id_ed25519_runpod_sprint4`, riusata da
+   Sprint 4/Malmö in poi — vedi BOOTSTRAP §5.8 per la procedura, ora
+   documentata lì per la prima volta esplicitamente). Hardware reale
+   misurato (non fidato dal pannello RunPod, che mostra le spec
+   nominali, non la quota cgroup — vedi BOOTSTRAP §5.9, nuovo questa
+   sessione): **27.2 core cgroup reali** (non i 256 di `nproc`),
+   **~116.4GiB RAM cgroup reale** (non l'1TB di `free`), CPU **AMD
+   EPYC 7C13 (Zen3) senza AVX-512** (diverso dallo Xeon Ice Lake di
+   Malmö che li aveva tutti). Checkpoint scaricato da HuggingFace
+   direttamente su disco locale container in 28.96s (stesso pattern
+   §5.7, bypassa il Network Volume).
+2. **Primo run n=16 (v1)**: fallito, watchdog 600s scattato senza un
+   solo prompt completato, GPU allo 0% per tutto il tempo, RAM cgroup
+   salita all'84% (98GB/116GB). **Diverso da ieri**: nessun warning
+   `pin_memory=False` (Linux reale) — quindi NON era WSL2. Il
+   watchdog stavolta ha funzionato con un semplice SIGTERM (§5.2 del
+   bootstrap non si applica: qui non c'è Docker annidato, il processo
+   non è PID 1).
+3. **Tentato profiling live con `py-spy dump`**: bloccato, il pod
+   RunPod non ha la capability `SYS_PTRACE` (nuovo, BOOTSTRAP §5.10).
+   Pivot obbligato: instrumentare il codice invece di profilarlo
+   dall'esterno.
+4. **Aggiunto timing per-layer/per-expert** a
+   `_build_cpu_shadow_pool_awq()` + **cap RAM-aware** nuovo
+   (`_check_cpu_ram_budget()`/`_read_cgroup_available_gb()`, stesso
+   principio di `GCSGGuard._check_vram_budget` ma per la RAM host) —
+   richiesto esplicitamente dal project owner ("ridimensioniamo gli
+   expert in funzione della RAM reale, lasciando margine per il
+   sistema"). 6 nuovi unit test (`TestCheckCpuRamBudget`,
+   `TestReadCgroupAvailableGb`).
+5. **Scoperto un bug di osservabilità pre-esistente**, non introdotto
+   oggi: `scripts/eval_mmlu_gcsg.py` non ha mai chiamato
+   `logging.basicConfig()` — ogni `log.info()`/`log.warning()` di
+   `scheduler.gcsg` (inclusi tutti i messaggi "GCSG: ..." già scritti
+   in Fase 2/3/4/6a, MAI visti in un log reale fino ad oggi) finiva
+   nel vuoto. Fix minimo: `logging.basicConfig(level=INFO,
+   stream=sys.stdout)` in cima allo script.
+6. **Rilanciato (v4) col fix di logging**: rivelato che la build del
+   pool CPU è VELOCE (~44s/expert × 2 = ~88s totali, completa PRIMA di
+   "LLM ready") — **non era mai stata il collo di bottiglia**,
+   contrariamente a quanto ipotizzato in "continued 15/16".
+7. **Aggiunto un secondo livello di instrumentazione** (contatore +
+   tempo cumulativo) a `_ShadowExpertINT4.__call__()` — rivela il vero
+   collo di bottiglia: forward per-TOKEN (`hidden_states.shape=(1,
+   4096)`, non batchato), **~0.10s/chiamata**, costante, migliaia di
+   chiamate necessarie.
+8. **Rilanciato (v5) — completato per la prima volta**: **1133.1s
+   (~18.9 min)** per n=16, **8/16 corrette (50.0%)**,
+   `shadow_activations=10081` — **identico byte-per-byte** al
+   baseline Malmö (cpu-offload no-op, stesso n, stessa selezione
+   expert) in accuratezza E in conteggio attivazioni. Prova numerica
+   diretta su hardware reale, non solo unit test isolati: il dequant
+   AWQ CPU di Fase 6a Passo 3 produce lo STESSO comportamento del path
+   GPU, non un'approssimazione.
+9. **Test A/B mirato sul thread count** (richiesto dal project owner
+   dopo aver visto il numero, con scetticismo sul fatto che fosse
+   davvero il thread tuning il problema): confronto `OMP_NUM_THREADS=27`
+   vs `=2` alla stessa checkpoint (calls=200) — **0.0967s/call vs
+   0.100-0.103s/call, praticamente identico**. La build del pool
+   invece RALLENTA con meno thread (183s vs 88s con 2 thread) — il
+   parallelismo aiuta sui tensori grandi (dequant one-time) ma è
+   irrilevante sul forward a singola riga (1×4096). **Ipotesi
+   thread-oversubscription falsificata con dati, non per
+   discussione.**
+
+### Result
+
+Due fatti distinti, entrambi ora misurati non ipotizzati:
+
+1. **Correttezza**: PROVATA su hardware reale. Stesso accuracy, stesso
+   `shadow_activations` count del path no-op — il dequant AWQ CPU
+   (Fase 6a) non degrada la qualità, anche sotto carico shadow
+   attivo reale.
+2. **Performance**: il path cpu-offload reale è **25.7x più lento**
+   del baseline senza offload sullo stesso n=16 (1133s vs 44.1s,
+   Malmö) — causa isolata (forward per-token a ~100ms/chiamata,
+   indipendente dal thread count, quindi verosimilmente un limite di
+   throughput per-core genuino su questo tipo di istanza RunPod
+   ottimizzata per GPU, non un bug di configurazione). Estrapolato
+   (non misurato) al full 570: dell'ordine delle ore, non minuti —
+   non production-ready così com'è.
+
+### Why this matters
+
+- L'obiettivo originale di oggi ("un numero di tempo E di accuratezza
+  per cpu-offload reale") è centrato, con un risultato onesto: la
+  feature FUNZIONA correttamente ma non è ancora abbastanza veloce da
+  essere utile in produzione su questo tipo di hardware.
+- **Nessun rischio per il path di produzione esistente**: verificato
+  esplicitamente che `--wire-tier-manager` e `--enable-cpu-offload`
+  restano entrambi opt-in con default `False` — sia a livello CLI
+  (`argparse action="store_true"`) sia a livello `GCSGWorker.__init__`
+  (`enable_cpu_offload: bool | None = None`) — invariato dalla Fase 4,
+  non toccato in questa sessione. La suite di test (168+6 nuovi, tutti
+  verdi) include esplicitamente `test_..._disabled_by_default_even_with_tier_manager`
+  per entrambi i path (1 e AWQ), quindi una regressione futura su
+  questo punto verrebbe rilevata, non solo assunta.
+- Sei "known issue" nuovi ora in BOOTSTRAP_ANTI_ALZHEIMER.md (§5.9-
+  5.13) — nproc/free mentono su RunPod, py-spy bloccato, la
+  falsificazione di "era solo WSL2" per questo specifico path, CRLF
+  su scp diretto, `< /dev/null` per SSH+nohup — così la prossima
+  sessione non deve reimparare nessuno di questi da zero.
+
+### Current state
+
+- Codice: tutte le modifiche committate e pushate su
+  `claude/ddr4-ram-processing-unzseh` (PR #42 verso `develop`,
+  aggiornata automaticamente dal push).
+- `_check_cpu_ram_budget()`/`_read_cgroup_available_gb()` attivi in
+  produzione (non dietro un flag separato — si applicano SOLO quando
+  `--enable-cpu-offload` è già esplicitamente attivo, quindi zero
+  impatto sul path di default).
+- Pod RunPod (RTX3090, sessione odierna): stato al momento di scrivere
+  non ancora determinato per lo shutdown — vedi se una sessione
+  successiva lo trova ancora attivo prima di assumere che vada
+  riprovisionato da zero.
+- Log/telemetria/risultati completi salvati in locale in
+  `logs/runpod_cpu_offload_20260817/` (run v5 completo, telemetria GPU
+  host per l'intera sessione) — non solo sul pod, per lo stesso motivo
+  di `logs/malmo_runpod/`/`logs/sprint4_tekniska/`.
+
+Next session: nessuna azione bloccante — issue #33 ha ora sia la prova
+di correttezza sia una causa isolata (non ancora risolta) per la
+performance. Se si vuole inseguire la velocità: il prossimo sospetto
+qualificato è il costo fisso per-chiamata di un matmul a singola riga
+su CPU (~100ms per un'operazione che dovrebbe costare ok pochi ms) —
+andrebbe isolato con un microbenchmark PyTorch puro (fuori da vLLM/GCSG)
+per capire se è overhead di dispatch, allocazione, o genuino limite di
+throughput per-core di questo tipo di istanza RunPod, prima di
+proporre un fix. Non bloccante: la feature resta opt-in e sicura anche
+senza quella risposta.
