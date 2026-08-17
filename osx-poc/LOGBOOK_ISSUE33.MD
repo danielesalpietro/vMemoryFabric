@@ -1404,3 +1404,184 @@ Next session: appena l'SSH è disponibile — verificare AVX-512
 (`git fetch && git checkout claude/ddr4-ram-processing-unzseh`), poi
 eseguire il piano di test già concordato (Punto 2 baseline ×2, Punto 3
 conferma no-op a 16/32).
+
+---
+
+## 2026-08-17 (continued) — Malmö in produzione: validazione reale, bug ambientale trovato, conferma empirica del no-op
+
+**Release:** un fix (`OSX_MMLU_MODEL_PATH` override, commit `b719111`) —
+diagnostico, non cambia il comportamento di default. Nessun'altra
+modifica a codice di produzione: sessione di validazione, non sviluppo.
+
+### What we set out to do
+
+Eseguire il piano concordato sul pod Malmö: Punto 2 (regressione
+baseline, `--wire-tier-manager` senza `--enable-cpu-offload`, fette
+16→32→64→570 ×2) e Punto 3 (conferma esplicita del no-op di
+`--enable-cpu-offload` sul path 2/3 reale, fette 16/32) — vedi sessione
+precedente per il contesto completo (specifiche pod, motivazione).
+
+### What we did
+
+**Accesso SSH**: risolto — chiave locale (`id_ed25519_runpod_sprint4`,
+la stessa di Sprint 4) aggiunta a `~/.ssh/authorized_keys` sul pod
+direttamente dalla shell già aperta dal project owner, non serviva la
+console web. Sorgenti: `/workspace` dell'immagine base risultava vuoto
+(un `VOLUME` Docker anonimo probabilmente sovrascrive quello che il
+Dockerfile aveva copiato — non indagato a fondo, non necessario) —
+risolto con un `git clone` fresco diretto invece di investigare oltre.
+Checkpoint: `casperhansen/mixtral-instruct-awq` scaricato da HuggingFace
+in **28.9 secondi** (confermata la velocità RunPod↔HF preannunciata dal
+project owner).
+
+**Verifica AVX-512**: confermata via `lscpu` E via `/proc/cpuinfo` da
+Python — feature set completo (`avx512f`, `avx512bw`, `avx512vl`,
+`avx512_vnni`, più estensioni Ice Lake assenti sul Cascade Lake locale:
+`avx512_vbmi2`, `avx512_bitalg`, `avx512_vpopcntdq`, `gfni`, `vaes`).
+
+**Quota CPU reale vs. visibile**: `nproc` riporta 96 (topologia
+dell'host, visibile al container), ma `/sys/fs/cgroup/cpu.max` =
+"765000 100000" → quota reale **7.65 core** — stesso problema già
+noto nel progetto (issue #18, "OMP_NUM_THREADS vs real vCPU count").
+Impostato `OMP_NUM_THREADS=7` esplicitamente su ogni run per evitare
+oversubscription (96 thread in contesa su 7.65 core di quota avrebbe
+prodotto numeri fuorvianti, non rappresentativi).
+
+**Punto 2, round 1 — tutto pulito**: 16 (44.1s), 32 (51.6s), 64 (133.9s),
+570 completo (**600.8s, 72.1% — 411/570**, contro il baseline storico
+72.3%/412/570 del 2026-08-09 — un solo risultato di differenza).
+`shadow_activations`/`activation_rate` coerenti su tutte le fette
+(~4.5-5.0%, come atteso dalla soglia θ_contamination=0.05). Nessun hang
+nella storica zona di rischio (richieste 27-31, causa originaria issue
+#10/#16) — confermato ancora una volta che era un artefatto WSL2, non
+riprodotto su Linux reale. Un rallentamento transitorio (richieste
+300-320, ~3.6s/it di picco) auto-risolto, stesso pattern "micro-slowdown
+zone" già documentato in `LOGBOOK.md` per il burn-test Marlin.
+
+**Bug ambientale trovato — non del nostro codice, verificato con un test
+di controllo**: durante il Punto 3, `--enable-cpu-offload` a 16 domande
+si è bloccato indefinitamente al caricamento del checkpoint (safetensors
+shard 0%, stato processo `D` — disk sleep — `wchan:
+folio_wait_bit_common`, zero byte letti in 15s consecutivi). Ipotesi del
+project owner ("forse crea oggetti in RAM/filesystem col nuovo
+parametro?") verificata e ESCLUSA con un test decisivo: lo stesso
+identico comando SENZA `--enable-cpu-offload` (il Punto 2 baseline, già
+girato 4 volte senza problemi) si è bloccato ALLO STESSO MODO subito
+dopo — provando che il problema è ambientale/temporale (finestra di
+congestione sul volume di rete condiviso), non legato al flag. `dd`
+sullo stesso file leggeva a 4-5 GB/s nello stesso momento — il problema
+è specifico all'mmap (usato da safetensors/vLLM per il caricamento), non
+al filesystem in generale: classe di problema nota per FUSE (page fault
+attraverso FUSE può bloccarsi in modi che una read() sequenziale non
+incontra).
+
+**Workaround, non un fix del filesystem** (fuori dal nostro controllo):
+checkpoint scaricato una seconda volta direttamente su disco locale del
+container (`/root/models/mixtral-instruct-awq`, 31.9s, bypassa
+`/data/nvme` interamente). Aggiunto `OSX_MMLU_MODEL_PATH` come override
+opzionale del `MODEL_PATH` hardcoded in `eval_mmlu_gcsg.py` (default
+invariato) — commit `b719111`. Con questo, tutti i run successivi puliti
+e veloci (nessun'altra ricorrenza).
+
+**Punto 2, round 2 — determinismo perfetto**: 16, 32, 64 tutti
+IDENTICI byte-per-byte al round 1 rispettivo (stessa accuratezza, stesso
+`shadow_activations`, stessa `activation_rate`) — non solo "vicini",
+esattamente uguali. Il run completo a 570 del round 2 non è stato
+rilanciato: con tre fette su tre già concordanti al 100%, l'esito era
+scontato (decisione del project owner, non un'omissione).
+
+**Punto 3 — no-op confermato empiricamente, non solo per lettura del
+codice**: a 16 e 32 domande, `--enable-cpu-offload` produce risultati
+IDENTICI byte-per-byte al corrispondente run senza flag (stessa
+accuratezza, stesso `shadow_activations`). Conferma diretta che il
+checkpoint reale (path 3, AWQ ModuleList — non path 1, l'unico coperto
+da `_build_cpu_shadow_pool()`, Fase 2) non viene mai toccato dal
+routing CPU, esattamente come previsto dall'analisi statica della
+sessione precedente.
+
+**Telemetria GPU**: raccolta continua per l'intera sessione (547
+campioni, ogni 5s, 00:32-01:18 UTC) — picco utilizzo 99%, picco VRAM
+43729/46068 MiB (combacia col budget 0.95 di `gpu_memory_utilization`:
+18.95GB pesi + 21GB KV-cache), potenza media 124.9W (sessione intera,
+inclusi lunghi periodi di inattività tra un run e l'altro — sotto carico
+attivo tocca ~290W).
+
+**Recupero completo prima dello shutdown** (richiesto esplicitamente dal
+project owner, due volte, durante la sessione): tutti i 14 file di log,
+4 file di risultati JSONL, la telemetria GPU completa, e lo snapshot
+HW/env del pod copiati in `logs/malmo_runpod/` — stesso principio già
+applicato in Sprint 4 (`logs/sprint4_tekniska/`), verificato file per
+file prima di considerare la sessione chiusa.
+
+### Result
+
+Punto 2 e Punto 3 entrambi chiusi con esito pulito. Nessuna regressione
+da Fase 0-5 confermata su hardware reale con checkpoint reale (non più
+solo sintetico/unit-test). Il no-op di `--enable-cpu-offload` sul
+checkpoint reale è ora un fatto misurato, non solo dedotto dal codice.
+Un bug ambientale reale (mmap-su-FUSE) diagnosticato e aggirato, non
+lasciato come mistero.
+
+### Why this matters
+
+Chiude il cerchio aperto dalla domanda diretta del project owner
+("cosa abbiamo ottenuto, a parte tanto codice?"): la risposta concreta è
+che oggi sappiamo, con dati reali e non assunzioni, che (1) il lavoro di
+Fase 0-5 non ha rotto nulla di già validato, (2) il flag è sicuro anche
+restando inerte, (3) esattamente cosa manca per renderlo utile (vedi
+Fase 6 sotto) — tre fatti verificati, non tre speranze.
+
+### Fase 6 (nuova) — cosa serve per attivare cpu_offload sul checkpoint reale
+
+Non ancora iniziata — scoping proposto al project owner, decisione
+aperta se procedere:
+
+- **Fase 6a — path 3 (AWQ ModuleList), il più fattibile**: `_pin_awq_expert_to_gpu()`
+  oggi sposta i pesi AWQ-packed (`qweight`/`qzeros`/`scales`, formato
+  GEMM group_size=128 — verificato in `quant_config.json` del checkpoint
+  reale) su GPU; il forward (`_AWQShadowExpert`) delega a
+  `MixtralMLP.forward()`, che usa un kernel CUDA AWQ fuso
+  (dequant+matmul), nessun equivalente CPU in vLLM/AutoAWQ. Serve un
+  dequantizzatore AWQ lato CPU (formato documentato, non
+  reverse-engineering) che produca pesi fp16/fp32, poi riusa il forward
+  "plain PyTorch" già validato da `_ShadowExpertINT4` (Fase 1,
+  device-agnostic). Passo 0 prima di scrivere codice: verificare se
+  AutoAWQ espone già un dequantizzatore Python/CPU riusabile invece di
+  reimplementare il bit-unpacking a mano — non ancora controllato.
+  Verifica numerica: parità fp32/CPU vs. kernel CUDA reale, stessa
+  metodologia di Fase 1.
+- **Fase 6b — path 2 (Marlin), più difficile, priorità più bassa**: il
+  formato Marlin-packed (`w13_qweight` ecc.) è bit-interleaved
+  specificamente per l'accesso a memoria del kernel Marlin su GPU
+  (coalescenza dei warp) — non un semplice 4-bit impacchettato come AWQ.
+  Invertirlo per CPU è stato già scartato come approccio in questo
+  progetto in un contesto simile (issue #10, motivo diverso ma stessa
+  difficoltà di fondo: formato opaco senza reimplementare il kernel).
+  Alternativa da esplorare, non verificata: accedere ai pesi AWQ
+  pre-repack Marlin, se ancora recuperabili altrove nella pipeline di
+  caricamento.
+- **Raccomandazione**: Fase 6a da sola basterebbe a rendere reale il
+  test di oggi (path 3 è il default quando si usa `--wire-tier-manager`
+  senza `--quantization` esplicito). Fase 6b rimandabile finché non
+  esiste un motivo di produzione concreto.
+
+### Current state
+
+- `scripts/eval_mmlu_gcsg.py`: `OSX_MMLU_MODEL_PATH` override (workaround
+  mmap-su-FUSE), `--enable-cpu-offload` verificato end-to-end su
+  checkpoint reale.
+- `logs/malmo_runpod/`: log completi, risultati JSONL, telemetria GPU,
+  snapshot HW/env — tutto recuperato prima di considerare lo shutdown
+  del pod.
+- Fase 0-5 confermate senza regressioni su hardware reale + checkpoint
+  reale (non solo sintetico).
+- Fase 6 (path 2/3 CPU support) proposta, non iniziata — decisione
+  aperta col project owner.
+- Pod Malmö: pronto per lo shutdown non appena confermato il recupero
+  completo (in corso).
+- Branch: `claude/ddr4-ram-processing-unzseh`.
+
+Next session: decisione su Fase 6 (procedere con 6a? Verificare prima se
+AutoAWQ espone un dequant CPU riusabile?) — o chiudere issue #33 qui,
+con l'infrastruttura pronta ma non ancora utile in produzione, come
+esito onesto e documentato.
