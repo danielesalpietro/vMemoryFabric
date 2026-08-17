@@ -2324,10 +2324,24 @@ cache/eviction multi-expert da blindare — oggi solo un expert su un
 layer è stato provato. `gc.collect()` ad ogni eviction è probabilmente
 overhead inutile (CPython libera per refcounting su `dict.pop()`, non
 serve GC ciclico qui). Il tetto "15-20 esperti" non torna con `shadow_
-pool_size=2` di oggi (al massimo 1 expert freddo alla volta) né con la
-RAM reale (a 21GB/expert, 15 esperti = 315GB, non entrano nemmeno nei
-256GB del Z8 locale) — sembra pensato per lo scenario CPU-first di issue
-#44, fuori scope per Fase 6a. `torch.set_num_threads()` per il tuning
+pool_size=2` di oggi (al massimo 1 expert freddo alla volta) — questa
+parte del ragionamento resta valida — ma il secondo motivo dato
+("a 21GB/expert, 15 esperti = 315GB, non entrano nemmeno nei 256GB del
+Z8 locale") era SBAGLIATO: 256GB veniva da un riferimento vecchio in
+`LOGBOOK.md`, mai riverificato qui. **Correzione (stessa sessione,
+project owner)**: l'host reale ha **503.75 GB** (`wmic`, verificato),
+di cui solo 196GB allocati a WSL2/Docker (`.wslconfig`, `memory=196GB`)
+al momento in cui è stato scritto il paragrafo sopra — un limite di
+configurazione, non hardware. 315GB per 15 esperti sarebbero entrati
+comodamente nell'host reale, anche se non nei 196GB allocati allora a
+Docker. Il motivo "fuori scope per shadow_pool_size=2 di oggi" resta
+comunque sufficiente da solo per rimandare il tetto a 15-20 — non serve
+il secondo argomento (sbagliato) per la stessa conclusione. `.wslconfig`
+aggiornato subito dopo a `memory=444GB` (vedi sessione successiva) —
+non per questo lavoro specificamente, ma corregge il limite per
+qualunque lavoro futuro ne avesse bisogno.
+
+`torch.set_num_threads()` per il tuning
 thread: valido in principio (stessa lezione di `OMP_NUM_THREADS` già
 imparata oggi sul pod Malmö), ma non c'è ancora un punto di
 inizializzazione a cui agganciarlo — rimandato all'integrazione vera.
@@ -2398,3 +2412,66 @@ Next session: come sopra — decisione finale su Fase 6a (integrare con
 cache fp32, scoping quantizzazione per-gruppo, o chiudere qui) — ora con
 anche il numero di performance corretto (133.3ms/call, non 199.9ms) e
 una guardia di regressione per non ripetere l'errore INT4.
+
+---
+
+## 2026-08-17 (continued 12) — Corretto un numero sbagliato nel log, alzata la RAM allocata a WSL2/Docker
+
+**Release:** nessuna modifica a codice — un file di sistema
+(`C:\Users\Admin\.wslconfig`) e un riavvio di WSL2.
+
+### What we set out to do
+
+Il project owner ha corretto un numero scritto nella sessione precedente
+("256GB del Z8 locale", usato per dire che una cache di 15-20 esperti
+non ci sarebbe entrata): la macchina reale ne ha 504GB. Verificare e, se
+serve, rimediare aumentando quanto allocato a WSL2/Docker.
+
+### What we did
+
+Verificato con comandi reali, non per fiducia: `wmic computersystem get
+TotalPhysicalMemory` → 540853346304 byte = **503.75 GB** (host reale,
+conferma il numero del project owner). `.wslconfig` aveva `memory=196GB`
+— spiegava perché `docker info` vedeva solo 192.6GiB, non un limite
+hardware. Confermato nessun container attivo (`docker ps -a`, tutti
+`Exited`) prima di un'azione che richiede riavvio — sicuro, nessun
+lavoro in corso da perdere.
+
+Alzato `.wslconfig` a `memory=444GB` (margine di ~60GB per Windows/altri
+processi, non al limite), `wsl --shutdown`, verificato il riavvio
+automatico: `docker info` ora riporta **436.8GiB** (era 192.6GiB).
+
+Corretta la sessione precedente (vedi sopra, "continued 11") — non
+cancellato il numero sbagliato, annotata la correzione sul posto, stesso
+principio già seguito in questo logbook fin dall'inizio.
+
+### Result
+
+RAM reale disponibile a Docker/WSL2 più che raddoppiata (192.6GiB →
+436.8GiB), senza perdita di lavoro (nessun container attivo). Il numero
+sbagliato nel log è corretto, non nascosto.
+
+### Why this matters
+
+Il vincolo di memoria che aveva fatto scartare il tetto "15-20 esperti"
+della sessione precedente era in parte un artefatto di configurazione,
+non un limite fisico — ora corretto. Non cambia la conclusione di quella
+sessione (lo scope attuale, `shadow_pool_size=2`, resta il motivo
+sufficiente per rimandare quel tetto), ma toglie di mezzo un dato
+sbagliato prima che informasse una decisione futura. Con 436.8GiB
+disponibili, un eventuale lavoro futuro su cache multi-expert più grandi
+(issue #44, CPU-first) avrebbe comunque margine reale, non solo teorico.
+
+### Current state
+
+- `C:\Users\Admin\.wslconfig`: `memory=444GB` (era 196GB).
+- Docker/WSL2 confermato riavviato con la nuova allocazione (436.8GiB
+  disponibili).
+- Nessun container perso — tutti già `Exited` prima del riavvio.
+- Correzione annotata nella sessione precedente, non solo qui.
+- Nessuna modifica a codice del progetto in questa sessione.
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session: come sopra — decisione finale su Fase 6a. Nessun'azione
+di sistema pendente.
