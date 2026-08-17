@@ -1748,3 +1748,127 @@ dequant-poi-GEMM separato di questo proof-of-path.
 Next session: se si procede — proof-of-path minimo (`dequantize_gemm()` su
 un singolo expert del checkpoint reale, poi attraverso `_ShadowExpertINT4`)
 più il benchmark a 4 componenti sopra descritto.
+
+---
+
+## 2026-08-17 (continued 5) — Proof-of-path Fase 6a: funziona, e due numeri reali cambiano il design
+
+**Release:** nuovo `scripts/verify_awq_cpu_dequant.py` — script di ricerca
+autonomo, nessuna modifica a `scheduler/gcsg.py` o ad altro codice di
+produzione. "Siamo ricercatori, procediamo ed andiamo a vedere" (project
+owner) — proof-of-path eseguito su questa macchina (Z8 locale, checkpoint
+reale già presente nel volume Docker), non sul pod Malmö (già spento).
+
+### What we set out to do
+
+Chiudere il proof-of-path minimo lasciato aperto nella sessione
+precedente: `dequantize_gemm()` (vendorizzata da AutoAWQ, verificata) su
+un expert reale del checkpoint locale, poi attraverso `_ShadowExpertINT4`,
+misurando i 4 componenti di costo identificati (unpack/dequant, GEMM,
+memoria, ammortizzato).
+
+### What we did
+
+**Verificato il sorgente di AutoAWQ direttamente** (non solo il riassunto
+della sessione precedente) via `gh api repos/casper-hansen/AutoAWQ/contents/...`
+— confermati `AWQ_ORDER`/`AWQ_REVERSE_ORDER` esatti (`[0,2,4,6,1,3,5,7]`/
+`[0,4,1,5,2,6,3,7]`), esattamente il rischio di ordine di packing
+interleaved segnalato nella sessione precedente, risolto correttamente
+dal codice reale di AutoAWQ.
+
+**Trovati i nomi reali dei tensori** nel checkpoint locale
+(`model.safetensors.index.json`): `model.layers.{L}.block_sparse_moe.
+experts.{E}.{w1,w2,w3}.{qweight,qzeros,scales}` — naming Mixtral standard
+(w1=gate_proj, w3=up_proj, w2=down_proj).
+
+**Scritto `scripts/verify_awq_cpu_dequant.py`**: carica i tensori AWQ
+grezzi di un expert reale via `safetensors` diretto (nessun motore vLLM,
+nessuna GPU — solo lettura file), dequantizza su CPU con
+`dequantize_gemm()` vendorizzata, verifica shape/finitezza, esegue un
+forward SwiGLU reale attraverso `_ShadowExpertINT4` (scale=1.0, i pesi
+sono già dequantizzati — riuso la classe intatta, zero modifiche).
+
+**Trovato subito, non assunto**: la convenzione di layout AWQ GEMM è
+`(in_features, out_features)` — es. w1 dequantizzato ha shape (4096,
+14336) = (hidden, intermediate), l'OPPOSTO della convenzione nn.Linear/
+`_ShadowExpertINT4` `(out_features, in_features)`. Verificato
+empiricamente contro `config.json` reale (hidden_size=4096,
+intermediate_size=14336), non assunto dalla documentazione AWQ generica.
+Serve una trasposizione esplicita prima di passare i pesi a
+`_ShadowExpertINT4` — fatto, non stato un problema una volta identificato.
+
+**Trovato un problema di performance reale, non anticipato**: il primo
+forward a scala reale (hidden=4096, intermediate=14336, batch=4) in fp16
+ha impiegato **3.3-3.4 secondi** — molto più dei ~70-85ms che la sola
+scala (28× le dimensioni sintetiche di Fase 1) avrebbe fatto prevedere.
+Ipotesi verificata con un confronto diretto (non assunta): il CPU backend
+di PyTorch ha supporto fp16 molto meno ottimizzato di fp32. Confermato —
+lo stesso identico forward in fp32 impiega **156-204ms**, un
+**16.5× più veloce**. Regola pratica concreta per Fase 6a: i pesi
+dequantizzati vanno SEMPRE castati a fp32 prima del forward CPU, mai
+lasciati fp16 (anche se le `scales` del checkpoint sono fp16 — quello è
+il formato di storage, non quello che deve girare nel kernel CPU).
+
+**Trovato un vincolo di memoria reale**: cachare i pesi dequantizzati in
+fp32 per un intero expert "freddo" (tutti e 32 i layer di Mixtral) costa
+**21.0 GB di DDR4** — molto più dei ~3 GB/expert INT4 lato GPU che sono
+il punto di paragone di sempre in questo progetto (memory math in
+`gcsg.py`). Soluzione identificata, non implementata: dopo
+`dequantize_gemm()` (AWQ→fp32, one-time), ri-quantizzare subito con
+`_quantize_int4()` — lo STESSO schema già usato e validato per il path 1
+(Fase 1) — e cachare quello (int8+scale, ~4× più compatto,
+~5.25GB/expert stimati). Il forward resta `_ShadowExpertINT4` così com'è
+(già fa `w_q.to(fp32)*scale` internamente) — nessun pezzo nuovo da
+inventare, solo la sequenza AWQ-dequant→INT4-requant da collegare, che
+riusa ESCLUSIVAMENTE codice già esistente e validato (AutoAWQ vendorizzato
++ `_quantize_int4` Fase 1 + `_ShadowExpertINT4` Fase 1).
+
+### Result
+
+**Proof-of-path Passo 1 (CPU-only) riuscito**: dequant produce pesi
+finiti e numericamente ragionevoli, layout verificato (non assunto),
+forward SwiGLU reale eseguito su pesi di un expert reale del checkpoint
+di produzione. Due numeri concreti (16.5× fp16→fp32, 21GB→~5.25GB con
+re-quantizzazione INT4) cambiano il design da "genericamente fattibile"
+a "un piano preciso con numeri reali dietro". Passo 2 (parità numerica
+contro il kernel CUDA reale) resta da fare, richiede GPU + un modello
+vLLM caricato (o quantomeno il kernel AWQ invocato direttamente) — non
+fatto in questa sessione.
+
+### Why this matters
+
+Questo è esattamente il valore di "andare a vedere" invece di stimare:
+senza eseguire il proof-of-path, il design naturale (dequant → cache
+fp32 → forward) avrebbe portato a un'implementazione 16.5× più lenta del
+necessario E con un'impronta di memoria 4× più grande del necessario —
+entrambi i problemi invisibili sulla carta, entrambi trovati eseguendo
+codice reale su un checkpoint reale in meno di un'ora.
+
+### Current state
+
+- `scripts/verify_awq_cpu_dequant.py` aggiunto — script di ricerca
+  autonomo (safetensors diretto, nessuna dipendenza da vLLM/GPU), lint
+  pulito.
+- Nessuna modifica a `scheduler/gcsg.py` — il proof-of-path è
+  deliberatamente separato dal codice di produzione finché il Passo 2
+  (parità GPU) non è fatto.
+- Design concreto per Fase 6a ora chiaro: AWQ dequant (vendorizzato,
+  one-time per expert-layer) → `_quantize_int4()` (riuso Fase 1) →
+  cache INT8 → `_ShadowExpertINT4` forward fp32 (riuso Fase 1) — nessun
+  pezzo nuovo, solo collegamento.
+- Numeri reali raccolti: dequant ~850ms/expert-layer (naive, non
+  ottimizzato), forward fp32 ~150-200ms/expert-layer/call a scala reale,
+  memoria ~21GB/expert se cachato fp32 (~5.25GB stimati con
+  re-quantizzazione INT4, non ancora misurato per davvero).
+- Passo 2 (parità numerica contro kernel CUDA AWQ reale) non fatto —
+  richiede GPU + vLLM, prossimo passo naturale prima di qualunque
+  integrazione in `_build_cpu_shadow_pool()`.
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session: Passo 2 — parità numerica CPU-dequant vs. kernel CUDA AWQ
+reale (richiede GPU), poi misurare per davvero il costo/memoria della
+pipeline AWQ-dequant→INT4-requant (non solo stimato), poi — solo se i
+numeri restano favorevoli — integrazione in `_build_cpu_shadow_pool()`
+per path 3. Decisione finale su procedere ancora aperta col project
+owner, ma ora con dati concreti invece di stime.
