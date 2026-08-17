@@ -3342,3 +3342,19 @@ prima issue #27 (EPM) o il pattern due-pass generate/refresh/generate
 nello stesso processo — nessuno dei due è un prerequisito per il resto
 di issue #33 (che resta chiuso su correttezza, aperto solo su
 performance non urgente, feature opt-in/default-off).
+
+**Aggiunta del project owner, fine sessione**: regola di decadimento
+proposta per quando si riprende questo lavoro — uno scheduler che
+rivaluta la temperatura hot/cold degli expert ogni **60 secondi**
+(tick periodico che chiama `refresh_shadow_pool_selection()`).
+Distinta e complementare a issue #27: EPM risolve il cold-start tra
+riavvii di processo, questo tick risolverebbe il fatto che DENTRO un
+processo lungo la classificazione non si aggiorna mai da sola —
+esattamente la domanda che il docstring di
+`refresh_shadow_pool_selection()` lascia aperta oggi ("farlo prima di
+avere il dato di costo promote/evict, Sprint 4 sotto-obiettivo 4,
+rischierebbe uno storm ad ogni chiamata — pensato per 'ogni N
+richieste' o un timer, mai deciso quale"). Non implementato in questa
+sessione — prerequisiti: il dato di costo promote/evict (verificare se
+esiste già), un thread/timer di background in `GCSGWorker`, e una
+decisione tra cadenza fissa (60s) vs. basata su conteggio richieste.
