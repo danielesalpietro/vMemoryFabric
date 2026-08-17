@@ -140,8 +140,13 @@ def main() -> None:
     dequantized, dequant_s = _awq_dequant_expert(module)
     print(f"\n[Componente 1] Dequant AWQ (w1+w2+w3, un layer): {dequant_s * 1e3:.1f}ms")
 
-    w13_fp32 = torch.cat([dequantized["w1"].T, dequantized["w3"].T], dim=0).to(torch.float32)
-    w2_fp32 = dequantized["w2"].T.to(torch.float32)
+    # .contiguous() esplicito, non assunto: .T crea una VIEW non contigua,
+    # e oneDNN paga un costo reale per operare su stride non standard —
+    # verificato isolatamente (4.4x più lento senza, 42.5ms vs 9.7ms su
+    # una matmul della stessa shape) prima di fidarsi che torch.cat/.to()
+    # lo risolvessero da soli.
+    w13_fp32 = torch.cat([dequantized["w1"].T, dequantized["w3"].T], dim=0).to(torch.float32).contiguous()
+    w2_fp32 = dequantized["w2"].T.to(torch.float32).contiguous()
 
     results = {}
 

@@ -155,6 +155,80 @@ class TestShadowExpertINT4CPU:
         )
 
 
+# ── Guardia per un risultato negativo reale (issue #33 Fase 6a, 2026-08-17) ──
+#
+# _quantize_int4 è per-tensore simmetrico — adeguato per Fase 1 (pesi
+# random gaussiani sintetici sopra, nessun outlier). Sui pesi REALI di
+# Mixtral, dequantizzati da AWQ (che usa quantizzazione per-gruppo,
+# group_size=128, asimmetrica — proprio per gestire outlier per-canale)
+# e poi ri-quantizzati con questo schema, l'errore misurato contro il
+# kernel CUDA reale è stato 0.95 — quasi distruzione totale del segnale,
+# non un piccolo degrado (vedi LOGBOOK_ISSUE33.MD, "Misura completa della
+# pipeline"). Questo test non richiede il checkpoint reale/GPU — riproduce
+# la STRUTTURA del problema (varianza per-gruppo che uno scale
+# per-tensore non può assorbire), non i pesi esatti.
+
+class TestQuantizeInt4KnownLimitation:
+
+    @staticmethod
+    def _outlier_group_weight(rows: int, cols: int, generator: torch.Generator,
+                               n_outlier_groups: int = 2, group_size: int = 128,
+                               outlier_mult: float = 200.0) -> torch.Tensor:
+        """Gruppi da group_size righe a scala molto diversa (maggioranza
+        "normale", minoranza "outlier" molto più grande) — la stessa
+        struttura che la quantizzazione per-gruppo di AWQ (group_size=128
+        reale, verificato sul checkpoint) esiste apposta per gestire."""
+        weight = torch.randn(rows, cols, generator=generator) * 0.02
+        n_groups = rows // group_size
+        outlier_groups = torch.randperm(n_groups, generator=generator)[:n_outlier_groups]
+        for g in outlier_groups:
+            weight[g * group_size:(g + 1) * group_size] *= outlier_mult
+        return weight
+
+    def test_per_tensor_quantization_fails_on_per_group_outlier_structure(self):
+        """Guardia permanente: se un giorno qualcuno propone di ri-usare
+        _quantize_int4 (per-tensore) per comprimere pesi già dequantizzati
+        da un formato per-gruppo (AWQ/GPTQ) per risparmiare memoria — es.
+        21GB/expert fp32 vs 5.25GB/expert INT4, la stessa tentazione reale
+        di issue #33 Fase 6a — questo test fallisce e spiega perché,
+        invece di lasciare che lo scoprano di nuovo su un checkpoint reale.
+
+        Misura l'errore sul FORWARD completo (due matmul + SiLU), non
+        sulla sola ricostruzione del peso: un primo tentativo che misurava
+        solo l'errore sul peso restava a ~0.17, non riproduceva il
+        problema — il degrado catastrofico (0.95 misurato sul checkpoint
+        reale, LOGBOOK_ISSUE33.MD) emerge dalla propagazione attraverso il
+        forward (i gruppi "normali" arrotondano a ~0 con uno scale
+        dominato dagli outlier, poi SiLU/il secondo matmul compongono
+        l'errore), non dalla sola quantizzazione del peso isolata.
+        Verificato empiricamente prima di scrivere questo test (script
+        ad-hoc, non incluso): stessa struttura via forward reale
+        raggiunge 1.0 di errore relativo, anche oltre il 0.95 reale — la
+        soglia qui (0.9) resta sotto quel margine, non sopra.
+        """
+        generator = torch.Generator().manual_seed(_SEED)
+        hidden, intermediate = 512, 1024
+
+        w13 = self._outlier_group_weight(2 * intermediate, hidden, generator)
+        w2 = self._outlier_group_weight(hidden, intermediate, generator)
+        hidden_states = torch.randn(4, hidden, generator=generator)
+
+        want = _reference_forward_fp32(hidden_states, w13, w2, intermediate)
+        shadow = _ShadowExpertINT4([_quantize_int4(w13)], [_quantize_int4(w2)])
+        got = shadow(hidden_states, layer_id=0)
+
+        rel_l2_error = ((got - want).norm() / want.norm()).item()
+        assert rel_l2_error > 0.9, (
+            f"errore relativo L2 {rel_l2_error:.3f} — atteso > 0.9 (quasi "
+            "distruzione del segnale, come misurato sul checkpoint reale, "
+            "0.95). Se questo test ora FALLISCE perché l'errore è basso, "
+            "_quantize_int4 potrebbe essere cambiato in modo da reggere "
+            "meglio la varianza per-gruppo — in tal caso aggiornare la "
+            "soglia E la nota in LOGBOOK_ISSUE33.MD, non solo alzare il "
+            "numero qui."
+        )
+
+
 # ── Throughput — richiede AVX-512 reale per essere un dato significativo ────
 
 @pytest.mark.avx512

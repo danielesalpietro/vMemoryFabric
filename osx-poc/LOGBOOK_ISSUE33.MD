@@ -2299,3 +2299,102 @@ Next session: decisione finale col project owner — integrare in
 completa disponibile), o scoping di una quantizzazione per-gruppo prima
 di procedere (lavoro nuovo, non ancora dimensionato), o chiudere Fase 6a
 qui con i dati raccolti come esito documentato.
+
+---
+
+## 2026-08-17 (continued 11) — Consigli esterni vagliati: contiguità confermata (-33%), test di guardia per il risultato negativo
+
+**Release:** `bench_awq_cpu_pipeline.py` aggiornato (fix contiguità),
+nuovo test in `tests/test_cpu_kernel.py`. Nessuna modifica a
+`scheduler/gcsg.py`.
+
+### What we set out to do
+
+Il project owner ha girato 4 consigli tecnici esterni per "blindare" una
+futura integrazione di Fase 6a (cache fp32): gestione memoria/GC, tuning
+thread PyTorch, contiguità dei tensori, un test per il risultato negativo
+dell'INT4. Vagliati uno per uno prima di implementare alla cieca — non
+tutti erano applicabili o corretti nello specifico.
+
+### What we did
+
+**Scartato/rimandato**: gestione memoria aggressiva (`del`+`gc.collect()`
+ad ogni eviction, cache LRU a 15-20 esperti). Non esiste ancora nessuna
+cache/eviction multi-expert da blindare — oggi solo un expert su un
+layer è stato provato. `gc.collect()` ad ogni eviction è probabilmente
+overhead inutile (CPython libera per refcounting su `dict.pop()`, non
+serve GC ciclico qui). Il tetto "15-20 esperti" non torna con `shadow_
+pool_size=2` di oggi (al massimo 1 expert freddo alla volta) né con la
+RAM reale (a 21GB/expert, 15 esperti = 315GB, non entrano nemmeno nei
+256GB del Z8 locale) — sembra pensato per lo scenario CPU-first di issue
+#44, fuori scope per Fase 6a. `torch.set_num_threads()` per il tuning
+thread: valido in principio (stessa lezione di `OMP_NUM_THREADS` già
+imparata oggi sul pod Malmö), ma non c'è ancora un punto di
+inizializzazione a cui agganciarlo — rimandato all'integrazione vera.
+
+**Verificato e confermato**: contiguità dei tensori. Test isolato
+(matmul sulla stessa shape di `w2`, con e senza `.contiguous()` dopo un
+`.T`): **4.4× più lento** senza (42.5ms vs 9.7ms). Applicato a
+`bench_awq_cpu_pipeline.py` (`w13_fp32`/`w2_fp32` ora `.contiguous()`
+esplicito) e rimisurato sulla pipeline reale: forward a regime
+**199.9ms → 133.3ms (-33%)**, accuratezza invariata (0.000530, la
+contiguità non tocca la matematica, solo le prestazioni — atteso e
+confermato).
+
+**Implementato**: `TestQuantizeInt4KnownLimitation` in
+`tests/test_cpu_kernel.py` — guardia permanente contro la tentazione di
+ri-quantizzare pesi AWQ-dequantizzati con `_quantize_int4()` per
+risparmiare memoria (esattamente l'errore 0.95 di sessione precedente).
+Non richiede checkpoint reale/GPU: riproduce la STRUTTURA del problema
+(gruppi a scala molto diversa, come la quantizzazione per-gruppo di AWQ
+esiste per gestire), non i pesi esatti — gira nella suite CPU veloce.
+
+Primo tentativo (misurare l'errore sulla sola ricostruzione del peso)
+NON riproduceva il problema (0.17, non >0.9) — verificato che il
+degrado catastrofico emerge dalla propagazione attraverso il FORWARD
+completo (due matmul + SiLU: i gruppi "normali" arrotondano a ~0 con
+uno scale dominato dagli outlier, poi l'errore si compone), non dalla
+quantizzazione del peso isolata. Riscritto per misurare l'errore sul
+forward (riusando `_reference_forward_fp32` già esistente in questo
+file) — raggiunge 1.0 di errore relativo con la stessa struttura, anche
+oltre il 0.95 reale. Soglia del test a 0.9, con margine.
+
+Full suite: **160 passed** (+1), 3 skipped, 0 failed. `ruff check`
+pulito (stesso singolo warning pre-esistente non correlato).
+
+### Result
+
+Due dei quattro consigli erano validi e concreti (contiguità, test di
+guardia) — implementati, con un miglioramento di performance reale
+(-33%) e una guardia permanente contro un errore già commesso una volta.
+Due erano prematuri o mal calibrati per lo scope attuale (gestione
+memoria multi-expert, tuning thread) — non scartati, solo rimandati a
+quando esisterà del codice a cui si applicano davvero.
+
+### Why this matters
+
+Vagliare consigli esterni con lo stesso rigore usato per le proprie
+ipotesi — verificare prima di implementare, non implementare perché
+"suona ragionevole" — ha pagato due volte in questa sessione: la
+contiguità era un miglioramento reale non ancora colto (-33%, non
+banale), e il primo tentativo di test di guardia sarebbe passato senza
+proteggere nulla se non fosse stato verificato empiricamente che non
+riproduceva il problema reale.
+
+### Current state
+
+- `scripts/bench_awq_cpu_pipeline.py`: fix `.contiguous()`, numeri
+  aggiornati (133.3ms/call fp32, non più 199.9ms).
+- `tests/test_cpu_kernel.py`: `TestQuantizeInt4KnownLimitation` (1 test),
+  guardia permanente contro la ri-quantizzazione INT4 di pesi
+  per-gruppo-quantizzati.
+- Suite completa 160 passed / 3 skipped, lint pulito.
+- Gestione memoria multi-expert e tuning thread: note valide, rimandate
+  a quando esiste codice di integrazione reale a cui applicarle.
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session: come sopra — decisione finale su Fase 6a (integrare con
+cache fp32, scoping quantizzazione per-gruppo, o chiudere qui) — ora con
+anche il numero di performance corretto (133.3ms/call, non 199.9ms) e
+una guardia di regressione per non ripetere l'errore INT4.
