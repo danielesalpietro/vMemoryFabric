@@ -192,7 +192,13 @@ def bench_cpu() -> dict:
     avx_support = {
         "avx2": "avx2" in flags,
         "avx512f": "avx512f" in flags,
-        "avx512_vnni": "avx512vnni" in flags,
+        # Nome kernel reale in /proc/cpuinfo CON underscore ("avx512_vnni"),
+        # a differenza di avx512f/avx512bw/avx512vbmi (nessuno) - verificato
+        # sul pod H200/Xeon Platinum 8568Y+ (Emerald Rapids, "continued 20"):
+        # senza underscore dava un falso negativo su hardware che lo
+        # supporta davvero. Naming del kernel Linux inconsistente tra i
+        # flag AVX-512, non un errore di battitura da "correggere" qui.
+        "avx512_vnni": "avx512_vnni" in flags,
     }
 
     return {

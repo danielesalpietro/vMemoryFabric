@@ -168,6 +168,28 @@ class TestBenchCpu:
         assert set(result["avx_support"]) == {"avx2", "avx512f", "avx512_vnni"}
         assert "matmul_gflops" in result
 
+    def test_avx512_vnni_flag_matches_real_proc_cpuinfo_naming(self, monkeypatch):
+        """Regressione: /proc/cpuinfo usa "avx512_vnni" CON underscore
+        (a differenza di avx512f/avx512bw/ecc, senza) — un pod RunPod
+        H200/Xeon Platinum 8568Y+ reale (Emerald Rapids, "continued 20")
+        ha rivelato un falso negativo qui perché il codice cercava
+        "avx512vnni" senza underscore, che non compare mai in un
+        /proc/cpuinfo reale."""
+        cpuinfo = "flags\t\t: fpu vme avx2 avx512f avx512_vnni amx_tile\n"
+
+        def _fake_open(path, *a, **kw):
+            if str(path) == "/proc/cpuinfo":
+                return io.StringIO(cpuinfo)
+            raise FileNotFoundError(path)
+
+        monkeypatch.setattr("builtins.open", _fake_open)
+
+        result = bench_cpu()
+
+        assert result["avx_support"] == {
+            "avx2": True, "avx512f": True, "avx512_vnni": True,
+        }
+
 
 class TestBenchRam:
     def test_structure_with_mocked_cgroup_reader(self, monkeypatch):
