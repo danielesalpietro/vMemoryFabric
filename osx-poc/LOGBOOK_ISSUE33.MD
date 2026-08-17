@@ -2098,3 +2098,108 @@ problemi.
 Next session: seguire il thread principale (Passo 2 del proof-of-path,
 sessione parallela) — #43 e #44 restano in attesa dei rispettivi criteri
 di rivalutazione, non prossimi passi attivi.
+
+---
+
+## 2026-08-17 (continued 9) — Passo 2: parità numerica confermata contro il kernel CUDA AWQ reale
+
+**Release:** nuovo `scripts/verify_awq_cpu_dequant_parity.py`. Nessuna
+modifica a `scheduler/gcsg.py` — stessa disciplina della sessione
+precedente, proof-of-path tenuto separato dal codice di produzione finché
+la parità non è verificata (ora lo è).
+
+### What we set out to do
+
+Il Passo 2 lasciato aperto: confrontare l'output del nostro dequant CPU
+(Passo 1) contro il kernel CUDA AWQ reale, sullo stesso expert dello
+stesso checkpoint, stesso input — non un output "plausibile", una
+verifica numerica diretta.
+
+### What we did
+
+Scritto `verify_awq_cpu_dequant_parity.py`: carica il modello reale via
+`vllm.LLM()` (plain, non `GCSGWorker` — non servono gli hook GCSG per
+questo confronto), estrae il vero modulo `MixtralMLP` di un expert,
+esegue il suo forward reale (kernel CUDA AWQ vero) su un input sintetico,
+poi lo stesso input attraverso dequant CPU + `_ShadowExpertINT4` sugli
+STESSI tensori `qweight`/`qzeros`/`scales` (letti direttamente dal
+modulo caricato, non da un file separato come nel Passo 1 — garantisce
+che siano esattamente gli stessi, non solo dello stesso file).
+
+Nota per chi legge entrambi i thread paralleli di questa giornata: la
+sessione parallela ("continued 7" sopra) aveva segnalato
+`fused_moe_kernel_gptq_awq` come riferimento numerico "verità" per questo
+confronto — approccio valido, non usato qui per semplicità: chiamare
+direttamente il modulo `MixtralMLP` reale (`module(hidden_states)`)
+ottiene lo stesso ground truth senza dover invocare il kernel CUDA a
+basso livello a mano, stesso principio già usato per `_AWQShadowExpert`
+in produzione (delega al modulo reale, zero reimplementazione).
+
+**Due blocchi reali incontrati e risolti, entrambi ambientali — non del
+nostro dequant**:
+1. Il backend flash-attention di default crasha nel profiling interno di
+   vLLM (`cu_seqlens_q must have dtype int32`) con `LLM()` semplice
+   (senza `worker_cls=GCSGWorker`) — mai incontrato prima in questa
+   sessione perché ogni run precedente con checkpoint reale girava sul
+   pod Malmö (Linux reale), non su questa macchina locale (Z8, WSL2).
+   Aggirato con `VLLM_ATTENTION_BACKEND=XFORMERS`, non indagato a fondo
+   (probabile drift di versione flash-attn/vLLM locale, fuori scope per
+   Fase 6a).
+2. `hf_overrides={"head_dim": 128}` mancante — senza, `num_heads` risolve
+   a `None` e il calcolo della dimensione del blocco KV-cache crasha.
+   Stesso override già presente in `eval_mmlu_gcsg.py` (dove passa
+   inosservato, mai isolato prima come singolo requisito). Aggiunto.
+
+**Risultato, due combinazioni layer/expert indipendenti**:
+
+| Layer/Expert | Stato modulo | Errore relativo L2 | Differenza assoluta max |
+|---|---|---|---|
+| 0/0 | offloaded (pinning automatico riuscito) | 0.000483 | 0.0076 |
+| 15/5 | già GPU-resident | 0.000555 | 0.0021 |
+
+Entrambi ben sotto la soglia stretta (1e-2, non lo 0.5 di Fase 1 — qui
+non c'è rumore di quantizzazione atteso, solo precisione fp16/fp32).
+Il primo caso (layer 0, offloaded di default con `cpu_offload_gb=4`) ha
+anche esercitato il pinning esplicito GPU (`module.to("cuda")` prima del
+forward diretto) — la stessa identica situazione che nel 2026-08-12
+(issue #10/#16) crashava senza quel fix, qui gestita correttamente senza
+sorprese.
+
+### Result
+
+**Parità confermata, non solo plausibilità.** Il dequant CPU (AutoAWQ
+vendorizzato) + `_ShadowExpertINT4` (Fase 1, invariata) produce lo
+STESSO output del kernel CUDA AWQ reale su un expert reale del
+checkpoint di produzione, entro la sola precisione numerica. La pipeline
+proposta in Fase 6a non è più "probabilmente corretta per lettura del
+codice" — è verificata contro il ground truth reale.
+
+### Why this matters
+
+Chiude il rischio tecnico più grande di Fase 6a (correttezza del dequant)
+con un dato diretto, non un'inferenza. Le tre verifiche fatte finora
+(Passo 1: shape/layout/plausibilità; costo fp16 vs fp32; Passo 2: parità
+contro kernel reale) coprono correttezza E performance — quello che
+manca ora è solo la misura reale della pipeline
+AWQ-dequant→INT4-requant→cache (stimata, non misurata) prima di decidere
+sull'integrazione in produzione.
+
+### Current state
+
+- `scripts/verify_awq_cpu_dequant_parity.py` aggiunto, lint pulito,
+  verificato due volte (layer/expert diversi, un caso offloaded un caso
+  GPU-resident).
+- Nessuna modifica a `scheduler/gcsg.py`.
+- Suite pytest invariata (159 passed / 3 skipped), nessuna regressione.
+- Rischio tecnico principale di Fase 6a (correttezza) chiuso. Resta:
+  misurare per davvero (non stimare) il costo della pipeline completa
+  AWQ-dequant→`_quantize_int4()`-requant→cache, poi decidere
+  sull'integrazione in `_build_cpu_shadow_pool()`.
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session: misurare la pipeline completa (dequant AWQ → requant INT4
+via `_quantize_int4()` → cache → forward `_ShadowExpertINT4`) sul
+checkpoint reale, non solo stimarla — poi decisione finale su
+integrazione in `_build_cpu_shadow_pool()` per path 3, con dati completi
+invece di stime parziali.
