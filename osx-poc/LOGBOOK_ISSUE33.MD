@@ -3490,3 +3490,129 @@ range già noto (24-26x), poi scegliere tra le direzioni ancora aperte
 (issue #27 EPM, refresh periodico 60s, batching GEMV→GEMM — quest'ultima
 ora con un segnale quantitativo concreto da questo stesso framework,
 ~8-12x sullo Z8, invece di essere solo un'ipotesi).
+
+---
+
+## 2026-08-17 (continued 20) — unit test per il framework, validazione reale su un pod RunPod nuovo
+
+**Release:** sì — `tests/test_perf_test_hardware.py` (nuovo, 18 test,
+include `torch.cuda.empty_cache()` a fine dei due test GPU reali — vedi
+sotto), `tests/test_perf_tuning_report.py` (nuovo, 20 test). Nessuna
+modifica a `benchmarks/perf_test_hardware.py`/`perf_tuning_report.py`
+né al codice GCSG di produzione.
+
+### What we set out to do
+
+Due richieste separate del project owner nella stessa sessione: (1)
+aggiungere unit test per i due script nuovi di "continued 19"
+(`perf_test_hardware.py`, `perf_tuning_report.py`) mentre (2) un pod
+RunPod veniva acceso in parallelo — il "prossimo passo" lasciato aperto
+alla fine di "continued 19" (validare il framework su hardware reale
+senza AVX-512, non solo sullo Z8).
+
+### What we did
+
+1. **`tests/test_perf_test_hardware.py`** (18 test) — stesso pattern di
+   mocking di `TestReadCgroupAvailableGb` (`test_scheduler.py`) per le
+   parti che leggono file di sistema (`_read_cgroup_cpu_count()`,
+   gemello CPU mai esistito prima nel codebase; `_cpu_flags()`), test
+   diretti per `_percentiles()` (pura), smoke test end-to-end per
+   `bench_cpu()`/`bench_ram()`/`_bench_matmul_gflops()` a dimensioni
+   sintetiche di default (piccole, veloci), `@pytest.mark.gpu` per
+   `bench_gpu()`/`bench_pcie()` — stesso marker già usato in
+   `test_tier.py` per isolare i test che richiedono CUDA reale.
+2. **`tests/test_perf_tuning_report.py`** (20 test) — tutte le funzioni
+   sono pure (JSON -> JSON), nessun hardware richiesto: fixture JSON
+   costruite a mano per ogni scenario (stesso principio di
+   `TestCheckCpuRamBudget`), inclusi i casi limite già rilevanti in
+   produzione (budget RAM negativo, GFLOPS mancanti, sezioni
+   `"skipped"` propagate come `"n/a"`).
+3. **Bug di ordine-dei-test trovato eseguendo la suite COMPLETA, non
+   solo i due file nuovi**: `test_tier.py::
+   test_vram_free_decreases_after_load` (asserisce che la VRAM libera
+   via NVML diminuisca dopo un'allocazione di 64MB) falliva quando
+   girava DOPO i due test `@pytest.mark.gpu` nuovi — non un bug nel
+   codice di produzione, ma la cache dell'allocatore CUDA di PyTorch
+   (lasciata da `bench_gpu()`/`bench_pcie()`, che allocano/liberano
+   parecchi tensori) soddisfaceva la nuova allocazione senza un
+   `cudaMalloc` reale, quindi NVML non vedeva alcuna variazione. Fix:
+   `torch.cuda.empty_cache()` a fine dei due test GPU nuovi — verificato
+   che risolve rieseguendo la suite completa due volte.
+4. **Validazione su un pod RunPod nuovo**, acceso dal project owner in
+   parallelo: connessione SSH riuscita con la keypair dedicata
+   (`id_ed25519_runpod_sprint4`, BOOTSTRAP §5.8, appesa manualmente
+   dal project owner via web terminal), repo clonato al volo
+   (`git clone --depth 1 --branch claude/ddr4-ram-processing-unzseh`),
+   framework eseguito a dimensioni Mixtral reali
+   (`OSX_BENCH_HIDDEN=4096 OSX_BENCH_INTERMEDIATE=14336`).
+
+### Result
+
+Pod: **27.2 core cgroup, RAM cgroup 116.0GB, RTX 3090 24GB, AVX2 sì /
+AVX-512 NO** — stesso identico profilo hardware del pod già misurato in
+"continued 17"/"continued 18" (conferma indiretta: RunPod continua ad
+assegnare istanze GPU su host AMD EPYC senza AVX-512 per questo tipo di
+richiesta).
+
+Il verdetto del tuning report: **predicted_slowdown_factor = 36.9x**,
+**"coerente con il range già osservato in produzione (24-26x pipeline
+reale, 44.6x microbenchmark isolato)"** — esattamente il comportamento
+per cui il framework è stato costruito, e la conferma diretta che
+mancava a fine "continued 19" (lì il verdetto era stato validato solo
+sullo Z8, con AVX-512, dove il framework si è correttamente
+auto-qualificato come "FUORI dal range" invece di dare un falso
+allarme).
+
+Altri numeri di interesse:
+- **`avx512_note`**: si attiva correttamente, stesso testo già visto
+  per l'EPYC 7C13 di "continued 17" — nessuna modifica necessaria, il
+  framework generalizza bene a un host DIVERSO con la stessa
+  caratteristica (no AVX-512).
+- **`batching_signal`**: **~3.0x** su questo pod, contro **~8-12x**
+  misurato sullo Z8 in "continued 19" — dato NUOVO, non atteso a
+  priori: il guadagno potenziale da batching GEMV→GEMM non è uguale
+  ovunque, varia con l'hardware. Se la direzione "batching" verrà mai
+  scelta, andrà ri-misurata sull'hardware target reale, non assunta
+  costante da un solo host.
+- **`pcie.flag`**: `"ok"`, pinned ~20-26 GB/s — nessun tetto WSL2/GPU-PV
+  (atteso: questo è un pod Linux reale, non lo stesso ambiente WSL2
+  problematico di "continued 16").
+- **`ram_budget`**: 30 expert path1/4 expert path AWQ — stessi ordini di
+  grandezza di "continued 17" (RAM cgroup quasi identica, 116.0GB vs
+  116.4GB).
+
+JSON completi salvati in
+`logs/runpod_perf_framework_validation_20260817/` (`hw_pod.json`,
+`tuning_report_pod.json`).
+
+### Why this matters
+
+- Il framework non è più solo "gira senza errori sullo Z8" — è
+  verificato che produce il segnale CORRETTO su due host con
+  caratteristiche opposte (AVX-512 sì/no), auto-qualificandosi in
+  entrambi i casi invece di richiedere giudizio umano per interpretare
+  il numero.
+- La suite di test (212 totali, 174 preesistenti + 38 nuovi, ancora
+  tutta verde) copre ora anche
+  gli script di questo framework, non solo il codice `scheduler/gcsg.py`
+  — un futuro refactor di `perf_test_hardware.py`/
+  `perf_tuning_report.py` avrebbe una rete di sicurezza.
+- Il bug di ordine-dei-test trovato (punto 3 sopra) è un promemoria
+  operativo: un `@pytest.mark.gpu` che allunga la vita di tensori CUDA
+  può influenzare test scritti mesi prima nello stesso processo pytest
+  — vale la pena controllare la suite COMPLETA dopo aver aggiunto nuovi
+  test GPU-touching, non solo il file nuovo in isolamento.
+
+### Current state
+
+- Codice: da committare e pushare su `claude/ddr4-ram-processing-unzseh`
+  (PR #42) subito dopo questo entry.
+- Pod RunPod: ancora acceso al momento di scrivere — nessuna azione di
+  shutdown presa in questa sessione (a differenza delle sessioni
+  precedenti, il project owner lo ha acceso esplicitamente e non ha
+  ancora chiesto di spegnerlo).
+
+Next session: nessuna azione bloccante. Il framework performance-test/
+performance-tuning è ora testato e validato su due profili hardware
+diversi — pronto per essere riusato senza ulteriore lavoro di
+validazione la prossima volta che serve un numero di questo tipo.
