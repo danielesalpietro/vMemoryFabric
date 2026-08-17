@@ -1662,3 +1662,89 @@ dell'ecosistema, non solo una scelta di comodo interna al progetto.
 Next session: come sopra — decisione su Fase 6a (procedere? verificare
 prima se AutoAWQ espone un dequant CPU riusabile, visto che nessun
 progetto terzo lo fa già per noi) — o chiudere issue #33 qui.
+
+---
+
+## 2026-08-17 (continued 4) — Passo 0 di Fase 6a risolto: AutoAWQ espone già il dequant CPU che serve
+
+**Release:** nessuna — solo ricerca, nessun codice toccato.
+
+### What we set out to do
+
+Chiudere concretamente il "Passo 0" lasciato aperto in Fase 6a: verificare
+se `AutoAWQ`/`autoawq-kernels` espone già una routine di dequantizzazione
+CPU riusabile per il formato AWQ GEMM (`qweight`/`qzeros`/`scales`,
+group_size=128) del checkpoint reale — invece di scrivere un
+unpacker/dequantizzatore da zero.
+
+### What we did
+
+Letto il sorgente reale di `casper-hansen/AutoAWQ` (licenza MIT):
+`awq/modules/linear/gemm.py` (`WQLinearMMFunction.forward`, che sceglie tra
+`awq_ext.dequantize_weights_cuda` — CUDA — e un fallback quando l'estensione
+non è disponibile) e `awq/utils/packing_utils.py`, dove vive il fallback
+stesso:
+
+```python
+def dequantize_gemm(qweight, qzeros, scales, bits, group_size):
+    iweight, izeros = unpack_awq(qweight, qzeros, bits)
+    iweight, izeros = reverse_awq_order(iweight, izeros, bits)
+    iweight = torch.bitwise_and(iweight, (2**bits) - 1)
+    izeros = torch.bitwise_and(izeros, (2**bits) - 1)
+    scales = scales.repeat_interleave(group_size, dim=0)
+    izeros = izeros.repeat_interleave(group_size, dim=0)
+    iweight = (iweight - izeros) * scales
+    return iweight
+```
+
+Solo operazioni PyTorch standard (`bitwise_and`/`bitwise_right_shift`/
+`bitwise_left_shift`, `view`, `repeat_interleave`, aritmetica) —
+device-agnostic per costruzione, nessuna estensione CUDA richiesta. Non è
+codice sperimentale: è il path "naive (slow) implementation" che AutoAWQ
+stesso usa in produzione quando `awq_ext` non è disponibile — già
+esercitato da terzi, non da scrivere né validare da zero. Input/output
+combaciano esattamente col checkpoint reale (`qweight`/`qzeros`/`scales`,
+`group_size=128`, `w_bit=4` — stessi tensori già letti in
+`_pin_awq_expert_to_gpu()`/Fase 6 recon della sessione precedente).
+
+### Result
+
+**Passo 0: risposta sì, concreta.** La pipeline proposta (checkpoint AWQ →
+`qweight`/`qzeros`/`scales` → `dequantize_gemm()` CPU → peso FP32 →
+`_ShadowExpertINT4`, già device-agnostic da Fase 1 → oneDNN GEMM) è
+realizzabile senza scrivere un solo rigo di unpack/dequant a mano —
+riusando (con attribuzione, licenza MIT) o reimplementando le ~10 righe di
+`dequantize_gemm`/`unpack_awq`/`reverse_awq_order`, che sono comunque
+piccole abbastanza da poter essere vendorizzate nel progetto se si vuole
+evitare una dipendenza runtime da `autoawq`.
+
+### Why this matters
+
+Cambia lo scope di Fase 6a da "progettare un dequantizzatore" a "misurare
+una pipeline che già esiste altrove" — un lavoro molto più piccolo di
+quanto stimato nella sessione Malmö. Riallinea anche la sequenza corretta
+già discussa col project owner: (1) proof-of-path con `dequantize_gemm()`
++ `_ShadowExpertINT4` esistente, (2) benchmark che separa esplicitamente
+costo di unpack/dequant, costo del GEMM fp32 (Fase 1 ha già escluso che sia
+questo il collo di bottiglia), memoria temporanea, e costo ammortizzato se
+i pesi dequantizzati vengono cachati — (3) solo se il dequant risulta
+troppo lento, allora ha senso un kernel fuso AWQ custom (unpack+dequant+dot
+in un solo passaggio, tuned per l'ISA della CPU target) invece del
+dequant-poi-GEMM separato di questo proof-of-path.
+
+### Current state
+
+- Nessuna modifica a codice — solo ricerca, chiude formalmente il "Passo
+  0" di Fase 6a lasciato aperto nella sessione Malmö.
+- Prossimo passo concreto identificato, non ancora iniziato: script di
+  proof-of-path (`dequantize_gemm()` + `_ShadowExpertINT4`) + benchmark a
+  4 componenti (unpack/dequant, GEMM fp32, memoria temp, costo
+  ammortizzato con caching).
+- Decisione su Fase 6a (procedere con l'implementazione ora che il rischio
+  tecnico è chiarito, o chiudere issue #33 qui) ancora col project owner.
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session: se si procede — proof-of-path minimo (`dequantize_gemm()` su
+un singolo expert del checkpoint reale, poi attraverso `_ShadowExpertINT4`)
+più il benchmark a 4 componenti sopra descritto.
