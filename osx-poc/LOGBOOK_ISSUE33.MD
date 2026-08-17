@@ -1239,3 +1239,94 @@ smentire se il gap GPU/CPU si restringe — decisivo per capire se
 uno strumento di misura/ricerca. In parallelo, discussione aperta con il
 project owner su una configurazione RunPod (Linux reale, niente limiti
 WSL2) per validazione indipendente — GPU/CPU/RAM ancora da decidere.
+
+---
+
+## 2026-08-17 (continued) — specifiche pod Sprint 4 recuperate, un dato reale su AVX-512 su RunPod
+
+**Release:** nessuna — solo ricerca/documentazione, in preparazione a un
+eventuale pod RunPod per issue #33.
+
+### What we set out to do
+
+Il project owner ha chiesto le specifiche del pod RunPod di Sprint 4
+(GPU/CPU/RAM), in vista di provisionare un pod per issue #33 — e di
+annotare qui che, prima di distruggere QUALUNQUE pod futuro, va
+recuperata anche la configurazione hardware, non solo i risultati dei
+test.
+
+### What we did
+
+Trovato che questa disciplina esisteva già ed era già stata applicata
+correttamente in Sprint 4: `logs/sprint4_tekniska/pod_config/` (nel
+repo, non perso) contiene uno snapshot completo — `lscpu.txt`,
+`free.txt`, `gpu_summary.csv`, `nvidia_smi_full.txt`, `os_release.txt`,
+`uname.txt`, `df.txt`, `pip_freeze.txt`, `git_state.txt` — catturato
+2026-08-12 19:20 UTC (commit `dfa9a9d`) prima che quel pod venisse
+spento (confermato: `LOGBOOK.md` riga ~646, "Before retiring this pod...
+Confirmed clean before shutdown").
+
+Sprint 4 ha usato **4 pod diversi** (swap multipli per problemi di
+compatibilità/capacità, non pianificati):
+
+| # | GPU | CPU | RAM | Esito |
+|---|---|---|---|---|
+| 1 | RTX A5000 24GB (CC 8.6) | 12 vCPU, AMD EPYC 7B13 | 25 GB | EU-RO-1, primo pod (2026-08-11) |
+| 2 | RTX PRO 6000 Blackwell 96GB (sm_120) | — | — | Scartato subito: `torch==2.5.1+cu124` non supporta sm_120 (`no kernel image available`) |
+| 3 | A100 SXM 80GB (sm_80) | — | — | Sub-goal 6 (device-mismatch bug fix sui pesi, 2026-08-12/13) |
+| 4 | RTX 3090 24GB (CC 8.6) | 256 vCPU, AMD EPYC 7763 (2×64c/128t, Zen3/Milan) | 1.0 TiB | EU-CZ-1 — snapshot completo (`pod_config/`), run MMLU/TierManager principale (72.28%/72.3%) |
+
+Kernel Linux 6.8.0-134-generic, Ubuntu 22.04.3 LTS, filesystem condiviso
+MooseFS (`mfs#eu-cz-1.runpod.net`, 851T, non una quota per-pod — stessa
+lezione già annotata più volte in `LOGBOOK.md` per questo dettaglio).
+
+**Trovato controllando `lscpu.txt` riga per riga, non per sentito dire**:
+il pod #4 (AMD EPYC 7763) **non ha `avx512f` nei CPU flags** — solo
+`avx2`/`avx`/`fma`. EPYC 7763 è Zen3 (Milan, serie 7003): AMD ha
+aggiunto AVX-512 solo da Zen4/Genoa (serie 9004) in poi. Questo conferma
+concretamente (non ipoteticamente) l'avviso dato al project owner
+discutendo la configurazione RunPod per issue #33: le CPU allocate ai
+pod GPU RunPod spesso sono AMD EPYC, e il supporto AVX-512 varia molto
+per generazione — un pod EPYC 7003-class per issue #33 renderebbe i
+numeri di Fase 1/4/5 (calibrati su Xeon 6244 Cascade Lake, AVX-512+VNNI
+reale) non rappresentativi, probabilmente con un gap GPU/CPU peggiore,
+non uguale.
+
+### Result
+
+Nessun pod Sprint 4 è ancora attivo — tutti e 4 sono già stati spenti,
+con la config HW già recuperata correttamente per il pod #4 (quello
+rilevante, con lo snapshot completo). Nulla da recuperare urgentemente
+ora. La disciplina va solo riapplicata al prossimo pod, non reinventata.
+
+### Why this matters
+
+Prima di provisionare un pod per issue #33, sappiamo già due cose
+concrete invece di scoprirle a caldo: (1) come si fa a catturare la
+config HW prima dello shutdown — template pronto in
+`logs/sprint4_tekniska/pod_config/`, riusabile as-is (`lscpu`, `free -h`,
+`nvidia-smi --query-gpu=... --format=csv`, `df -h`, `cat /etc/os-release`,
+`uname -a`, `pip freeze`, `git log -1`); (2) che RunPod può assegnare CPU
+senza AVX-512 anche su pod pensati per GPU potenti — va verificato
+`/proc/cpuinfo | grep avx512f` SUBITO dopo il provisioning, prima di
+fidarsi di qualunque numero di `bench_cpu_kernel.py`/`bench_hybrid.py`
+raccolto lì.
+
+### Current state
+
+- Nessuna modifica a codice — solo ricerca.
+- Checklist per il prossimo pod RunPod (issue #33): dopo il
+  provisioning, replicare `logs/sprint4_tekniska/pod_config/` (stessi
+  comandi) PRIMA di girare qualunque benchmark, e di nuovo PRIMA di
+  distruggere il pod se qualcosa è cambiato nel frattempo (es. resize).
+  Verificare `avx512f` esplicitamente come primo passo, non assumerlo
+  dalla scheda prodotto.
+- GPU/CPU/RAM del prossimo pod: ancora da decidere col project owner.
+- Branch: `claude/ddr4-ram-processing-unzseh`.
+
+Next session: decisione su GPU/CPU/RAM per il pod issue #33, poi
+provisioning + verifica AVX-512 + eventuale rilancio di `bench_hybrid.py`
+a scala reale lì (visto che WSL2 comunque non blocca questo benchmark
+specifico — nessun pin_memory coinvolto — un pod RunPod serve qui solo
+per una CPU AVX-512 diversa/più rappresentativa, non per aggirare un
+limite di questa macchina).
