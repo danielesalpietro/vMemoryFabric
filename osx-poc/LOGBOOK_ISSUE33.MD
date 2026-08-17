@@ -2203,3 +2203,99 @@ via `_quantize_int4()` → cache → forward `_ShadowExpertINT4`) sul
 checkpoint reale, non solo stimarla — poi decisione finale su
 integrazione in `_build_cpu_shadow_pool()` per path 3, con dati completi
 invece di stime parziali.
+
+---
+
+## 2026-08-17 (continued 10) — Misura completa della pipeline: la cache INT4 è inutilizzabile, la cache fp32 no
+
+**Release:** nuovo `scripts/bench_awq_cpu_pipeline.py`. Nessuna modifica a
+`scheduler/gcsg.py`. "Portiamo a casa le misurazioni di tutto questo
+lavoro" (project owner) — chiude i pezzi lasciati stimati dopo Passo 1/2.
+
+### What we set out to do
+
+Misurare per davvero (non stimare) i 4 componenti mancanti della
+pipeline Fase 6a: costo di ri-quantizzazione INT4, memoria reale
+cachata, costo del forward a regime — e, aggiunto perché non testato
+prima d'ora, se la doppia quantizzazione (AWQ reale →
+`_quantize_int4()` simulato) degrada l'accuratezza oltre il kernel CUDA
+reale.
+
+### What we did
+
+Scritto `bench_awq_cpu_pipeline.py`: stesso ground truth di Passo 2
+(modulo `MixtralMLP` reale, kernel CUDA AWQ reale), confronta due
+strategie di caching sullo stesso expert — `fp32` (cache diretta dei
+pesi dequantizzati AWQ, Passo 1/2) contro `int4` (ri-quantizzazione via
+`_quantize_int4()`, Fase 1, subito dopo il dequant AWQ).
+
+**Risultato, layer 0 / expert 0**:
+
+| | dequant AWQ | requant INT4 | forward/call | memoria/expert (32 layer) | errore vs. kernel reale |
+|---|---|---|---|---|---|
+| `fp32_cache` | 1210.8ms | — | 199.9ms | 21.00 GB | **0.000530** |
+| `int4_cache` | 1210.8ms | 975.3ms | 312.4ms | 5.25 GB | **0.950429** |
+
+### Result
+
+**La cache INT4 è inutilizzabile così com'è — non un compromesso
+accettabile, un fallimento.** Errore relativo 0.95 non è "un po' peggio
+del previsto": è quasi totale distruzione del segnale, ben oltre anche
+la soglia già generosa di Fase 1 (0.5, per un caso di quantizzazione
+diretta su pesi random gaussiani sintetici). La causa è strutturale, non
+un bug da correggere in `_quantize_int4()`: quella funzione fa
+quantizzazione **per-tensore simmetrica** (uno scale unico per l'intero
+tensore) — adeguata per Fase 1 (pesi random gaussiani sintetici,
+distribuzione uniforme, nessun outlier). AWQ invece usa quantizzazione
+**per-gruppo** (group_size=128, verificato in `quant_config.json` del
+checkpoint reale) con zero-point asimmetrico — esiste apposta per
+gestire la varianza reale dei pesi di un modello allenato (outlier
+per-canale che con uno scale unico per-tensore schiacciano la precisione
+ovunque altrove). Ri-quantizzare pesi REALI con lo schema SBAGLIATO
+(grana sbagliata) non è una piccola perdita aggiuntiva di precisione —
+è la stessa classe di errore che AWQ è stato specificamente progettato
+per evitare, reintrodotta ignorando il motivo per cui esiste.
+
+**La cache fp32 invece è pulita e utilizzabile**: errore 0.00053 (stesso
+ordine di grandezza del solo Passo 2, nessun degrado aggiuntivo — logico,
+non c'è un secondo round di quantizzazione), 199.9ms/call a regime,
+21GB/expert su tutti i 32 layer.
+
+### Why this matters
+
+Chiude la domanda "quanto costa la pipeline completa" con un dato che
+CAMBIA la conclusione, non solo la conferma: l'idea di "ri-quantizzare
+per risparmiare memoria" (5.25GB contro 21GB, motivazione originale del
+Passo 1) non è realizzabile riusando `_quantize_int4()` così com'è — 
+servirebbe una quantizzazione per-gruppo (matching group_size=128 di
+AWQ), lavoro nuovo non ancora scoping, non "solo collegare pezzi già
+esistenti" come sembrava dopo il Passo 0. La cache fp32 (21GB/expert)
+resta l'UNICA strategia misurata che funziona — più pesante in memoria
+di quanto sperato, ma corretta. Con centinaia di GB di DDR4 disponibili
+sia sul Z8 locale sia sul pod Malmö (503GiB), 21GB/expert non è
+proibitivo in assoluto — solo più caro del previsto, e limita quanti
+expert "freddi" si possono cachare contemporaneamente rispetto
+all'ipotesi INT4 (4x meno expert cachabili a parità di RAM).
+
+### Current state
+
+- `scripts/bench_awq_cpu_pipeline.py` aggiunto, lint pulito, verificato
+  su hardware reale (layer 0/expert 0).
+- Nessuna modifica a `scheduler/gcsg.py`.
+- **Decisione tecnica chiara ora disponibile**: se si procede
+  all'integrazione in `_build_cpu_shadow_pool()`, la cache deve essere
+  fp32 (21GB/expert), non INT4 — l'alternativa INT4 richiederebbe
+  quantizzazione per-gruppo non ancora scritta, un pezzo di lavoro nuovo
+  e non banale (fuori dallo scope "solo collegare" del Passo 0).
+- Le quattro verifiche complete di Fase 6a: Passo 0 (dequant esiste già,
+  AutoAWQ), Passo 1 (shape/layout/fp32-vs-fp16), Passo 2 (parità kernel
+  reale), misura pipeline completa (fp32 sì, INT4-semplice no) — tutte
+  fatte, tutte con dati reali.
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session: decisione finale col project owner — integrare in
+`_build_cpu_shadow_pool()` con cache fp32 (21GB/expert, funziona, misura
+completa disponibile), o scoping di una quantizzazione per-gruppo prima
+di procedere (lavoro nuovo, non ancora dimensionato), o chiudere Fase 6a
+qui con i dati raccolti come esito documentato.
