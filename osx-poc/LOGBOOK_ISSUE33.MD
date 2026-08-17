@@ -1872,3 +1872,75 @@ pipeline AWQ-dequant→INT4-requant (non solo stimato), poi — solo se i
 numeri restano favorevoli — integrazione in `_build_cpu_shadow_pool()`
 per path 3. Decisione finale su procedere ancora aperta col project
 owner, ma ora con dati concreti invece di stime.
+
+---
+
+## 2026-08-17 (continued 6) — OpenVINO valutato come alternativa, spostato in issue dedicata #43
+
+**Release:** nessuna — solo ricerca + housekeeping (issue tracker).
+
+### What we set out to do
+
+Il project owner ha chiesto, in parallelo al lavoro sul proof-of-path
+sopra (eseguito da un'altra sessione in contemporanea): OpenVINO potrebbe
+aiutare con Fase 6a?
+
+### What we did
+
+Ricerca web su `openvinotoolkit/openvino`, `vllm-project/vllm-openvino`,
+e (trovato per caso durante la stessa ricerca) l'RFC nativo di vLLM per
+l'offload MoE (`vllm-project/vllm#38256`). Confermato:
+
+- OpenVINO 2026.0 ha kernel INT4 nativi CPU (AVX-512/AMX) + import diretto
+  di checkpoint AWQ, con compressione data-aware specifica per i MatMul
+  3D dei modelli MoE — strutturalmente meglio del dequant-poi-GEMM-fp32
+  di Fase 6a per il solo aspetto "velocità di calcolo".
+- Ma: supporto MoE ancora "preview" (validato solo su Qwen3-30B-A3B, non
+  Mixtral+AWQ), e non componibile a grana di singolo expert dentro
+  `GCSGWorker.route_forward()` — richiederebbe un motore di serving
+  separato (OVMS/`vllm-openvino`) o la sostituzione dell'intero backend
+  vLLM, un cambio architetturale molto più grande del piano Fase 6a
+  attuale.
+- Dato collaterale utile: l'RFC MoE offload nativo di vLLM (#38256, in
+  corso) esclude esplicitamente il calcolo CPU ("hand-rolled CPU MoE...
+  is a correctness trap") — conferma che nessun progetto a monte regala
+  l'infrastruttura di calcolo CPU che issue #33 sta costruendo da zero.
+
+Deciso, su richiesta esplicita del project owner, di non bloccare il
+lavoro in corso (proof-of-path Fase 6a, sessione sopra) per approfondire
+OpenVINO ora — aperta invece **issue #43** (sub-issue di #33) con
+contesto, criteri di rivalutazione (non procedere finché il benchmark di
+Fase 6a non mostra un collo di bottiglia reale, O il supporto MoE di
+OpenVINO esce da preview su un checkpoint comparabile, O emerge un motivo
+di produzione per servire l'intero modello CPU-only) e un primo passo a
+basso costo se/quando si riapre (conversione IR di un singolo expert via
+`optimum-intel`/NNCF, confronto diretto contro `dequantize_gemm()+
+_ShadowExpertINT4`).
+
+### Result
+
+OpenVINO non è né adottato né scartato — parcheggiato con criteri
+espliciti di rivalutazione invece di una decisione impulsiva o di essere
+dimenticato. Il proof-of-path Fase 6a (sessione parallela sopra) resta il
+piano primario e non è stato rallentato da questa indagine.
+
+### Why this matters
+
+Con due sessioni attive in parallelo sullo stesso branch (questa e quella
+che ha scritto `verify_awq_cpu_dequant.py`), il rischio concreto era che
+una pista di ricerca laterale (OpenVINO) finisse per competere per
+attenzione con il lavoro di implementazione già in corso, o venisse persa
+senza traccia. Un'issue dedicata con criteri di rientro espliciti risolve
+entrambi i problemi con lo stesso costo di un paragrafo di LOGBOOK.
+
+### Current state
+
+- Issue #43 aperta, sub-issue di #33, nessun lavoro di codice associato.
+- Nessuna modifica a codice in questa sessione — solo ricerca +
+  organizzazione tracker.
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session: seguire il thread principale (Passo 2 del proof-of-path,
+sessione sopra) — issue #43 resta in attesa dei suoi criteri di
+rivalutazione, non un prossimo passo attivo.
