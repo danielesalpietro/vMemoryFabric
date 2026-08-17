@@ -2475,3 +2475,88 @@ disponibili, un eventuale lavoro futuro su cache multi-expert più grandi
 
 Next session: come sopra — decisione finale su Fase 6a. Nessun'azione
 di sistema pendente.
+
+---
+
+## 2026-08-17 (continued 13) — Stessa domanda per la CPU: allocazione WSL2 raddoppiata (14→28 core)
+
+**Release:** nessuna modifica a codice — un altro campo di
+`.wslconfig` più un riavvio di WSL2.
+
+### What we set out to do
+
+Il project owner ha posto la stessa domanda già fatta per la RAM, questa
+volta sulla CPU: i core allocati a Docker bastano? E prima di decidere
+un numero, ha chiesto di misurare l'uso REALE dell'host in questo
+momento (RAM e CPU), per capire se serve liberare risorse o se si può
+semplicemente allocare di più senza sottrarre nulla a nessuno.
+
+### What we did
+
+**Host reale**: 2× Intel Xeon Gold 6244 (8 core/16 thread ciascuno,
+dual-socket) = 16 core fisici / 32 thread logici totali, AVX-512+VNNI
+confermati anche dopo il riavvio precedente. `.wslconfig` aveva
+`processors=14` — meno della metà della capacità totale, `lscpu` dentro
+il container vede tutti e 14 su un solo NUMA node (0-13) — non
+verificabile dall'interno della VM se rifletta i confini NUMA reali
+dell'host o sia una vista appiattita di Hyper-V.
+
+**Uso reale dell'host misurato PRIMA di decidere** (non assunto): RAM —
+503.7GB totali, **464GB liberi** in questo momento, `vmmemWSL` (il
+processo che rappresenta l'intera VM WSL2) usa solo 9.26GB nonostante
+444GB allocati come tetto massimo (nessuna pressione, nessun processo
+in competizione). CPU — **1% di carico** (`Win32_PerfFormattedData_
+PerfOS_Processor`), host sostanzialmente a riposo. Nessun processo
+Windows in esecuzione consuma risorse significative (i maggiori
+consumatori di RAM sono le sessioni Claude Code stesse e VS Code, sotto
+1GB ciascuno).
+
+**Risultato della misura**: nessuna ottimizzazione/spegnimento
+necessario — l'host ha margine reale, non solo teorico, per allocare di
+più senza toccare nulla. Alzato `processors=14` → **28** (lascia 4
+thread/2 core a Windows, stesso principio dell'88% usato per la RAM).
+Confermato nessun container ATTIVO prima del riavvio (`mike_mem0` in
+stato `Created`, mai avviato — nessuno stato da perdere). `wsl
+--shutdown`, riavvio automatico verificato: `docker info` ora riporta
+**28 CPU** (era 14) e **436.8GiB RAM** (invariato dalla sessione
+precedente). Suite pytest completa rilanciata dopo il riavvio: 160
+passed / 3 skipped, invariata.
+
+### Result
+
+Allocazione CPU a Docker/WSL2 raddoppiata (14→28 core) senza alcun
+compromesso — l'host aveva margine reale misurato, non solo capacità
+teorica. Stessa correzione di postura già fatta per la RAM: verificare
+l'uso reale prima di decidere un numero, non allocare/rimandare per
+istinto.
+
+### Why this matters
+
+La domanda "i core bastano?" da sola non avrebbe avuto una risposta
+solida senza sapere se l'host fosse già sotto pressione da altri
+processi — misurare prima (1% CPU, 464GB RAM liberi) ha reso la
+decisione "alza a 28" priva di rischio reale, non un'ipotesi ottimista.
+Stesso principio "misura prima di ottimizzare" già applicato per ogni
+altra decisione tecnica di questa issue, qui applicato all'infrastruttura
+invece che al codice.
+
+### Current state
+
+- `C:\Users\Admin\.wslconfig`: `memory=444GB`, `processors=28` (era 14).
+- Docker/WSL2 confermato riavviato con la nuova allocazione (28 CPU,
+  436.8GiB RAM).
+- Nessun container perso — nessuno era in esecuzione.
+- Suite completa 160 passed / 3 skipped dopo il riavvio, invariata.
+- Nessuna modifica a codice del progetto in questa sessione.
+- Domanda aperta e distinta, non ancora affrontata: specifiche per un
+  eventuale prossimo pod RunPod (RAM/CPU/GPU) — lì il vincolo è budget,
+  non condivisione con altri processi host, quindi la stessa logica
+  "misura l'uso reale prima" non si applica allo stesso modo (nessun
+  host condiviso da misurare, il pod è dedicato per costruzione).
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session: decisione finale su Fase 6a (invariata). Separatamente,
+da definire se/quando: specifiche di un prossimo pod RunPod, se emerge
+un motivo concreto per provisionarne uno (es. proseguire Fase 6a o
+issue #43/#44 su hardware Linux reale).
