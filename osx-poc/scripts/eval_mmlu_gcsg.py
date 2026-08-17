@@ -50,7 +50,7 @@ from datasets import load_dataset
 
 from scheduler.gcsg import GCSGWorker
 
-MODEL_PATH = "/data/nvme/models/mixtral-instruct-awq"
+MODEL_PATH = os.environ.get("OSX_MMLU_MODEL_PATH", "/data/nvme/models/mixtral-instruct-awq")
 LETTERS = ["A", "B", "C", "D"]
 
 START = time.monotonic()
