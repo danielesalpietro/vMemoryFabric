@@ -3734,8 +3734,70 @@ specifico pod non ha tenuto il passo (vedi sopra).
 Next session: nessuna azione bloccante. Se si vuole approfondire il
 gap CPU inatteso su questo pod: verificare se è la banda memoria
 per-core dell'allocazione vCPU (ipotesi a) o la mancata attivazione di
-AMX su fp32 (ipotesi b) — nessuna delle due confermata qui. Prossimo
-hardware target già pianificato dal project owner: NVIDIA GB10/DGX
-Spark (memoria unificata CPU+GPU — la metodologia CPU/RAM/GPU/PCIe
-separata di questo framework potrebbe non applicarsi direttamente,
-vedi promemoria in memoria di sessione).
+AMX su fp32 (ipotesi b) — nessuna delle due confermata qui, ora
+tracciate in [issue #45](https://github.com/danielesalpietro/vMemoryFabric/issues/45)
+(aperta in "continued 22"). Prossimo hardware target già pianificato
+dal project owner: NVIDIA GB10/DGX Spark (memoria unificata CPU+GPU —
+la metodologia CPU/RAM/GPU/PCIe separata di questo framework potrebbe
+non applicarsi direttamente, vedi promemoria in memoria di sessione).
+
+---
+
+## 2026-08-17 (continued 22) — documento di confronto a tre host, poi aggiornamento documentazione generale
+
+**Release:** sì — `logs/runpod_perf_framework_validation_20260817/
+COMPARISON_ANALYSIS.md` (nuovo), `hw_z8.json`/`tuning_report_z8.json`
+(nuovi, mancava un JSON archiviato per lo Z8 a dimensioni reali — solo
+verificato a schermo in "continued 19"). Nessuna modifica al codice.
+
+### What we set out to do
+
+Il project owner ha chiesto un documento di confronto ed analisi,
+baseline Z8 → chiusura H200, usando i tre dataset già raccolti oggi
+("continued 19", "continued 20", "continued 21").
+
+### What we did
+
+1. Rigenerato un JSON pulito per lo Z8 a dimensioni Mixtral reali
+   (mancava — il numero 16.9x citato in "continued 19" veniva solo
+   dall'output a schermo, non da un file archiviato) via
+   `docker compose run` locale.
+2. Letti i tre JSON completi (non i numeri ricordati dalla
+   conversazione) per costruire tabelle accurate.
+3. Scritto `COMPARISON_ANALYSIS.md`: profili host, tabella metriche
+   grezze, tabella verdetti derivati, 5 sotto-analisi (§6.1-6.5),
+   conclusioni, limiti espliciti.
+4. Aperta [issue #45](https://github.com/danielesalpietro/vMemoryFabric/issues/45)
+   su richiesta esplicita del project owner, per tracciare le due
+   ipotesi non verificate del documento (banda RAM per-core
+   sull'allocazione vCPU, AMX non esercitato dal benchmark fp32)
+   invece di lasciarle solo come nota in un file di log.
+
+### Result
+
+Trovata una correlazione pulita non ancora notata nei tre entry
+precedenti: **la banda RAM (19.84→10.98→5.96 GB/s) predice il
+GFLOPS CPU batch=1 (22.97→11.66→3.32) molto meglio della presenza di
+AVX-512/VNNI** — l'H200/Xeon Platinum ha AVX-512+VNNI+AMX ed è
+comunque il più lento dei tre, lo Z8 ha AVX-512+VNNI ed è il più
+veloce. Rinforza (con un terzo punto dati, non solo l'A/B thread-count
+di "continued 17") che il collo di bottiglia è la banda memoria, non
+il set di istruzioni. Documento consegnato al project owner via file.
+
+### Why this matters
+
+Il documento traduce tre run isolati (uno per host) in un confronto
+strutturato con una conclusione azionabile per issue #33: "hardware più
+recente" non garantisce un cpu-offload migliore, dipende dal
+bilanciamento RAM/CPU-core della specifica allocazione — rilevante per
+qualunque decisione futura su quale pod/hardware usare per lavoro
+successivo su questo path.
+
+### Current state
+
+Documento e JSON dello Z8 non ancora committati al momento di scrivere
+questo entry — segue subito un aggiornamento della documentazione di
+progetto più ampia (README, CHANGELOG, questo file), poi commit/push
+unico.
+
+Next session: nessuna azione bloccante.

@@ -143,11 +143,19 @@ vMemoryFabric/                  (repo root)
     ├── tests/
     │   ├── test_eat.py
     │   ├── test_tier.py      #   TestGPUTransfer marked @pytest.mark.gpu
-    │   └── test_scheduler.py
+    │   ├── test_scheduler.py
+    │   ├── test_cpu_kernel.py            # issue #33 — CPU shadow-expert kernel
+    │   ├── test_perf_test_hardware.py    # issue #33 — perf-test framework unit tests
+    │   └── test_perf_tuning_report.py    # issue #33 — perf-tuning framework unit tests
     │
     ├── benchmarks/
-    │   ├── bench_eat.py      # Sprint 1 (Möllstorp) — implemented
-    │   └── bench_tier.py     # Sprint 2 (Eketorp) — implemented
+    │   ├── bench_eat.py           # Sprint 1 (Möllstorp) — implemented
+    │   ├── bench_tier.py          # Sprint 2 (Eketorp) — implemented
+    │   ├── bench_cpu_kernel.py    # issue #33 — CPU forward throughput
+    │   ├── bench_route_forward.py # issue #33 — dispatch overhead vs. compute
+    │   ├── bench_hybrid.py        # issue #33 — aggregate GPU/CPU-offload impact
+    │   ├── perf_test_hardware.py  # issue #33 — reusable CPU/RAM/GPU/PCIe characterization (`make perf-test-hardware`)
+    │   └── perf_tuning_report.py  # issue #33 — derives tuning recommendations from the above (`make perf-tuning-report`)
     │
     ├── scripts/
     │   └── smoke_test.py     # Hardware + env validation — 13/13 passing
@@ -454,6 +462,7 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint`/`test`/`bench` fail on relative paths — container `WORKDIR` (`/workspace`) doesn't match `osx-poc/`'s relative paths | Workaround in use everywhere: `docker compose run --rm osx-dev bash -c "cd osx-poc && ..."` |
 | ~~[#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17)~~ | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` used vLLM's `cpu_offload_gb` directly | **Resolved 2026-08-13**: all three shadow-pool paths (AWQ, Marlin, path 1) wired/exercised and verified on real hardware (Sprint 4, complete — see roadmap above), each with its own real bug found and fixed along the way. The last open gap — an MMLU quality number for Marlin specifically routed through TierManager — is now closed too: 412/570 (72.28%), matching the historical Marlin baseline exactly (`logs/sprint4_tekniska/marlin_mmlu/`). Getting there required a small fix to `eval_mmlu_gcsg.py`, which had `--wire-tier-manager` silently forcing `quantization=awq` (stale from before Marlin was wired) — added an explicit `--quantization` flag. Promotion-latency measurement done. Issue #2 (RLock contention) decided separately, not a blocker |
 | [#18](https://github.com/danielesalpietro/vMemoryFabric/issues/18) | No environment fingerprint pre-check — `OMP_NUM_THREADS`/`shm_size`/GPU model assumed, not verified | Hit for real deploying to RunPod: `OMP_NUM_THREADS=8` fixed regardless of real vCPU count, `docker-compose.yml`'s `shm_size` doesn't apply outside local `docker compose` |
+| [#33](https://github.com/danielesalpietro/vMemoryFabric/issues/33) | GCSG CPU-offload tier (DDR4-resident shadow experts): correctness proven, performance not production-ready | Opt-in, default off, zero risk to the production path. Correctness identical across GPU-only/CPU-only/mixed on real hardware (same accuracy, same `shadow_activations` count) — but the CPU per-token forward is 17-570× slower than GPU depending on host, a genuine memory-bandwidth-bound GEMV (not a config bug, confirmed by a reusable performance-test/tuning framework — `make perf-test-hardware`/`perf-tuning-report` — validated on three real hosts). Full trail: `osx-poc/LOGBOOK_ISSUE33.MD`; follow-on hardware question: [#45](https://github.com/danielesalpietro/vMemoryFabric/issues/45) |
 
 **Closed:** [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) (2026-08-11) — GCSG shadow-execution crash and the related batch-composition slowdown, both root-caused to WSL2/CUDA pageable-memory offload behavior (structural, upstream-confirmed, not a project bug). Full trail: `osx-poc/reports/gcsg_shadow_execution_report.md`. [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) (2026-08-12) — `BloomFilter.remove_expert()` implemented for real (Counting Bloom Filter, replaces `pybloom_live`) and wired into `EAT.evict()`, which never called it before. [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) (2026-08-12, same day) — re-measuring against #4's new implementation showed lookup latency got *worse*, not better, settling the question: the Bloom filter is removed from `EAT` entirely, not kept as an unjustified fast-path (which also makes #4's fix moot, but it stays recorded as its own closed issue — the bug it fixed was real while the Bloom filter still existed). Full trail: `osx-poc/LOGBOOK.md`, 2026-08-12 "issue #4 actually fixed" and "Bloom filter removed" entries. [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2)/[#23](https://github.com/danielesalpietro/vMemoryFabric/issues/23) (2026-08-13) — `RLock` contention fixed for real: selectable `locking_strategy` on `ExpertAccessTable` (`single`/`striped`/`lockfree_read`), `lockfree_read` now the default, ~700-900× p99 improvement confirmed on both sandbox CI and the `Z8-G4-RTX3090` self-hosted runner. Full trail: `osx-poc/LOGBOOK.md`, 2026-08-13 entry; `osx-poc/reports/poc_final_report.md` §1.2.
 

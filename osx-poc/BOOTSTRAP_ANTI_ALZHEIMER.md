@@ -361,6 +361,26 @@ script/tool non interattivo — altrimenti ogni lancio va in timeout e
 finisce nella coda dei task in background del tool, funzionalmente
 innocuo ma fonte di confusione inutile.
 
+### 5.14 — `/proc/cpuinfo`: alcuni flag AVX-512 hanno l'underscore, altri no — non assumere la convenzione
+
+Il naming dei flag nel kernel Linux per `/proc/cpuinfo` è
+inconsistente: `avx512f`/`avx512bw`/`avx512cd`/`avx512dq`/`avx512vbmi`/
+`avx512vl`/`avx512ifma` NON hanno underscore, ma `avx512_vnni`/
+`avx512_bf16`/`avx512_fp16`/`avx512_bitalg`/`avx512_vbmi2`/
+`avx512_vpopcntdq` SÌ (verificato 2026-08-17 su un pod RunPod H200/
+Xeon Platinum 8568Y+, Emerald Rapids — `benchmarks/perf_test_hardware.py`
+cercava `"avx512vnni"` senza underscore, dando un falso negativo su un
+host che lo supporta realmente). Non è un errore di battitura isolato —
+è la convenzione reale del kernel, va verificata caso per caso con un
+grep diretto su `/proc/cpuinfo`, non assunta per analogia con
+`avx512f`.
+
+**Azione**: prima di aggiungere un check per un nuovo flag CPU (AVX-512
+o altro, es. AMX: `amx_bf16`/`amx_int8`/`amx_tile`, anche questi senza
+underscore), `grep -o 'nomeflag' /proc/cpuinfo` su hardware reale per
+confermare la stringa esatta — mai assumere la convenzione dagli altri
+flag già nel codice.
+
 ## 6. Come registrare le change nel logbook
 
 - Formato standard per entry narrative: **What we set out to do / What
@@ -403,6 +423,11 @@ innocuo ma fonte di confusione inutile.
   microbenchmark GFLOPS isolato — è esattamente il lavoro che quei due
   script fanno già, con l'esito annotato contro i dati già noti (range
   24-26x pipeline / 44.6x isolato) invece di un numero isolato.
+- `logs/runpod_perf_framework_validation_20260817/COMPARISON_ANALYSIS.md`
+  (issue #33 "continued 21") — confronto a tre host (Z8, RunPod
+  RTX3090/EPYC, RunPod H200/Xeon Platinum) coi JSON grezzi dello stesso
+  framework — punto di partenza se serve aggiungere un quarto host al
+  confronto invece di ripartire da zero.
 - Questo file va aggiornato ogni volta che emerge un nuovo "known
   issue" riutilizzabile (sezione 5) o una nuova pratica di processo che
   vale la pena rendere default (sezioni 1-4, 6) — non lasciarlo fermo
