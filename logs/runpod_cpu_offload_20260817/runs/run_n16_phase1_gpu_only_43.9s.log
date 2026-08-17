@@ -1,0 +1,49 @@
+[T+   0.0s] Loading cais/mmlu (all subjects, dev + test splits)...
+[T+   2.6s] Built 570 prompts across 57 subjects (10/subject cap).
+[T+   2.6s] Fetta [0:16] — 16 prompt (--prompt-start/--max-prompts).
+[T+   2.6s] --wire-tier-manager: TierManager/EAT wired via GCSGWorker.configure_tier_manager().
+[T+   2.6s] Loading /root/models/mixtral-instruct-awq via GCSGWorker (shadow execution active — issues #10/#16), quantization=awq, wire_tier_manager=True, cpu_offload_enabled=False...
+INFO 08-17 15:14:03 config.py:280] Overriding HF config with {'head_dim': 128}
+`torch_dtype` is deprecated! Use `dtype` instead!
+INFO 08-17 15:14:10 config.py:510] This model supports multiple tasks: {'score', 'embed', 'reward', 'generate', 'classify'}. Defaulting to 'generate'.
+INFO 08-17 15:14:11 awq_marlin.py:113] Detected that the model can run with awq_marlin, however you specified quantization=awq explicitly, so forcing awq. Use quantization=awq_marlin for faster inference
+WARNING 08-17 15:14:11 config.py:588] awq quantization is not fully optimized yet. The speed can be slower than non-quantized models.
+WARNING 08-17 15:14:11 cuda.py:98] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+WARNING 08-17 15:14:11 config.py:642] Async output processing is not supported on the current platform type cuda.
+INFO 08-17 15:14:11 llm_engine.py:234] Initializing an LLM engine (v0.6.6.post1) with config: model='/root/models/mixtral-instruct-awq', speculative_config=None, tokenizer='/root/models/mixtral-instruct-awq', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=3328, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=awq, enforce_eager=True, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=/root/models/mixtral-instruct-awq, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=False, chunked_prefill_enabled=False, use_async_output_proc=False, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"candidate_compile_sizes":[],"compile_sizes":[],"capture_sizes":[],"max_capture_size":0}, use_cached_outputs=False, 
+INFO 08-17 15:14:11 selector.py:120] Using Flash Attention backend.
+INFO 08-17 15:14:12 model_runner.py:1094] Starting to load model /root/models/mixtral-instruct-awq...
+Loading safetensors checkpoint shards:   0% Completed | 0/3 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:  33% Completed | 1/3 [00:00<00:01,  1.59it/s]
+Loading safetensors checkpoint shards:  67% Completed | 2/3 [00:02<00:01,  1.10s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:03<00:00,  1.16s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:03<00:00,  1.10s/it]
+
+INFO 08-17 15:14:20 model_runner.py:1099] Loading model weights took 18.9548 GB
+2026-08-17 15:14:20,005 INFO scheduler.gcsg: GCSG: EAT seeded — 256 entry (8 expert x 32 layer) a Tier.DDR4.
+2026-08-17 15:14:20,052 INFO scheduler.gcsg: GCSG: shadow pool caricato — 2 expert AWQ-pre-quantizzati ([0, 1]) su 32 layer, path=AWQ-ModuleList+pinning GPU esplicito (issue #16).
+INFO 08-17 15:14:25 worker.py:241] Memory profiling takes 5.34 seconds
+INFO 08-17 15:14:25 worker.py:241] the current vLLM instance can use total_gpu_memory (23.56GiB) x gpu_memory_utilization (0.95) = 22.38GiB
+INFO 08-17 15:14:25 worker.py:241] model weights take 18.95GiB; non_torch_memory takes 1.13GiB; PyTorch activation peak memory takes 1.07GiB; the rest of the memory reserved for KV Cache is 1.23GiB.
+INFO 08-17 15:14:25 gpu_executor.py:76] # GPU blocks: 627, # CPU blocks: 2048
+INFO 08-17 15:14:25 gpu_executor.py:80] Maximum concurrency for 3328 tokens per request: 3.01x
+[T+  30.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+INFO 08-17 15:14:28 llm_engine.py:431] init engine (profile, create kv cache, warmup model) took 8.49 seconds
+[T+  30.8s] LLM ready.
+[T+  30.8s] Answer-letter token ids: {'A': 330, 'B': 365, 'C': 334, 'D': 384}
+[T+  30.8s] Running generate() on all prompts (max_tokens=1, logprobs=20)...
+Processed prompts:   0%|          | 0/16 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts:   6%|▋         | 1/16 [00:06<01:32,  6.20s/it, est. speed input: 60.49 toks/s, output: 0.16 toks/s]Processed prompts:  56%|█████▋    | 9/16 [00:13<00:09,  1.29s/it, est. speed input: 271.61 toks/s, output: 0.69 toks/s]Processed prompts: 100%|██████████| 16/16 [00:13<00:00,  1.23it/s, est. speed input: 483.06 toks/s, output: 1.23 toks/s]
+[T+  43.9s] generate() completed.
+
+--- MMLU 5-shot risultati (GCSGWorker, shadow execution attiva, 16 domande) ---
+Accuratezza complessiva: 50.0% (8/16)
+Non risolte (nessuna delle 4 lettere nei top-20 logprob): 0
+
+Per soggetto (peggiori 10):
+  abstract_algebra: 40.0% (10 domande)
+  anatomy: 66.7% (6 domande)
+
+GCSGGuard stats: {'total_tokens_evaluated': 201760, 'shadow_activations': 10081, 'activation_rate': 0.04996530531324346, 'contamination_rate_aggregate': 0.04996530531324346, 'tracked_requests': 16, 'shadow_pool_size': 2, 'thresholds': {'theta_gate': 0.85, 'theta_entropy': 0.7, 'theta_contamination': 0.05}}
+
+Shadow execution DAVVERO attiva (10081 attivazioni, activation_rate=5.0%) — issues #10/#16 chiuse per questo path. Confronto contro la baseline hook-only (72.3%, 412/570, LOGBOOK 2026-08-09 — stesso identico protocollo ma su un subset diverso se total != 570, il confronto valido richiede lo stesso n): questa run=50.0%.
+[rank0]:[W817 15:14:42.780051463 ProcessGroupNCCL.cpp:1250] Warning: WARNING: process group has NOT been destroyed before we destruct ProcessGroupNCCL. On normal program exit, the application should call destroy_process_group to ensure that any pending NCCL operations have finished in this process. In rare cases this process can exit before this point and block the progress of another member of the process group. This constraint has always been present,  but this warning has only been added since PyTorch 2.4 (function operator())

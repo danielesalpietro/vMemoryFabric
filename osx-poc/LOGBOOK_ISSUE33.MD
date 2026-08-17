@@ -3235,3 +3235,110 @@ dei report, se vivono come script in `scripts/`, dove si inserisce
 rispetto al lavoro esistente (`bench_pcie_bandwidth_wsl2.py`,
 `bench_hybrid.py`, `bench_route_forward.py` — verificare sovrapposizioni
 prima di iniziare, non duplicare).
+
+---
+
+## 2026-08-17 (continued 18) — confronto controllato GPU-only / CPU-only / "misto": il misto non esisteva, causa trovata (issue #27)
+
+**Release:** sì — `src/scheduler/gcsg.py` (`OSX_GCSG_FORCE_CPU_ROUTE`,
+env var opt-in per forzare il routing CPU indipendentemente dalla
+classificazione hot/cold, con 2 nuovi test). Nessun'altra modifica di
+codice: sessione di misura, non sviluppo.
+
+### What we set out to do
+
+Confronto controllato richiesto dal project owner sullo stesso n=16:
+Fase 1 (solo GPU), Fase 2 (solo CPU), Fase 3 (GPU+CPU misto) — per
+capire se il tempo scala in modo prevedibile tra i tre scenari.
+
+### What we did
+
+- **Fase 1 (solo GPU)**: `--wire-tier-manager` senza
+  `--enable-cpu-offload` — nessun pool CPU costruito, comportamento
+  identico al baseline già noto.
+- **Fase 2 (solo CPU)**: serviva un modo per forzare TUTTO il
+  routing su CPU indipendentemente dalla classificazione hot/cold —
+  non esisteva con i soli flag CLI esistenti (a cold start la
+  classificazione è già determinata dall'ordine di seeding, non
+  controllabile dall'esterno). Aggiunta `OSX_GCSG_FORCE_CPU_ROUTE=1`,
+  env var di debug opt-in in `route_forward()`, invariata bit per bit
+  quando assente (verificato con test dedicato).
+- **Fase 3 (misto)**: **non è stata rieseguita** — durante l'analisi
+  di come garantire un vero mix, scoperto (leggendo
+  `SEEPolicy.classify_hot_cold()` e `_seed_eat_entries()`) che a cold
+  start (nessun traffico EAT reale ancora) la classificazione hot/cold
+  usa la sola componente di recency, che dipende dall'ORDINE di
+  inserimento nel loop di seeding — gli expert inseriti per primi
+  (0, 1, 2... — il nostro pool è `[0, 1]`) risultano sistematicamente
+  i più "vecchi" al momento della classificazione, quindi i più
+  "freddi". Con `hot_fraction=0.5` su 8 expert, i 4 più freddi sono
+  esattamente `{0, 1, 2, 3}` — **il nostro pool intero cade nella metà
+  fredda**. Il run "misto" di ieri (v5, "continued 17") non ha quindi
+  mai instradato nulla su GPU: era già, di fatto, un run CPU-only.
+  **Confermato empiricamente, non solo dedotto dal codice**: Fase 2
+  (forzata) = 1072.3s, v5 ("misto") = 1133.1s — 5.7% di differenza,
+  rumore plausibile su hardware condiviso, non una differenza
+  strutturale.
+- **Causa profonda del perché non esiste un vero "misto" oggi**:
+  `ExpertAccessTable` è puramente in-memory, per-processo —
+  `EAT.shutdown()` cancella tutto incondizionatamente, ogni processo
+  riparte da `access_count=0` per tutti gli expert. **Issue #27 (EPM —
+  Expert Position Memory)**, aperta 2026-08-13, propone esattamente
+  questo (`export_snapshot()`/`load_snapshot()` con decay
+  configurabile) ma non è mai stata implementata — confermato via
+  `gh issue view 27`. Un vero "misto" richiederebbe O quella
+  persistenza, O un pattern due-pass nello stesso processo
+  (`generate()` → `refresh_shadow_pool_selection()` → `generate()`
+  di nuovo, sfruttando `eat.access()` che AGGIORNA davvero
+  `access_count` durante `generate()` reale, riga ~2281 di
+  `gcsg.py`) — nessuno dei due implementato oggi, decisione esplicita
+  del project owner di non farlo in questa sessione.
+
+### Result — tabella comparativa finale (n=16, stesso pod RTX3090)
+
+| Fase | Config | Tempo | Accuracy | shadow_activations |
+|---|---|---|---|---|
+| 1 — solo GPU | `--wire-tier-manager` | **43.9s** | 50.0% (8/16) | 10081 |
+| 2 — solo CPU (forzata) | `--wire-tier-manager --enable-cpu-offload` + `OSX_GCSG_FORCE_CPU_ROUTE=1` | **1072.3s** | 50.0% (8/16) | 10081 |
+| 3 — "misto" (v5, in realtà = Fase 2) | `--wire-tier-manager --enable-cpu-offload` | **1133.1s** | 50.0% (8/16) | 10081 |
+
+**Zero errori matematici su tutte e tre** — stessa accuracy, stesso
+`shadow_activations` count in tutti e tre gli scenari: la correttezza
+non dipende da dove gira il forward, solo la velocità (già stabilito
+in "continued 17", ri-confermato qui su un confronto controllato).
+**Rapporto di velocità CPU-only/GPU-only: 24.4x** (1072.3s / 43.9s) —
+coerente con il 25.7x già misurato ieri e con il 44.6x del
+microbenchmark isolato (la differenza tra 24-26x nella pipeline reale
+e 44.6x nel benchmark puro riflette l'overhead residuo non ancora
+spiegato, già segnalato in "continued 17").
+
+### Why this matters
+
+- **Il piano originale a 3 fasi non era eseguibile come concepito**,
+  non per un limite di tempo/budget ma per un gap architetturale reale
+  (nessuna persistenza EAT tra processi) — scoperta più preziosa del
+  numero stesso: capire CHE COSA misuriamo davvero prima di fidarsi
+  del numero. Il project owner ricordava correttamente che esisteva
+  un meccanismo di persistenza pensato per questo — issue #27, mai
+  implementata, non un ricordo sbagliato.
+- `OSX_GCSG_FORCE_CPU_ROUTE` resta nel codice come strumento di
+  benchmark riutilizzabile per il prossimo confronto controllato,
+  zero rischio per il path di produzione (env var assente = invariato).
+
+### Current state
+
+- Codice: tutto committato e pushato su
+  `claude/ddr4-ram-processing-unzseh` (PR #42).
+- Log/risultati/telemetria completi in
+  `logs/runpod_cpu_offload_20260817/` (Fase 1, Fase 2, telemetria GPU/
+  host per l'intera sessione — samplers fermati esplicitamente, non
+  lasciati al self-timeout).
+- **Pod RunPod (RTX3090) pronto per lo shutdown** — tutti gli
+  artefatti recuperati in locale prima di considerare la sessione
+  chiusa, stesso principio di Malmö/Sprint4.
+
+Next session: se si vuole un vero confronto a 3 fasi, implementare
+prima issue #27 (EPM) o il pattern due-pass generate/refresh/generate
+nello stesso processo — nessuno dei due è un prerequisito per il resto
+di issue #33 (che resta chiuso su correttezza, aperto solo su
+performance non urgente, feature opt-in/default-off).

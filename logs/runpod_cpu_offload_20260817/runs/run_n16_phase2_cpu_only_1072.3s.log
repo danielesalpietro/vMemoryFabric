@@ -1,0 +1,206 @@
+[T+   0.0s] Loading cais/mmlu (all subjects, dev + test splits)...
+[T+   2.5s] Built 570 prompts across 57 subjects (10/subject cap).
+[T+   2.5s] Fetta [0:16] — 16 prompt (--prompt-start/--max-prompts).
+[T+   2.5s] --wire-tier-manager: TierManager/EAT wired via GCSGWorker.configure_tier_manager().
+[T+   2.5s] --enable-cpu-offload: routing CPU/DDR4-resident (issue #33) attivato via GCSGWorker.configure_cpu_offload(True).
+[T+   2.5s] Loading /root/models/mixtral-instruct-awq via GCSGWorker (shadow execution active — issues #10/#16), quantization=awq, wire_tier_manager=True, cpu_offload_enabled=True...
+INFO 08-17 15:15:19 config.py:280] Overriding HF config with {'head_dim': 128}
+`torch_dtype` is deprecated! Use `dtype` instead!
+INFO 08-17 15:15:25 config.py:510] This model supports multiple tasks: {'score', 'classify', 'embed', 'generate', 'reward'}. Defaulting to 'generate'.
+INFO 08-17 15:15:26 awq_marlin.py:113] Detected that the model can run with awq_marlin, however you specified quantization=awq explicitly, so forcing awq. Use quantization=awq_marlin for faster inference
+WARNING 08-17 15:15:26 config.py:588] awq quantization is not fully optimized yet. The speed can be slower than non-quantized models.
+WARNING 08-17 15:15:26 cuda.py:98] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+WARNING 08-17 15:15:26 config.py:642] Async output processing is not supported on the current platform type cuda.
+INFO 08-17 15:15:26 llm_engine.py:234] Initializing an LLM engine (v0.6.6.post1) with config: model='/root/models/mixtral-instruct-awq', speculative_config=None, tokenizer='/root/models/mixtral-instruct-awq', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=3328, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=awq, enforce_eager=True, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=/root/models/mixtral-instruct-awq, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=False, chunked_prefill_enabled=False, use_async_output_proc=False, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"candidate_compile_sizes":[],"compile_sizes":[],"capture_sizes":[],"max_capture_size":0}, use_cached_outputs=False, 
+INFO 08-17 15:15:27 selector.py:120] Using Flash Attention backend.
+INFO 08-17 15:15:27 model_runner.py:1094] Starting to load model /root/models/mixtral-instruct-awq...
+Loading safetensors checkpoint shards:   0% Completed | 0/3 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:  33% Completed | 1/3 [00:00<00:01,  1.62it/s]
+Loading safetensors checkpoint shards:  67% Completed | 2/3 [00:02<00:01,  1.11s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:03<00:00,  1.16s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:03<00:00,  1.10s/it]
+
+INFO 08-17 15:15:35 model_runner.py:1099] Loading model weights took 18.9548 GB
+2026-08-17 15:15:35,704 INFO scheduler.gcsg: GCSG: EAT seeded — 256 entry (8 expert x 32 layer) a Tier.DDR4.
+2026-08-17 15:15:35,751 INFO scheduler.gcsg: GCSG: shadow pool caricato — 2 expert AWQ-pre-quantizzati ([0, 1]) su 32 layer, path=AWQ-ModuleList+pinning GPU esplicito (issue #16).
+2026-08-17 15:15:37,074 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=1/32 dequant 1.323s
+2026-08-17 15:15:38,378 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=2/32 dequant 1.304s
+2026-08-17 15:15:39,670 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=3/32 dequant 1.292s
+2026-08-17 15:15:40,957 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=4/32 dequant 1.287s
+2026-08-17 15:15:42,224 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=5/32 dequant 1.266s
+[T+  30.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:15:43,488 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=6/32 dequant 1.264s
+2026-08-17 15:15:44,746 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=7/32 dequant 1.258s
+2026-08-17 15:15:46,000 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=8/32 dequant 1.253s
+2026-08-17 15:15:47,244 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=9/32 dequant 1.244s
+2026-08-17 15:15:48,527 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=10/32 dequant 1.283s
+2026-08-17 15:15:49,977 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=11/32 dequant 1.450s
+2026-08-17 15:15:51,468 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=12/32 dequant 1.491s
+2026-08-17 15:15:52,938 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=13/32 dequant 1.469s
+2026-08-17 15:15:54,346 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=14/32 dequant 1.408s
+2026-08-17 15:15:55,713 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=15/32 dequant 1.367s
+2026-08-17 15:15:57,114 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=16/32 dequant 1.400s
+2026-08-17 15:15:58,431 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=17/32 dequant 1.317s
+2026-08-17 15:15:59,772 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=18/32 dequant 1.341s
+2026-08-17 15:16:01,091 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=19/32 dequant 1.318s
+2026-08-17 15:16:02,357 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=20/32 dequant 1.266s
+2026-08-17 15:16:03,600 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=21/32 dequant 1.242s
+2026-08-17 15:16:04,852 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=22/32 dequant 1.252s
+2026-08-17 15:16:06,072 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=23/32 dequant 1.220s
+2026-08-17 15:16:07,338 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=24/32 dequant 1.266s
+2026-08-17 15:16:08,575 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=25/32 dequant 1.237s
+2026-08-17 15:16:09,808 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=26/32 dequant 1.233s
+2026-08-17 15:16:11,058 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=27/32 dequant 1.250s
+2026-08-17 15:16:12,310 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=28/32 dequant 1.251s
+[T+  60.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:16:13,537 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=29/32 dequant 1.227s
+2026-08-17 15:16:14,780 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=30/32 dequant 1.243s
+2026-08-17 15:16:16,013 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=31/32 dequant 1.233s
+2026-08-17 15:16:17,265 INFO scheduler.gcsg: GCSG DIAG: expert=0 layer=32/32 dequant 1.252s
+2026-08-17 15:16:17,266 INFO scheduler.gcsg: GCSG DIAG: expert=0 TOTALE 41.515s (32 layer)
+2026-08-17 15:16:18,512 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=1/32 dequant 1.246s
+2026-08-17 15:16:19,758 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=2/32 dequant 1.246s
+2026-08-17 15:16:20,987 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=3/32 dequant 1.228s
+2026-08-17 15:16:22,204 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=4/32 dequant 1.217s
+2026-08-17 15:16:23,402 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=5/32 dequant 1.198s
+2026-08-17 15:16:24,639 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=6/32 dequant 1.237s
+2026-08-17 15:16:25,875 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=7/32 dequant 1.236s
+2026-08-17 15:16:27,115 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=8/32 dequant 1.240s
+2026-08-17 15:16:28,354 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=9/32 dequant 1.238s
+2026-08-17 15:16:29,602 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=10/32 dequant 1.248s
+2026-08-17 15:16:30,839 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=11/32 dequant 1.237s
+2026-08-17 15:16:32,087 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=12/32 dequant 1.247s
+2026-08-17 15:16:33,406 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=13/32 dequant 1.319s
+2026-08-17 15:16:34,829 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=14/32 dequant 1.423s
+2026-08-17 15:16:36,301 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=15/32 dequant 1.472s
+2026-08-17 15:16:37,705 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=16/32 dequant 1.403s
+2026-08-17 15:16:39,068 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=17/32 dequant 1.363s
+2026-08-17 15:16:40,409 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=18/32 dequant 1.340s
+2026-08-17 15:16:41,764 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=19/32 dequant 1.355s
+2026-08-17 15:16:43,068 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=20/32 dequant 1.304s
+[T+  90.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:16:44,390 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=21/32 dequant 1.322s
+2026-08-17 15:16:45,748 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=22/32 dequant 1.358s
+2026-08-17 15:16:47,059 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=23/32 dequant 1.310s
+2026-08-17 15:16:48,306 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=24/32 dequant 1.247s
+2026-08-17 15:16:49,548 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=25/32 dequant 1.242s
+2026-08-17 15:16:50,780 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=26/32 dequant 1.232s
+2026-08-17 15:16:52,016 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=27/32 dequant 1.236s
+2026-08-17 15:16:53,248 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=28/32 dequant 1.232s
+2026-08-17 15:16:54,475 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=29/32 dequant 1.226s
+2026-08-17 15:16:55,699 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=30/32 dequant 1.224s
+2026-08-17 15:16:56,932 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=31/32 dequant 1.232s
+2026-08-17 15:16:58,153 INFO scheduler.gcsg: GCSG DIAG: expert=1 layer=32/32 dequant 1.221s
+2026-08-17 15:16:58,154 INFO scheduler.gcsg: GCSG DIAG: expert=1 TOTALE 40.888s (32 layer)
+2026-08-17 15:16:58,192 INFO scheduler.gcsg: GCSG: CPU shadow pool (DDR4-resident, issue #33 Fase 6a, path AWQ-ModuleList) caricato — 2 expert ([0, 1]) su 32 layer.
+INFO 08-17 15:17:03 worker.py:241] Memory profiling takes 5.36 seconds
+INFO 08-17 15:17:03 worker.py:241] the current vLLM instance can use total_gpu_memory (23.56GiB) x gpu_memory_utilization (0.95) = 22.38GiB
+INFO 08-17 15:17:03 worker.py:241] model weights take 18.95GiB; non_torch_memory takes 1.13GiB; PyTorch activation peak memory takes 1.07GiB; the rest of the memory reserved for KV Cache is 1.23GiB.
+INFO 08-17 15:17:03 gpu_executor.py:76] # GPU blocks: 627, # CPU blocks: 2048
+INFO 08-17 15:17:03 gpu_executor.py:80] Maximum concurrency for 3328 tokens per request: 3.01x
+INFO 08-17 15:17:06 llm_engine.py:431] init engine (profile, create kv cache, warmup model) took 8.63 seconds
+[T+ 113.5s] LLM ready.
+[T+ 113.5s] Answer-letter token ids: {'A': 330, 'B': 365, 'C': 334, 'D': 384}
+[T+ 113.5s] Running generate() on all prompts (max_tokens=1, logprobs=20)...
+Processed prompts:   0%|          | 0/16 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]2026-08-17 15:17:07,105 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=1 cum_time=0.179s avg=0.17939s/call ultimo hidden_states.shape=(1, 4096) layer=0
+2026-08-17 15:17:07,455 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=1 cum_time=0.164s avg=0.16370s/call ultimo hidden_states.shape=(1, 4096) layer=1
+2026-08-17 15:17:07,627 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=2 cum_time=0.351s avg=0.17541s/call ultimo hidden_states.shape=(1, 4096) layer=1
+2026-08-17 15:17:07,722 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=3 cum_time=0.446s avg=0.14862s/call ultimo hidden_states.shape=(1, 4096) layer=1
+2026-08-17 15:17:07,812 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=2 cum_time=0.254s avg=0.12675s/call ultimo hidden_states.shape=(1, 4096) layer=1
+2026-08-17 15:17:07,999 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=3 cum_time=0.350s avg=0.11666s/call ultimo hidden_states.shape=(1, 4096) layer=1
+[T+ 120.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:17:41,909 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=200 cum_time=19.015s avg=0.09508s/call ultimo hidden_states.shape=(1, 4096) layer=7
+[T+ 150.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:17:46,958 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=200 cum_time=18.506s avg=0.09253s/call ultimo hidden_states.shape=(1, 4096) layer=7
+[T+ 180.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:18:16,666 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=400 cum_time=37.517s avg=0.09379s/call ultimo hidden_states.shape=(1, 4096) layer=8
+2026-08-17 15:18:25,104 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=400 cum_time=36.986s avg=0.09247s/call ultimo hidden_states.shape=(1, 4096) layer=8
+[T+ 210.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:19:00,042 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=600 cum_time=55.281s avg=0.09213s/call ultimo hidden_states.shape=(1, 4096) layer=10
+2026-08-17 15:19:01,336 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=600 cum_time=56.407s avg=0.09401s/call ultimo hidden_states.shape=(1, 4096) layer=11
+[T+ 240.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:19:39,228 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=800 cum_time=74.755s avg=0.09344s/call ultimo hidden_states.shape=(1, 4096) layer=15
+2026-08-17 15:19:39,568 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=800 cum_time=74.872s avg=0.09359s/call ultimo hidden_states.shape=(1, 4096) layer=15
+[T+ 270.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:20:08,939 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=1000 cum_time=93.909s avg=0.09391s/call ultimo hidden_states.shape=(1, 4096) layer=19
+[T+ 300.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:20:24,029 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=1000 cum_time=93.496s avg=0.09350s/call ultimo hidden_states.shape=(1, 4096) layer=20
+[T+ 330.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:20:51,582 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=1200 cum_time=111.755s avg=0.09313s/call ultimo hidden_states.shape=(1, 4096) layer=21
+2026-08-17 15:20:58,477 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=1200 cum_time=112.274s avg=0.09356s/call ultimo hidden_states.shape=(1, 4096) layer=22
+[T+ 360.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:21:28,150 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=1400 cum_time=131.069s avg=0.09362s/call ultimo hidden_states.shape=(1, 4096) layer=22
+2026-08-17 15:21:37,510 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=1400 cum_time=130.646s avg=0.09332s/call ultimo hidden_states.shape=(1, 4096) layer=23
+[T+ 390.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:22:05,139 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=1600 cum_time=149.517s avg=0.09345s/call ultimo hidden_states.shape=(1, 4096) layer=24
+[T+ 420.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:22:24,827 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=1600 cum_time=149.811s avg=0.09363s/call ultimo hidden_states.shape=(1, 4096) layer=24
+2026-08-17 15:22:30,553 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=1800 cum_time=167.508s avg=0.09306s/call ultimo hidden_states.shape=(1, 4096) layer=24
+[T+ 450.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:23:04,196 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=1800 cum_time=167.957s avg=0.09331s/call ultimo hidden_states.shape=(1, 4096) layer=25
+2026-08-17 15:23:07,905 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=2000 cum_time=185.819s avg=0.09291s/call ultimo hidden_states.shape=(1, 4096) layer=25
+[T+ 480.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:23:40,945 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=2000 cum_time=186.676s avg=0.09334s/call ultimo hidden_states.shape=(1, 4096) layer=26
+[T+ 510.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:23:44,687 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=2200 cum_time=204.697s avg=0.09304s/call ultimo hidden_states.shape=(1, 4096) layer=26
+2026-08-17 15:24:07,153 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=2200 cum_time=205.187s avg=0.09327s/call ultimo hidden_states.shape=(1, 4096) layer=28
+[T+ 540.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:24:28,846 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=2400 cum_time=223.615s avg=0.09317s/call ultimo hidden_states.shape=(1, 4096) layer=29
+[T+ 570.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:24:52,150 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=2400 cum_time=223.812s avg=0.09326s/call ultimo hidden_states.shape=(1, 4096) layer=31
+Processed prompts:   6%|▋         | 1/16 [07:59<1:59:59, 479.96s/it, est. speed input: 0.78 toks/s, output: 0.00 toks/s][T+ 600.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:25:14,886 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=2600 cum_time=242.287s avg=0.09319s/call ultimo hidden_states.shape=(1, 4096) layer=1
+2026-08-17 15:25:21,544 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=2600 cum_time=243.043s avg=0.09348s/call ultimo hidden_states.shape=(1, 4096) layer=1
+[T+ 630.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:25:49,500 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=2800 cum_time=262.159s avg=0.09363s/call ultimo hidden_states.shape=(1, 4096) layer=3
+2026-08-17 15:26:04,295 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=2800 cum_time=261.332s avg=0.09333s/call ultimo hidden_states.shape=(1, 4096) layer=7
+[T+ 660.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:26:23,730 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=3000 cum_time=281.200s avg=0.09373s/call ultimo hidden_states.shape=(1, 4096) layer=7
+[T+ 690.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:26:49,238 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=3000 cum_time=279.467s avg=0.09316s/call ultimo hidden_states.shape=(1, 4096) layer=8
+2026-08-17 15:27:02,701 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=3200 cum_time=299.679s avg=0.09365s/call ultimo hidden_states.shape=(1, 4096) layer=9
+[T+ 720.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:27:28,010 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=3200 cum_time=298.267s avg=0.09321s/call ultimo hidden_states.shape=(1, 4096) layer=11
+2026-08-17 15:27:40,487 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=3400 cum_time=317.852s avg=0.09349s/call ultimo hidden_states.shape=(1, 4096) layer=12
+[T+ 750.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:28:06,430 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=3600 cum_time=336.532s avg=0.09348s/call ultimo hidden_states.shape=(1, 4096) layer=18
+[T+ 780.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:28:15,711 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=3400 cum_time=318.683s avg=0.09373s/call ultimo hidden_states.shape=(1, 4096) layer=19
+[T+ 810.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:28:47,733 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=3800 cum_time=355.795s avg=0.09363s/call ultimo hidden_states.shape=(1, 4096) layer=21
+2026-08-17 15:28:51,445 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=3600 cum_time=337.498s avg=0.09375s/call ultimo hidden_states.shape=(1, 4096) layer=21
+[T+ 840.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:29:20,589 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=3800 cum_time=356.030s avg=0.09369s/call ultimo hidden_states.shape=(1, 4096) layer=22
+2026-08-17 15:29:34,988 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=4000 cum_time=375.020s avg=0.09375s/call ultimo hidden_states.shape=(1, 4096) layer=22
+[T+ 870.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:30:00,505 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=4000 cum_time=375.350s avg=0.09384s/call ultimo hidden_states.shape=(1, 4096) layer=23
+[T+ 900.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:30:18,677 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=4200 cum_time=394.331s avg=0.09389s/call ultimo hidden_states.shape=(1, 4096) layer=23
+2026-08-17 15:30:29,861 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=4200 cum_time=394.075s avg=0.09383s/call ultimo hidden_states.shape=(1, 4096) layer=24
+[T+ 930.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:30:59,987 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=4400 cum_time=412.803s avg=0.09382s/call ultimo hidden_states.shape=(1, 4096) layer=25
+2026-08-17 15:31:12,696 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=4400 cum_time=412.923s avg=0.09385s/call ultimo hidden_states.shape=(1, 4096) layer=25
+[T+ 960.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:31:26,577 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=4600 cum_time=431.110s avg=0.09372s/call ultimo hidden_states.shape=(1, 4096) layer=25
+[T+ 990.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:31:58,399 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=4600 cum_time=431.587s avg=0.09382s/call ultimo hidden_states.shape=(1, 4096) layer=27
+2026-08-17 15:32:00,368 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=4800 cum_time=449.621s avg=0.09367s/call ultimo hidden_states.shape=(1, 4096) layer=27
+[T+1020.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:32:31,715 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=4800 cum_time=450.784s avg=0.09391s/call ultimo hidden_states.shape=(1, 4096) layer=29
+[T+1050.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+2026-08-17 15:32:53,179 INFO scheduler.gcsg: GCSG DIAG: shadow forward calls=5000 cum_time=469.077s avg=0.09382s/call ultimo hidden_states.shape=(1, 4096) layer=31
+Processed prompts:  56%|█████▋    | 9/16 [15:58<10:55, 93.65s/it, est. speed input: 3.70 toks/s, output: 0.01 toks/s]   Processed prompts: 100%|██████████| 16/16 [15:58<00:00, 59.92s/it, est. speed input: 6.58 toks/s, output: 0.02 toks/s]
+[T+1072.3s] generate() completed.
+
+--- MMLU 5-shot risultati (GCSGWorker, shadow execution attiva, 16 domande) ---
+Accuratezza complessiva: 50.0% (8/16)
+Non risolte (nessuna delle 4 lettere nei top-20 logprob): 0
+
+Per soggetto (peggiori 10):
+  abstract_algebra: 40.0% (10 domande)
+  anatomy: 66.7% (6 domande)
+
+GCSGGuard stats: {'total_tokens_evaluated': 201760, 'shadow_activations': 10081, 'activation_rate': 0.04996530531324346, 'contamination_rate_aggregate': 0.04996530531324346, 'tracked_requests': 16, 'shadow_pool_size': 2, 'thresholds': {'theta_gate': 0.85, 'theta_entropy': 0.7, 'theta_contamination': 0.05}}
+
+Shadow execution DAVVERO attiva (10081 attivazioni, activation_rate=5.0%) — issues #10/#16 chiuse per questo path. Confronto contro la baseline hook-only (72.3%, 412/570, LOGBOOK 2026-08-09 — stesso identico protocollo ma su un subset diverso se total != 570, il confronto valido richiede lo stesso n): questa run=50.0%.
+[rank0]:[W817 15:33:11.552625100 ProcessGroupNCCL.cpp:1250] Warning: WARNING: process group has NOT been destroyed before we destruct ProcessGroupNCCL. On normal program exit, the application should call destroy_process_group to ensure that any pending NCCL operations have finished in this process. In rare cases this process can exit before this point and block the progress of another member of the process group. This constraint has always been present,  but this warning has only been added since PyTorch 2.4 (function operator())
