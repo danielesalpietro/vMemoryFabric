@@ -419,6 +419,92 @@ def _quantize_int4(weight: Any) -> tuple[Any, float]:
     return quantized, scale
 
 
+# ── vendorizzato da casper-hansen/AutoAWQ, awq/utils/packing_utils.py ────────
+# (MIT license) — issue #33 Fase 6a. Verificato contro il sorgente reale via
+# GitHub API il 2026-08-17 (non reimplementato da zero), poi verificato
+# NUMERICAMENTE contro il kernel CUDA AWQ reale su un expert del checkpoint
+# di produzione — errore relativo L2 ~0.0005 (LOGBOOK_ISSUE33.MD "Passo 2"),
+# non solo fidandosi che il codice vendorizzato fosse corretto perché
+# proviene da un progetto reale. _AWQ_REVERSE_ORDER è il punto che rischiava
+# di più: AWQ impacchetta i nibble in ordine interleaved
+# ([0,4,1,5,2,6,3,7]), non sequenziale — un dettaglio facile da sbagliare
+# reimplementando da zero, qui riusato as-is.
+
+_AWQ_REVERSE_ORDER = [0, 4, 1, 5, 2, 6, 3, 7]
+
+
+def _awq_unpack(qweight: Any, qzeros: Any, bits: int) -> tuple[Any, Any]:
+    import torch
+
+    shifts = torch.arange(0, 32, bits, device=qzeros.device)
+    iweights = torch.bitwise_right_shift(qweight[:, :, None], shifts[None, None, :]).to(torch.int8)
+    iweights = iweights.view(iweights.shape[0], -1)
+    izeros = torch.bitwise_right_shift(qzeros[:, :, None], shifts[None, None, :]).to(torch.int8)
+    izeros = izeros.view(izeros.shape[0], -1)
+    return iweights, izeros
+
+
+def _awq_reverse_order(iweights: Any, izeros: Any, bits: int) -> tuple[Any, Any]:
+    import torch
+
+    reverse_order_tensor = torch.arange(iweights.shape[-1], dtype=torch.int32, device=izeros.device)
+    reverse_order_tensor = reverse_order_tensor.view(-1, 32 // bits)
+    reverse_order_tensor = reverse_order_tensor[:, _AWQ_REVERSE_ORDER]
+    reverse_order_tensor = reverse_order_tensor.view(-1)
+    izeros = izeros[:, reverse_order_tensor]
+    iweights = iweights[:, reverse_order_tensor]
+    return iweights, izeros
+
+
+def _dequantize_awq_gemm(qweight: Any, qzeros: Any, scales: Any, bits: int, group_size: int) -> Any:
+    """Dequantizza pesi AWQ formato GEMM. Layout risultato: (in_features,
+    out_features) — convenzione AWQ "y = x @ w", OPPOSTA a nn.Linear/
+    _ShadowExpertINT4 (out_features, in_features) — chi chiama questa
+    funzione deve trasporre esplicitamente (verificato empiricamente
+    contro il config reale del checkpoint, non assunto dalla
+    documentazione generica — vedi LOGBOOK_ISSUE33.MD "Passo 1")."""
+    import torch
+
+    iweight, izeros = _awq_unpack(qweight, qzeros, bits)
+    iweight, izeros = _awq_reverse_order(iweight, izeros, bits)
+    iweight = torch.bitwise_and(iweight, (2**bits) - 1)
+    izeros = torch.bitwise_and(izeros, (2**bits) - 1)
+    scales_e = scales.repeat_interleave(group_size, dim=0)
+    izeros_e = izeros.repeat_interleave(group_size, dim=0)
+    return (iweight - izeros_e) * scales_e
+
+
+def _dequantize_awq_linear_to_fp32(linear: Any) -> Any:
+    """Dequantizza un singolo layer Linear AWQ-packed (qweight/qzeros/
+    scales) a fp32, layout nn.Linear-style (out_features, in_features) —
+    .T esplicito + .contiguous() (verificato 4.4x più lento senza,
+    LOGBOOK_ISSUE33.MD "consigli esterni vagliati" — non un dettaglio
+    trascurabile).
+
+    bits/group_size derivati dalle shape REALI dei tensori
+    (qweight/scales), non da un file di config esterno — questa funzione
+    non sa e non deve sapere dove vive il checkpoint su disco: la
+    quantizzazione AWQ GEMM codifica queste informazioni nelle shape
+    stesse. pack_factor = out_features // qweight.shape[1] (colonne
+    impacchettate), bits = 32 // pack_factor; group_size =
+    qweight.shape[0] // scales.shape[0] (righe per gruppo di scale
+    condiviso).
+    """
+    import torch
+
+    qweight = linear.qweight.detach().cpu()
+    qzeros = linear.qzeros.detach().cpu()
+    scales = linear.scales.detach().cpu()
+
+    out_features = scales.shape[1]
+    pack_factor = out_features // qweight.shape[1]
+    bits = 32 // pack_factor
+    group_size = qweight.shape[0] // scales.shape[0]
+
+    dequantized = _dequantize_awq_gemm(qweight, qzeros, scales, bits, group_size)
+    return dequantized.T.to(torch.float32).contiguous()
+
+
 class _ShadowExpertINT4:
     """Callable (hidden_states, layer_id) -> output — forward SwiGLU reale
     su pesi INT4 dequantizzati al volo, un layer alla volta.
@@ -845,10 +931,26 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
     soli che la funzionalità debba essere live di default ovunque un
     TierManager esista per qualunque altro motivo (es. solo hotness
     tracking EAT lato GPU, issue #17) — l'impatto reale va ancora
-    misurato e documentato (Fase 5) prima di quella decisione. Solo il
-    path 1 è coperto: i path 2/3 (Marlin, AWQ ModuleList) delegano a
-    kernel CUDA reali (quant_method.apply()) mai validati su CPU, fuori
-    scope per questa fase.
+    misurato e documentato (Fase 5) prima di quella decisione. Alla
+    chiusura di Fase 4 solo il path 1 era coperto: i path 2/3 (Marlin,
+    AWQ ModuleList) delegano a kernel CUDA reali (quant_method.apply())
+    mai validati su CPU, fuori scope per quella fase.
+
+    Issue #33 Fase 6a (2026-08-17) chiude il gap per il path 3
+    (AWQ ModuleList) — l'UNICO path che il checkpoint reale di produzione
+    (casperhansen/mixtral-instruct-awq) usa: path 1/is_fused non si
+    applica mai a un checkpoint AWQ pre-quantizzato. _dequantize_awq_gemm()
+    (vendorizzata da AutoAWQ, MIT, verificata contro il kernel CUDA reale
+    — errore relativo L2 ~0.0005) dequantizza i pesi qweight/qzeros/scales
+    a fp32, cache CPU-resident via _build_cpu_shadow_pool_awq() — NON
+    INT4: ri-quantizzare per-tensore un formato per-gruppo (AWQ,
+    group_size derivato dalle shape reali) distrugge il segnale (errore
+    relativo ~0.95, misurato attraverso il forward SwiGLU completo — vedi
+    TestQuantizeInt4KnownLimitation in tests/test_cpu_kernel.py). Costo:
+    ~21GB RAM per expert su 32 layer, ~1.1-1.2s di dequant one-time per
+    expert-layer (misurato sul checkpoint reale). Path Marlin (path 2)
+    resta fuori scope: nessun checkpoint reale usato da questo progetto
+    lo esercita finora.
 
     Stato di verifica, dichiarato esplicitamente per lo stesso motivo di
     ogni altra claim in questo file: la logica pura Python (selezione,
@@ -1263,6 +1365,35 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                     "(issue #16).",
                     len(loaded), loaded, len(layers),
                 )
+            # Issue #33 Fase 6a: mirror CPU-resident per il path REALE del
+            # checkpoint di produzione (path 2/3 sono gli unici usati da
+            # casperhansen/mixtral-instruct-awq — path 1/is_fused sopra
+            # non si applica mai a un checkpoint AWQ pre-quantizzato, solo
+            # al modello tiny non quantizzato usato nei test Fase 1/2/3).
+            # Costruito per l'INTERO expert_ids selezionato, non solo
+            # `loaded`: se il pinning GPU è fallito per un expert (sopra),
+            # questo pool CPU gli dà comunque una residenza funzionante
+            # invece di lasciarlo hook-only — un miglioramento rispetto al
+            # comportamento pre-Fase-6a, non solo un mirror. Stesso gate di
+            # is_fused sopra: richiede ENTRAMBI tier_manager wired E il
+            # flag esplicito _cpu_offload_enabled (Fase 4, default False).
+            # Vedi _build_cpu_shadow_pool_awq() per il perché fp32 (non
+            # INT4) e per la derivazione di bits/group_size dalle shape.
+            if (
+                getattr(self, "_tier_manager", None) is not None
+                and getattr(self, "_cpu_offload_enabled", False)
+            ):
+                self._cpu_shadow_pool.update(
+                    self._build_cpu_shadow_pool_awq(layers, expert_ids),
+                )
+                log.info(
+                    "GCSG: CPU shadow pool (DDR4-resident, issue #33 Fase 6a, "
+                    "path AWQ-ModuleList) caricato — %d expert (%s) su %d "
+                    "layer.",
+                    len(self._cpu_shadow_pool), sorted(self._cpu_shadow_pool),
+                    len(layers),
+                )
+                self._refresh_hot_cold_classification()
 
     def _build_cpu_shadow_pool(
         self, layers: list[Any], expert_ids: list[int],
@@ -1301,6 +1432,64 @@ class GCSGWorker:   # pragma: no cover — richiede vLLM engine live, non unit-t
                 w2 = experts_module.w2_weight.data[expert_id]
                 per_layer_w13.append(_quantize_int4(w13))
                 per_layer_w2.append(_quantize_int4(w2))
+            cpu_pool[expert_id] = _ShadowExpertINT4(per_layer_w13, per_layer_w2)
+        return cpu_pool
+
+    def _build_cpu_shadow_pool_awq(
+        self, layers: list[Any], expert_ids: list[int],
+    ) -> dict[int, object]:
+        """Issue #33 Fase 6a — mirror CPU-resident del path AWQ-ModuleList
+        (path 2/3, il SOLO path che il checkpoint reale di produzione usa:
+        casperhansen/mixtral-instruct-awq è pre-quantizzato AWQ, non c'è
+        mai un path fp16 grezzo su hardware reale — path 1/is_fused resta
+        rilevante solo per i test sul modello tiny). Prima di oggi tutto
+        il lavoro Fase 6a (dequant AWQ, parità numerica contro il kernel
+        CUDA reale, pipeline completa) viveva in script standalone,
+        MAI collegato a GCSGWorker — questo metodo è il collegamento.
+
+        Cache FP32, non INT4: _quantize_int4() è per-tensore, ma AWQ
+        quantizza per-gruppo (group_size derivato dalle shape, tipicamente
+        128) — ri-quantizzare pesi già dequantizzati da un formato
+        per-gruppo con una griglia per-tensore distrugge il segnale
+        (errore relativo L2 misurato ~0.95 attraverso il forward SwiGLU
+        completo, non solo sui pesi grezzi — vedi
+        TestQuantizeInt4KnownLimitation in tests/test_cpu_kernel.py).
+        La cache fp32 invece misura ~0.0005 di errore relativo contro il
+        kernel CUDA reale, a costo di più memoria (~21GB per expert su 32
+        layer, misurato) — scelta deliberata, non un compromesso
+        provvisorio: vedi LOGBOOK_ISSUE33.MD "misura completa della
+        pipeline". _ShadowExpertINT4 riusata con scale=1.0 per ogni layer
+        (i pesi sono già in unità reali, il moltiplicatore diventa un
+        no-op) — nessuna classe nuova, stesso principio di
+        _build_cpu_shadow_pool() per il path 1.
+
+        w1/w3 concatenati su dim 0 per formare w13 (stesso layout
+        (2*intermediate, hidden) del path 1/FusedMoE) così
+        _ShadowExpertINT4.__call__() — che fa lo split silu(w1)*w3 su
+        w13 — funziona identico sui due path senza bisogno di una classe
+        _AWQShadowExpertCPU dedicata.
+
+        Nessun try/except per-expert: un fallimento di dequant qui è un
+        bug reale (shape/attributi inattesi), non uno scenario atteso —
+        propaga fino al try/except di alto livello già presente attorno
+        a _load_shadow_pool() in load_model(), che degrada a hook-only e
+        logga un warning (stesso comportamento di qualunque altra
+        eccezione in questo metodo, invariato da prima di Fase 6a).
+        """
+        import torch
+
+        cpu_pool: dict[int, object] = {}
+        for expert_id in expert_ids:
+            per_layer_w13 = []
+            per_layer_w2 = []
+            for layer in layers:
+                module = layer.block_sparse_moe.experts[expert_id]
+                w1 = _dequantize_awq_linear_to_fp32(module.w1)
+                w3 = _dequantize_awq_linear_to_fp32(module.w3)
+                w2 = _dequantize_awq_linear_to_fp32(module.w2)
+                w13 = torch.cat([w1, w3], dim=0).contiguous()
+                per_layer_w13.append((w13, 1.0))
+                per_layer_w2.append((w2, 1.0))
             cpu_pool[expert_id] = _ShadowExpertINT4(per_layer_w13, per_layer_w2)
         return cpu_pool
 

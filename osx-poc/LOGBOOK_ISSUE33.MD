@@ -2560,3 +2560,156 @@ Next session: decisione finale su Fase 6a (invariata). Separatamente,
 da definire se/quando: specifiche di un prossimo pod RunPod, se emerge
 un motivo concreto per provisionarne uno (es. proseguire Fase 6a o
 issue #43/#44 su hardware Linux reale).
+
+---
+
+## 2026-08-17 (continued 14) — Fase 6a Passo 3: il dequant AWQ collegato a GCSGWorker, non più solo in script standalone
+
+**Release:** sì — `src/scheduler/gcsg.py` (nuovo codice di produzione),
+`tests/test_scheduler.py` (23 nuovi test), `scripts/verify_awq_cpu_dequant_wired.py`
+(nuovo, Passo 3).
+
+### What we set out to do
+
+Chiudere il pezzo mancante identificato a fine sessione precedente:
+tutto il lavoro Fase 6a fino a ieri (dequant AWQ, parità numerica contro
+il kernel CUDA reale — Passo 2, ~0.0005 errore relativo — pipeline
+completa fp32-cache vs INT4-cache) viveva in script standalone sotto
+`scripts/`, mai collegato a `GCSGWorker`. Senza questo collegamento,
+`--enable-cpu-offload` non fa nulla di reale sul path 3 (AWQ ModuleList)
+— l'UNICO path che il checkpoint di produzione
+(casperhansen/mixtral-instruct-awq) usa. Prerequisito esplicito prima di
+lanciare qualunque run di validazione (16→32→64→full).
+
+### What we did
+
+**Vendorizzato in `gcsg.py`** (accanto a `_quantize_int4`, non in un
+modulo separato — stessa convenzione del resto del file):
+`_dequantize_awq_gemm`/`_awq_unpack`/`_awq_reverse_order` (identiche a
+Passo 1/2, MIT da AutoAWQ) e una nuova funzione,
+`_dequantize_awq_linear_to_fp32(linear)`, che dequantizza un singolo
+modulo Linear AWQ-packed a fp32 layout nn.Linear-style, **derivando
+bits/group_size dalle shape reali dei tensori** (`pack_factor =
+out_features // qweight.shape[1]`, `bits = 32 // pack_factor`,
+`group_size = qweight.shape[0] // scales.shape[0]`) invece che da
+`quant_config.json` come faceva lo script standalone del Passo 2 — questo
+metodo non deve sapere dove vive il checkpoint su disco.
+
+**Nuovo metodo `GCSGWorker._build_cpu_shadow_pool_awq(layers,
+expert_ids)`**: mirror CPU-resident del path 3, parallelo a
+`self._shadow_pool` (GPU) come già Fase 2 per il path 1. Cache **fp32,
+non INT4** — decisione presa ieri (misura completa della pipeline):
+ri-quantizzare per-tensore un formato per-gruppo distrugge il segnale
+(~0.95 errore relativo). w1 (gate) e w3 (up) concatenati su dim 0 per
+formare w13 nello stesso layout che `_ShadowExpertINT4` già consuma —
+nessuna classe nuova.
+
+**Wiring**: agganciato al branch `else:` (path 3) di
+`_load_shadow_pool()`, stesso gate esplicito del path 1
+(`_tier_manager` wired E `_cpu_offload_enabled=True`, default False,
+Fase 4 invariata). A differenza del path 1, costruito per **l'intero
+`expert_ids` selezionato**, non solo quelli con pinning GPU riuscito —
+un miglioramento, non solo un mirror: un expert con pinning GPU fallito
+ora ha comunque una residenza CPU funzionante invece di restare
+hook-only.
+
+**23 nuovi test** in `test_scheduler.py`, tre classi isolate per layer
+(stesso principio "un livello alla volta" già usato altrove in questo
+file):
+- `TestDequantizeAwqLinearToFp32` — deriva bits/group_size dalle shape
+  reali osservate sul checkpoint (hidden=4096, intermediate=14336,
+  bits=4, group_size=128), verifica layout .T + .contiguous().
+  `_dequantize_awq_gemm()` monkeypatchata (già provata altrove contro
+  il kernel reale — qui isolato solo il layer nuovo).
+- `TestBuildCpuShadowPoolAwq` — concatenazione w1+w3, scale=1.0,
+  forward CPU end-to-end funzionante. `_dequantize_awq_linear_to_fp32`
+  monkeypatchata.
+- `TestLoadShadowPoolAwqCpuPoolWiring` — i tre gate test mirror di
+  `TestGCSGCpuShadowPool` (path 1): costruisce con tier_manager+flag,
+  resta vuoto senza tier_manager, resta vuoto col flag disabilitato di
+  default. `_build_cpu_shadow_pool_awq()` monkeypatchata direttamente —
+  isola il wiring dalla correttezza del dequant. Bug incontrato scrivendo
+  questi test: con un TierManager reale wired, il pinning GPU del fake
+  minimale di `TestGCSG` (pensato solo per `.to('cuda')` diretto) fallisce
+  perché passa da `_promote_module_via_tier_manager()`, che chiama
+  `named_parameters()` — non supportato dal fake. Non un bug nel codice
+  di produzione: i due test coinvolti sono stati corretti per non
+  asserire sul pool GPU (fuori scope, già coperto altrove), solo sul pool
+  CPU che è l'oggetto del test.
+
+Suite completa: 168 test, tutti verdi (`pytest osx-poc/tests/ -q`).
+`ruff check` pulito sui file toccati (un solo warning I001 pre-esistente
+su un import in cima a `test_scheduler.py`, non introdotto da questa
+sessione — verificato via `git stash`).
+
+**Passo 3 — parità del codice REALE contro il kernel CUDA reale**
+(`scripts/verify_awq_cpu_dequant_wired.py`, nuovo): a differenza del
+Passo 2 (che verificava una reimplementazione standalone mai collegata a
+`GCSGWorker`), questo script chiama `GCSGWorker._build_cpu_shadow_pool_awq()`
+— il codice VERO — su un modulo `MixtralMLP` reale caricato via vLLM, e
+confronta contro lo stesso forward CUDA reale. Girato due volte su
+layer/expert diversi (checkpoint reale, locale, `/data/nvme/models/
+mixtral-instruct-awq`):
+
+| layer | expert | stato pinning | errore relativo L2 | diff assoluta max |
+|---|---|---|---|---|
+| 0  | 0 | offloaded, pinnato esplicitamente | 0.000483 | 0.007572 |
+| 15 | 5 | già GPU-resident | 0.000555 | 0.002098 |
+
+Entrambi ben sotto la soglia 1e-2, in linea con Passo 2 (~0.0005) —
+il collegamento a `GCSGWorker` non ha introdotto degrado, e copre anche
+il caso non testato da Passo 2 (modulo già GPU-resident, nessun
+pinning). `_build_cpu_shadow_pool_awq()` per un solo expert su un solo
+layer: ~2.1-2.7s (in linea con la stima ~1.1-1.2s/layer per w1+w2+w3
+della sessione precedente, differenza attribuibile a caching/warmup del
+processo). Log completi salvati in
+`logs/z8_local/awq_fase6a_wiring/`.
+
+### Result
+
+Il gap identificato ieri è chiuso: `--enable-cpu-offload` ora fa
+qualcosa di reale sul path 3 (AWQ ModuleList), il solo path che il
+checkpoint di produzione usa. Verificato non solo con unit test (fake,
+veloci, isolati per layer) ma anche contro il kernel CUDA reale sul
+checkpoint reale, due volte, su moduli in stati di pinning diversi.
+
+### Why this matters
+
+Fino a ieri tutto il lavoro Fase 6a — per quanto numericamente corretto
+— non poteva essere invocato da nessun percorso reale: viveva in script
+mai chiamati da `GCSGWorker.load_model()`. Questo è il momento in cui
+Fase 6a smette di essere "codice che dimostra che l'idea funzionerebbe"
+e diventa "codice che il worker userebbe se il flag fosse acceso" — la
+distinzione posta esplicitamente dal project owner ("cosa ci manca per
+accenderla?"). Resta comunque dietro il flag esplicito (default False,
+Fase 4 invariata): l'impatto aggregato di attivarla sul path AWQ reale
+(tempo, memoria) non è ancora stato misurato — è il prossimo passo
+naturale (il pattern di validazione già confermato: 16→32→64→full 570).
+
+### Current state
+
+- `src/scheduler/gcsg.py`: `_dequantize_awq_gemm`/`_awq_unpack`/
+  `_awq_reverse_order`/`_dequantize_awq_linear_to_fp32` (vendorizzate/
+  nuove), `GCSGWorker._build_cpu_shadow_pool_awq()` (nuovo), wiring nel
+  branch path-3 di `_load_shadow_pool()`. Docstring di classe aggiornata
+  (non più "solo path 1 coperto").
+- `tests/test_scheduler.py`: 23 nuovi test, 3 classi nuove
+  (`TestDequantizeAwqLinearToFp32`, `TestBuildCpuShadowPoolAwq`,
+  `TestLoadShadowPoolAwqCpuPoolWiring`). Suite completa: 168 test, tutti
+  verdi.
+- `scripts/verify_awq_cpu_dequant_wired.py`: nuovo, Passo 3 — verifica il
+  codice reale (non una reimplementazione) contro il kernel CUDA reale.
+  Girato due volte su layer/expert reali diversi, entrambi sotto soglia.
+- `logs/z8_local/awq_fase6a_wiring/`: output completi dei due run Passo 3.
+- Nessuna run MMLU (16→32→64→full) ancora lanciata con
+  `--enable-cpu-offload` genuinamente attivo sul path AWQ — prossimo
+  passo, non ancora iniziato.
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session (o proseguimento stessa sessione): lanciare il pattern di
+validazione confermato (16→32→64→full 570 domande MMLU) con
+`--enable-cpu-offload` genuinamente attivo sul path AWQ, in locale
+(28 core/436GB RAM/RTX3090 già disponibili) — confrontare i tempi
+WITH/WITHOUT il flag alla scala piena, oltre alla sola correttezza
+(accuracy MMLU già nota dover restare invariata, Fase 5/#17).

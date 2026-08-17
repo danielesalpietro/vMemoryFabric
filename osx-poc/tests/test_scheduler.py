@@ -923,6 +923,250 @@ class TestGCSGCpuShadowPool:
         assert cleared == {"shadow_pool": {}, "cpu_shadow_pool": {}}
 
 
+# ── AWQ CPU dequant pipeline (2026-08-17, issue #33 Fase 6a) ──────────────────
+#
+# Il pool CPU di Fase 2 (classe sopra) copre solo path 1 (FusedMoE fp16
+# grezzo) — MAI il path usato dal checkpoint reale di produzione
+# (casperhansen/mixtral-instruct-awq, path 3/AWQ-ModuleList, pre-quantizzato).
+# Fase 6a collega _dequantize_awq_linear_to_fp32()/_build_cpu_shadow_pool_awq()
+# (nuovi, vendorizzano il dequant GEMM AutoAWQ già verificato contro il
+# kernel CUDA reale — LOGBOOK_ISSUE33.MD "Passo 2") al path 3 di
+# _load_shadow_pool(). Tre livelli di test, ciascuno isolato dagli altri via
+# monkeypatch del livello sottostante — stesso principio delle altre classi
+# in questo file: testare un layer alla volta senza dover costruire tensori
+# AWQ bit-packed reali end-to-end.
+
+class TestDequantizeAwqLinearToFp32:
+
+    def test_derives_bits_and_group_size_from_real_checkpoint_shapes(self, monkeypatch):
+        """bits/group_size non vengono da un file di config esterno — sono
+        derivati dalle shape dei tensori stessi (vedi docstring del
+        metodo). Shape usate qui sono quelle osservate sul checkpoint
+        reale casperhansen/mixtral-instruct-awq, layer 0 expert 0, w1
+        (gate_proj): hidden=4096, intermediate=14336, bits=4 (pack_factor
+        8), group_size=128 — verificate live durante Fase 6a Passo 1/2
+        (LOGBOOK_ISSUE33.MD), non inventate. _dequantize_awq_gemm()
+        monkeypatchata: il suo output è già provato altrove (dequant
+        vendorizzato da AutoAWQ, parità numerica ~0.0005 contro il kernel
+        CUDA reale) — qui l'obiettivo è isolare SOLO la derivazione
+        bits/group_size e la conversione di layout (.T + .contiguous()),
+        non ri-provare la matematica del dequant."""
+        import torch
+
+        seen = {}
+
+        def _fake_dequantize_awq_gemm(qweight, qzeros, scales, bits, group_size):
+            seen["bits"] = bits
+            seen["group_size"] = group_size
+            # layout nativo AWQ GEMM: (in_features, out_features) = (2, 3) qui
+            return torch.arange(6, dtype=torch.float32).reshape(2, 3)
+
+        monkeypatch.setattr(gcsg_module, "_dequantize_awq_gemm", _fake_dequantize_awq_gemm)
+
+        hidden, intermediate, pack_factor, group_size = 4096, 14336, 8, 128
+        linear = SimpleNamespace(
+            qweight=torch.zeros(hidden, intermediate // pack_factor, dtype=torch.int32),
+            qzeros=torch.zeros(hidden // group_size, intermediate // pack_factor, dtype=torch.int32),
+            scales=torch.zeros(hidden // group_size, intermediate, dtype=torch.float16),
+        )
+
+        result = gcsg_module._dequantize_awq_linear_to_fp32(linear)
+
+        assert seen["bits"] == 4
+        assert seen["group_size"] == 128
+        assert result.dtype == torch.float32
+        assert result.is_contiguous()
+        want = torch.arange(6, dtype=torch.float32).reshape(2, 3).T.contiguous()
+        assert torch.equal(result, want)   # layout nn.Linear (out_features, in_features)
+
+
+class TestBuildCpuShadowPoolAwq:
+
+    @staticmethod
+    def _make_worker(tier_manager=None, shadow_pool_size=2):
+        worker = TestGCSGTierManagerWiring._make_worker(tier_manager, shadow_pool_size)
+        worker._cpu_shadow_pool = {}
+        return worker
+
+    def test_concatenates_gate_and_up_proj_and_uses_scale_one(self, monkeypatch):
+        """w13 dev'essere cat([w1_dequant, w3_dequant], dim=0) — stesso
+        ordine gate-poi-up documentato su _ShadowExpertINT4 per il path 1
+        (w1=gate_proj, w3=up_proj, w2=down_proj: naming Mixtral reale,
+        verificato via model.safetensors.index.json del checkpoint reale,
+        Fase 6a Passo 0/1). scale=1.0 per ogni layer: i pesi sono già
+        dequantizzati in unità reali, non un residuo di quantizzazione
+        int4 da riscalare — vedi la docstring del metodo per il perché
+        (ri-quantizzare per-tensore un formato per-gruppo distrugge il
+        segnale, errore relativo ~0.95, TestQuantizeInt4KnownLimitation in
+        test_cpu_kernel.py)."""
+        import torch
+
+        hidden, intermediate = 8, 4
+        generator = torch.Generator().manual_seed(0)
+        w1 = torch.randn(intermediate, hidden, generator=generator)
+        w3 = torch.randn(intermediate, hidden, generator=generator)
+        w2 = torch.randn(hidden, intermediate, generator=generator)
+
+        def _fake_dequant(linear):
+            return {"w1": w1, "w3": w3, "w2": w2}[linear.tag]
+
+        monkeypatch.setattr(gcsg_module, "_dequantize_awq_linear_to_fp32", _fake_dequant)
+
+        def _fake_expert():
+            return SimpleNamespace(
+                w1=SimpleNamespace(tag="w1"),
+                w3=SimpleNamespace(tag="w3"),
+                w2=SimpleNamespace(tag="w2"),
+            )
+
+        layers = [
+            SimpleNamespace(block_sparse_moe=SimpleNamespace(
+                experts=[_fake_expert() for _ in range(4)],
+            ))
+            for _ in range(2)
+        ]
+        worker = self._make_worker()
+
+        cpu_pool = worker._build_cpu_shadow_pool_awq(layers, expert_ids=[1, 2])
+
+        assert set(cpu_pool.keys()) == {1, 2}
+        for shadow in cpu_pool.values():
+            for layer_id in (0, 1):
+                w13_got, w13_scale = shadow._per_layer_w13[layer_id]
+                w2_got, w2_scale = shadow._per_layer_w2[layer_id]
+                assert w13_scale == 1.0
+                assert w2_scale == 1.0
+                assert torch.equal(w13_got, torch.cat([w1, w3], dim=0))
+                assert torch.equal(w2_got, w2)
+
+    def test_produces_working_cpu_forward(self, monkeypatch):
+        """End-to-end come test_build_cpu_shadow_pool_produces_working_forward
+        (path 1, TestGCSGCpuShadowPool): il pool costruito è realmente
+        eseguibile, non solo strutturalmente corretto."""
+        import torch
+
+        hidden, intermediate = 16, 32
+        generator = torch.Generator().manual_seed(1)
+        w1 = torch.randn(intermediate, hidden, generator=generator)
+        w3 = torch.randn(intermediate, hidden, generator=generator)
+        w2 = torch.randn(hidden, intermediate, generator=generator)
+
+        monkeypatch.setattr(
+            gcsg_module, "_dequantize_awq_linear_to_fp32",
+            lambda linear: {"w1": w1, "w3": w3, "w2": w2}[linear.tag],
+        )
+
+        def _fake_expert():
+            return SimpleNamespace(
+                w1=SimpleNamespace(tag="w1"),
+                w3=SimpleNamespace(tag="w3"),
+                w2=SimpleNamespace(tag="w2"),
+            )
+
+        layers = [
+            SimpleNamespace(block_sparse_moe=SimpleNamespace(
+                experts=[_fake_expert() for _ in range(2)],
+            ))
+        ]
+        worker = self._make_worker()
+
+        cpu_pool = worker._build_cpu_shadow_pool_awq(layers, expert_ids=[0])
+
+        hidden_states = torch.randn(4, hidden, generator=generator)
+        output = cpu_pool[0](hidden_states, layer_id=0)
+        assert output.device.type == "cpu"
+        assert output.shape == (4, hidden)
+        assert torch.isfinite(output).all()
+
+
+class TestLoadShadowPoolAwqCpuPoolWiring:
+    """Wiring nel branch path-3 (else) di _load_shadow_pool() — mirror dei
+    tre test-gate di TestGCSGCpuShadowPool per path 1, stesso principio,
+    stesso gate (_tier_manager wired E _cpu_offload_enabled=True).
+    _build_cpu_shadow_pool_awq() monkeypatchata direttamente: già testata
+    a parte sopra (TestBuildCpuShadowPoolAwq), qui l'obiettivo è isolare
+    SOLO il wiring (gate + populate di self._cpu_shadow_pool), non farlo
+    dipendere dal fake AWQ minimale di TestGCSG (che non ha attributi
+    w1/w2/w3 — costruito solo per testare il pinning GPU)."""
+
+    @staticmethod
+    def _make_worker(tier_manager=None, shadow_pool_size=2, cpu_offload_enabled=False):
+        worker = TestGCSGTierManagerWiring._make_worker(tier_manager, shadow_pool_size)
+        worker._cpu_shadow_pool = {}
+        worker._cpu_offload_enabled = cpu_offload_enabled
+        return worker
+
+    def _layers_and_worker(self, tmp_path, **worker_kwargs):
+        layers = TestGCSG._fake_awq_moduleslist_layers(num_layers=2, num_experts=8, to_succeeds=True)
+        mgr = TestGCSGTierManagerWiring._real_tier_manager(tmp_path) if worker_kwargs.get("tier_manager") else None
+        worker = self._make_worker(tier_manager=mgr, **{k: v for k, v in worker_kwargs.items() if k != "tier_manager"})
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=layers)),
+            ),
+        )
+        return layers, worker
+
+    def test_builds_awq_cpu_pool_when_tier_manager_wired_and_flag_enabled(
+        self, tmp_path, monkeypatch,
+    ):
+        calls = []
+        monkeypatch.setattr(
+            gcsg_module.GCSGWorker, "_build_cpu_shadow_pool_awq",
+            lambda self, layers, expert_ids: calls.append(tuple(expert_ids)) or {
+                e: object() for e in expert_ids
+            },
+        )
+
+        layers, worker = self._layers_and_worker(
+            tmp_path, tier_manager=True, cpu_offload_enabled=True,
+        )
+
+        worker._load_shadow_pool()
+
+        # Pool GPU non asserito qui: con tier_manager wired, il pinning passa
+        # da _promote_module_via_tier_manager() (richiede named_parameters(),
+        # non supportato dal fake minimale di TestGCSG, pensato solo per
+        # .to('cuda') diretto) — fuori scope per un test che isola il
+        # wiring del pool CPU, già indipendente dall'esito del pinning GPU
+        # (_build_cpu_shadow_pool_awq() è costruito per l'intero expert_ids
+        # selezionato, non solo per `loaded` — vedi commento in gcsg.py).
+        assert set(worker._cpu_shadow_pool.keys()) == {0, 1}
+        assert len(calls) == 1
+
+    def test_awq_cpu_pool_stays_empty_without_tier_manager(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            gcsg_module.GCSGWorker, "_build_cpu_shadow_pool_awq",
+            lambda self, layers, expert_ids: pytest.fail("non deve essere chiamato"),
+        )
+
+        layers, worker = self._layers_and_worker(
+            tmp_path, tier_manager=False, cpu_offload_enabled=True,
+        )
+
+        worker._load_shadow_pool()
+
+        assert set(worker._shadow_pool.keys()) == {0, 1}
+        assert worker._cpu_shadow_pool == {}
+
+    def test_awq_cpu_pool_disabled_by_default_even_with_tier_manager(self, tmp_path, monkeypatch):
+        """Stesso principio Fase 4 del path 1: tier_manager da solo non
+        basta, cpu_offload_enabled default False in produzione."""
+        monkeypatch.setattr(
+            gcsg_module.GCSGWorker, "_build_cpu_shadow_pool_awq",
+            lambda self, layers, expert_ids: pytest.fail("non deve essere chiamato"),
+        )
+
+        layers, worker = self._layers_and_worker(
+            tmp_path, tier_manager=True, cpu_offload_enabled=False,
+        )
+
+        worker._load_shadow_pool()
+
+        # Pool GPU non asserito qui — stesso motivo del test sopra.
+        assert worker._cpu_shadow_pool == {}
+
+
 # ── Hot/cold routing (2026-08-17, issue #33 Fase 3) ────────────────────────────
 #
 # route_forward()/_RoutedShadowPool decidono, per un expert_id già presente in
