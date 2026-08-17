@@ -3616,3 +3616,126 @@ Next session: nessuna azione bloccante. Il framework performance-test/
 performance-tuning è ora testato e validato su due profili hardware
 diversi — pronto per essere riusato senza ulteriore lavoro di
 validazione la prossima volta che serve un numero di questo tipo.
+
+---
+
+## 2026-08-17 (continued 21) — dati target su H200/Xeon Platinum 8568Y+ (AMX), bug reale trovato e corretto
+
+**Release:** sì — `benchmarks/perf_test_hardware.py` (fix
+`avx512_vnni`, vedi sotto), `tests/test_perf_test_hardware.py` (test di
+regressione dedicato). Nessuna modifica al codice GCSG di produzione.
+
+### What we set out to do
+
+Il project owner ha chiesto dati "target" da hardware di ultima
+generazione, per confronto con l'architettura RTX 3090/EPYC-senza-
+AVX-512 misurata finora. Pod nuovo: **H200 SXM (1x)**, **12 vCPU Intel
+Xeon Platinum 8568Y+ (Emerald Rapids)**, 251GB memoria — stesso
+template Docker delle sessioni precedenti
+(`ghcr.io/danielesalpietro/vmemoryfabric:sprint-4-tekniska`).
+
+### What we did
+
+1. Connessione SSH con la keypair dedicata (stesso pattern di
+   "continued 20"), repo clonato al volo.
+2. Numeri cgroup reali (mai fidarsi di `nproc`/`free` grezzi, BOOTSTRAP
+   §5.9): **10.2 core cgroup** (dei 12 vCPU nominali — overhead
+   riservato), **233.5GB RAM cgroup**.
+3. Flag CPU reali da `/proc/cpuinfo`: AVX2, AVX-512F, AVX-512-VNNI,
+   **più AMX** (`amx_bf16`, `amx_int8`, `amx_tile` — non ancora tracciati
+   dal framework, vedi "Why this matters").
+4. **Bug trovato eseguendo il framework su hardware reale, non in unit
+   test**: il report segnalava `avx512_vnni: false` nonostante il
+   grep grezzo su `/proc/cpuinfo` mostrasse chiaramente `avx512_vnni`
+   nella lista flag. Causa: `perf_test_hardware.py` cercava la
+   sottostringa `"avx512vnni"` (senza underscore) — il kernel Linux
+   nomina questo flag specifico CON underscore in `/proc/cpuinfo`
+   (`avx512_vnni`), a differenza di `avx512f`/`avx512bw`/`avx512vbmi`/
+   ecc. (nessun underscore). Fix immediato: cercare la stringa esatta
+   `"avx512_vnni"`, con un test di regressione dedicato che avrebbe
+   dovuto esistere fin da "continued 19" (nessun test copriva
+   direttamente la mappatura `bench_cpu()["avx_support"]` contro flag
+   noti, solo la struttura). Verificato: `git pull` sul pod, rilanciato,
+   `avx512_vnni: true` corretto. Stesso principio del bootstrap
+   generale: un valore misurato su HARDWARE REALE ha rivelato un bug
+   che dimensioni sintetiche/mock nei test non avrebbero necessariamente
+   catturato se il mock stesso avesse ripetuto lo stesso errore di
+   naming (per fortuna qui i test esistenti usavano stringhe letterali
+   diverse, non il bug — ma il nuovo test di regressione lo blocca
+   esplicitamente ora).
+
+### Result
+
+Numeri (dimensioni Mixtral reali, `OSX_BENCH_HIDDEN=4096
+OSX_BENCH_INTERMEDIATE=14336`), JSON completi in
+`logs/runpod_perf_framework_validation_20260817/hw_h200.json` +
+`tuning_report_h200.json`:
+
+| | H200 pod (oggi) | RunPod EPYC (continued 20) | Z8 locale |
+|---|---|---|---|
+| GPU | H200, 1889 GFLOPS (batch=1) | RTX 3090, 430 GFLOPS | RTX 3090 |
+| CPU matmul batch=1 | **3.3 GFLOPS** | 11.7 GFLOPS | (AVX-512, non ricalcolato a dim reali in questo entry) |
+| RAM copy bandwidth | **5.4 GB/s** | 11.0 GB/s | 19.5 GB/s |
+| CPU cgroup cores | 10.2 | 27.2 | 28 |
+| predicted_slowdown | **~570x** | 36.9x | 16.9x |
+| batching_signal | 17.3x | 3.0x | ~8-12x |
+| PCIe pinned min | 30-55 GB/s | 20-26 GB/s | 11-12 GB/s |
+
+**Risultato controintuitivo, non nascosto**: il CPU forward a batch=1
+sul pod H200/Xeon Platinum (AVX-512+VNNI+AMX, silicio 2024) è **più
+lento** (3.3 GFLOPS) del pod EPYC senza AVX-512 misurato in "continued
+20" (11.7 GFLOPS) — nonostante il silicio più recente. Due letture
+possibili, nessuna delle due verificata a fondo qui: (a) solo 10.2 core
+cgroup contro 27.2 — anche se il forward batch=1 è a singolo thread
+(memory-bandwidth-bound, non thread-bound, §5.11), un'allocazione vCPU
+più piccola su un host condiviso può comunque ricevere meno banda
+memoria/cache L3 per-core; (b) il benchmark usa tensori fp32
+(`torch.randn` default) — **AMX accelera INT8/BF16/TF32, non fp32**,
+quindi il framework attuale non misura affatto il vantaggio AMX di
+questo hardware. La banda RAM copy (5.4 GB/s, la più bassa delle tre
+misurate) supporta la lettura (a): un collo di bottiglia di banda
+memoria per-core su questa allocazione vCPU specifica, non solo
+l'assenza di sfruttamento AMX.
+
+**Predicted slowdown ~570x**, correttamente segnalato "FUORI dal range
+già osservato" — il verdetto onesto per questo host: un H200 rende il
+cpu-offload ANCORA MENO conveniente in termini relativi (non di più),
+perché la GPU è diventata molto più veloce mentre il CPU-side di questo
+specifico pod non ha tenuto il passo (vedi sopra).
+
+### Why this matters
+
+- **Risposta diretta alla domanda del project owner**: "dati target di
+  ultima generazione" non significa automaticamente "gap CPU/GPU più
+  piccolo" — su QUESTO pod è il contrario. Il framework ha fatto
+  esattamente il suo lavoro: dare un numero calibrato invece di
+  un'aspettativa intuitiva sbagliata.
+- **Limite del framework ora esplicito, non implicito**: non misura
+  AMX (solo fp32). Se in futuro serve sapere se AMX aiuterebbe il path
+  produzione reale (che usa INT4/AWQ, non fp32 — diverso ancora da
+  BF16/INT8 nativi AMX), servirebbe un benchmark dedicato a quella
+  precisione, non un'estensione ovvia di quello attuale.
+- Il bug avx512_vnni conferma ancora una volta il principio del
+  bootstrap: un numero misurato su hardware reale, non sintetico, ha
+  trovato in minuti un bug che una sessione di solo sviluppo/mock non
+  avrebbe necessariamente incontrato.
+
+### Current state
+
+- Codice: da committare e pushare su `claude/ddr4-ram-processing-unzseh`
+  (PR #42) subito dopo questo entry (fix avx512_vnni già pushato
+  separatamente a metà sessione per permettere `git pull` sul pod).
+- Pod H200: ancora acceso al momento di scrivere, nessuna azione di
+  shutdown presa (stesso principio di "continued 20" — acceso
+  esplicitamente dal project owner).
+- JSON completi (pre-fix E post-fix per l'H200) in
+  `logs/runpod_perf_framework_validation_20260817/`.
+
+Next session: nessuna azione bloccante. Se si vuole approfondire il
+gap CPU inatteso su questo pod: verificare se è la banda memoria
+per-core dell'allocazione vCPU (ipotesi a) o la mancata attivazione di
+AMX su fp32 (ipotesi b) — nessuna delle due confermata qui. Prossimo
+hardware target già pianificato dal project owner: NVIDIA GB10/DGX
+Spark (memoria unificata CPU+GPU — la metodologia CPU/RAM/GPU/PCIe
+separata di questo framework potrebbe non applicarsi direttamente,
+vedi promemoria in memoria di sessione).
