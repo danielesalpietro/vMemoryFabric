@@ -1585,3 +1585,80 @@ Next session: decisione su Fase 6 (procedere con 6a? Verificare prima se
 AutoAWQ espone un dequant CPU riusabile?) — o chiudere issue #33 qui,
 con l'infrastruttura pronta ma non ancora utile in produzione, come
 esito onesto e documentato.
+
+---
+
+## 2026-08-17 (continued 3) — Ricerca prior art: MoE-Infinity non risolve Fase 6, il gap è dell'ecosistema intero
+
+**Release:** nessuna — solo ricerca, nessun codice toccato.
+
+### What we set out to do
+
+Il project owner ricordava un progetto GitHub, MoE-Infinity, che "generava un
+file di offload del modello" e chiedeva di verificare se avesse già
+risolto il problema aperto di Fase 6 (dequantizzare AWQ/Marlin lato CPU per
+rendere `--enable-cpu-offload` utile sul checkpoint reale, non solo
+sicuro-ma-inerte).
+
+### What we did
+
+Ricerca web (`EfficientMoE/MoE-Infinity` su GitHub, più il paper arXiv
+2401.14361) sul meccanismo di offload reale: cosa genera, come gestisce
+pesi quantizzati, se calcola mai su CPU. Poi una seconda ricerca mirata,
+allargata oltre il singolo progetto, su chi altro nell'ecosistema supporta
+AWQ-per-MoE su CPU.
+
+**Cosa fa davvero MoE-Infinity**: un sistema di cache/prefetch
+activation-aware — Expert Activation Matrix (EAM) che traccia quali expert
+si riattivano più spesso, per decidere quali tenere "caldi" e prefetchare
+verso GPU appena servono. Il "file di offload" ricordato dal project owner
+è questa cache/trace di attivazione, non un formato di pesi ricalcolabile:
+il progetto **calcola sempre e solo su GPU** — stessa categoria del nostro
+`GPUTransfer.to_vram()` pre-issue-#33 (staging passivo), non della Fase 2+
+(compute CPU reale). Nessuna menzione di AVX-512, kernel CPU, o
+dequantizzazione lato host in tutta la documentazione.
+
+**Sul punto specifico che blocca Fase 6a**: confermato che non è un gap
+solo nostro. Quando vLLM gestisce un checkpoint AWQ su un modello MoE lo
+converte automaticamente in formato `awq_marlin` — e il kernel Marlin non
+è supportato su CPU, per design (formato bit-interleaved pensato per la
+coalescenza dei warp GPU, stesso identico ostacolo già descritto per Fase
+6b). Trovata una feature request ancora aperta su `sglang-project/sglang`
+(issue #5324, "[Feature] Support awq quantization for MoE model on CPU")
+che chiede esplicitamente questa capacità — non implementata da nessun
+progetto pubblico noto al momento di questa ricerca.
+
+### Result
+
+MoE-Infinity **non** risolve Fase 6 — non fa nulla di comparabile, è
+un'ottimizzazione del "quando prefetchare" (rilevante come riferimento di
+design per la Fase 0/SEE, non per Fase 6). Il dequantizzatore AWQ lato CPU
+resta un problema genuinamente aperto anche fuori da questo progetto: se
+lo implementassimo saremmo avanti rispetto allo stato dell'arte pubblico
+conosciuto, non recuperando terreno perso.
+
+### Why this matters
+
+Chiude una domanda concreta prima di decidere se investire in Fase 6a: non
+c'è una libreria/formato già pronto da riusare per il dequant AWQ-su-CPU,
+quindi il costo stimato in Fase 6a (session precedente: "formato
+documentato, non reverse-engineering... passo 0: verificare se AutoAWQ
+espone già un dequantizzatore riusabile") resta la stima più realistica
+disponibile — nessuna scorciatoia trovata. Anche il "non fare nulla" (Fase
+6b, Marlin) è ora confermato coerente con quello che fa il resto
+dell'ecosistema, non solo una scelta di comodo interna al progetto.
+
+### Current state
+
+- Nessuna modifica a codice — solo ricerca, registrata qui per evitare che
+  una sessione futura rifaccia la stessa indagine prima di decidere su
+  Fase 6.
+- Decisione su Fase 6 (procedere con 6a, o chiudere issue #33 con
+  l'infrastruttura pronta-ma-non-ancora-utile come esito documentato)
+  ancora aperta col project owner.
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session: come sopra — decisione su Fase 6a (procedere? verificare
+prima se AutoAWQ espone un dequant CPU riusabile, visto che nessun
+progetto terzo lo fa già per noi) — o chiudere issue #33 qui.
