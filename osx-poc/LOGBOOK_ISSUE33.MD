@@ -1944,3 +1944,70 @@ entrambi i problemi con lo stesso costo di un paragrafo di LOGBOOK.
 Next session: seguire il thread principale (Passo 2 del proof-of-path,
 sessione sopra) — issue #43 resta in attesa dei suoi criteri di
 rivalutazione, non un prossimo passo attivo.
+
+---
+
+## 2026-08-17 (continued 7) — vLLM ha già un CPU backend nativo: copre AWQ e copre MoE, ma non insieme
+
+**Release:** nessuna — solo ricerca.
+
+### What we set out to do
+
+Il project owner ricordava che vLLM avesse già una "modalità CPU-only" e
+chiedeva conferma — verificare se chiude (parzialmente o del tutto) il gap
+di Fase 6a prima ancora di scomodare AutoAWQ/OpenVINO.
+
+### What we did
+
+Ricerca sulla documentazione ufficiale vLLM (`VLLM_TARGET_DEVICE=cpu`,
+matrice hardware/quantizzazione supportata) e sul PR storico che ha
+aggiunto MoE fuso AWQ (`vllm-project/vllm#6422`, `AWQMoEMethod`).
+
+Confermato: **sì, esiste** un CPU backend nativo x86 in vLLM, con:
+- AWQ supportato — ma solo su modelli **densi** (non-MoE).
+- MoE supportato — ma solo **fp16/bf16 non quantizzato**, via
+  `ipex.llm.modules.GatedMLPMOE` (Intel Extension for PyTorch),
+  controllato da `VLLM_CPU_MOE_PREPACK`.
+- **AWQ + MoE insieme, su CPU: non supportato.** Conferma testuale diretta
+  dalla documentazione stessa di vLLM: *"vLLM converts AWQ to AWQ Marlin
+  if the model is a MoE model, but Marlin kernel is not supported on
+  CPU"* — stesso identico muro già trovato analizzando il checkpoint
+  reale nella sessione Malmö (Fase 6, path 2/Marlin), ora confermato
+  anche dal lato "cosa fa/non fa il CPU backend di vLLM stesso", non solo
+  dal lato "cosa richiede il nostro checkpoint".
+
+**Trovato un riferimento utile per il Passo 2** (parità numerica CPU vs.
+kernel CUDA reale, già identificato come prossimo passo nel thread del
+proof-of-path): `fused_moe_kernel_gptq_awq` in
+`vllm/model_executor/layers/fused_moe/fused_moe.py` è l'implementazione
+CUDA reale di `AWQMoEMethod` — la stessa classe che `_AWQShadowExpert`
+(`gcsg.py`) già chiama oggi via `quant_method.apply()`. È il riferimento
+numerico "verità" corretto per quel confronto, non un vicolo cieco.
+
+### Result
+
+Il CPU backend nativo di vLLM **non** chiude il gap di Fase 6a — copre
+AWQ e MoE separatamente ma non la loro intersezione, la stessa che ci
+serve. Non cambia il piano (AutoAWQ dequant vendorizzato +
+`_ShadowExpertINT4`, proof-of-path già in corso nel thread parallelo).
+Trovato però un puntatore concreto e utile per il Passo 2 di quel thread.
+
+### Why this matters
+
+Terza conferma indipendente (dopo l'analisi del checkpoint reale in
+Malmö e la ricerca su MoE-Infinity/sglang) dello stesso fatto: AWQ-MoE-su-
+CPU è un gap reale dell'intero ecosistema, non un dettaglio che
+sarebbe bastato leggere meglio la documentazione di uno strumento
+esistente. Aumenta la fiducia che investire in Fase 6a sia un lavoro
+genuinamente utile, non un problema già risolto altrove e ignorato.
+
+### Current state
+
+- Nessuna modifica a codice — solo ricerca.
+- Puntatore a `fused_moe_kernel_gptq_awq` disponibile per il Passo 2 del
+  thread principale (proof-of-path Fase 6a).
+- Branch: `claude/ddr4-ram-processing-unzseh`, PR #42 aperta verso
+  `develop`.
+
+Next session: come sopra — Passo 2 del proof-of-path (parità numerica),
+usando `fused_moe_kernel_gptq_awq` come riferimento.
