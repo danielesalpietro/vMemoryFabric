@@ -111,16 +111,23 @@ taggata, numeri pubblicati nel paper), non un sostituto dei benchmark applicativ
 Tutti i tool sopra sono gratuiti nell'uso; la distinzione è tra open source e
 proprietario-ma-free:
 
-| Tool | Licenza |
-|---|---|
-| STREAM | Open source (custom academic license, John McCalpin) |
-| Intel MLC | Proprietario, gratuito — EULA Intel con restrizioni su redistribuzione/pubblicazione di risultati comparativi |
-| HPL | Open source (Netlib) |
-| HPCG | Open source (Sandia National Labs) |
-| NCCL Tests | Open source (NVIDIA, BSD-style) |
-| MLPerf (MLCommons) | Open source — solo la sottomissione di risultati ufficiali richiede membership MLCommons a pagamento |
-| DCGM | Proprietario, gratuito — architettura open-core: librerie/binding open source su GitHub, alcuni tool di diagnostica restano proprietari |
-| FIO | Open source (GPLv2) |
+| Tool | Licenza | Costo |
+|---|---|---|
+| STREAM | Open source (custom academic license, John McCalpin) | ✅ Gratuito |
+| Intel MLC | Proprietario, gratuito — EULA Intel con restrizioni su redistribuzione/pubblicazione di risultati comparativi | ✅ Gratuito |
+| HPL | Open source (Netlib) | ✅ Gratuito |
+| HPCG | Open source (Sandia National Labs) | ✅ Gratuito |
+| NCCL Tests | Open source (NVIDIA, BSD-style) | ✅ Gratuito |
+| MLPerf (MLCommons) | Open source — solo la sottomissione di risultati ufficiali richiede membership MLCommons a pagamento | ✅ Gratuito per l'uso interno (submission ufficiale = a pagamento) |
+| DCGM | Proprietario, gratuito — architettura open-core: librerie/binding open source su GitHub, alcuni tool di diagnostica restano proprietari | ✅ Gratuito |
+| FIO | Open source (GPLv2) | ✅ Gratuito |
+
+Nessuno dei tool elencati in questo report richiede una licenza commerciale per essere
+scaricato ed eseguito localmente — anche quelli proprietari (Intel MLC, DCGM) sono
+distribuiti a costo zero dal rispettivo vendor. L'unico costo reale nell'intera suite è
+opzionale e riguarda MLPerf: la *sottomissione* di un risultato alla classifica ufficiale
+MLCommons richiede una membership a pagamento, ma eseguire il benchmark per misurazioni
+interne (come previsto qui) resta gratuito.
 
 Nota: l'URL di download di Intel MLC contiene un ID interno alla pagina Intel che può
 cambiare nei redesign del sito — se il link smette di funzionare, cercare "Intel Memory
