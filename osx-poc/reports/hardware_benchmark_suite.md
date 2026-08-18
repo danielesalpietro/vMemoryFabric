@@ -38,10 +38,10 @@ di esecuzione; la §6 li mappa contro lo stato reale hardware/software di questo
 
 | Tool | Cosa misura | Perché conta per OSX |
 |---|---|---|
-| **STREAM Benchmark** | Sustained memory bandwidth (MB/s) — Copy/Scale/Add/Triad su array grandi quanto la cache | È il limite fisico su cui sbatte ogni transfer DDR4-bound, incluso l'hop NVMe→DDR4 di `TierManager.promote()` e il caricamento degli shard "warm" in EMH-1c |
-| **Intel MLC (Memory Latency Checker)** | Latenza e banda incrociata, per-NUMA-node | Rileva se i thread di `TierManager`/`GCSGWorker` leggono da un banco RAM remoto rispetto al socket che li esegue — una misconfigurazione NUMA silenziosa che nessun benchmark applicativo del repo può distinguere da "overhead intrinseco del codice" |
-| **HPL (High-Performance Linpack)** | TFLOPS su sistemi lineari densi | Meno direttamente rilevante per OSX (che è memory-bound, non compute-bound), ma è il baseline storico per certificare che la CPU non sia in throttling termico prima di attribuire una regressione a un cambiamento software |
-| **HPCG (High Performance Conjugate Gradients)** | Pattern di accesso memoria irregolari, più vicini a carichi reali (reti neurali, gather/scatter) | Più rappresentativo di HPL per il pattern di accesso di un `SlabAllocator`/EAT reale — accessi sparsi per `expert_id`/`shard_idx`, non sequenziali |
+| **[STREAM Benchmark](https://www.cs.virginia.edu/stream/)** | Sustained memory bandwidth (MB/s) — Copy/Scale/Add/Triad su array grandi quanto la cache | È il limite fisico su cui sbatte ogni transfer DDR4-bound, incluso l'hop NVMe→DDR4 di `TierManager.promote()` e il caricamento degli shard "warm" in EMH-1c |
+| **[Intel MLC (Memory Latency Checker)](https://www.intel.com/content/www/us/en/download/736633/intel-memory-latency-checker-intel-mlc.html)** | Latenza e banda incrociata, per-NUMA-node | Rileva se i thread di `TierManager`/`GCSGWorker` leggono da un banco RAM remoto rispetto al socket che li esegue — una misconfigurazione NUMA silenziosa che nessun benchmark applicativo del repo può distinguere da "overhead intrinseco del codice" |
+| **[HPL (High-Performance Linpack)](https://www.netlib.org/benchmark/hpl/)** | TFLOPS su sistemi lineari densi | Meno direttamente rilevante per OSX (che è memory-bound, non compute-bound), ma è il baseline storico per certificare che la CPU non sia in throttling termico prima di attribuire una regressione a un cambiamento software |
+| **[HPCG (High Performance Conjugate Gradients)](https://www.hpcg-benchmark.org/software/)** | Pattern di accesso memoria irregolari, più vicini a carichi reali (reti neurali, gather/scatter) | Più rappresentativo di HPL per il pattern di accesso di un `SlabAllocator`/EAT reale — accessi sparsi per `expert_id`/`shard_idx`, non sequenziali |
 
 ---
 
@@ -49,9 +49,9 @@ di esecuzione; la §6 li mappa contro lo stato reale hardware/software di questo
 
 | Tool | Cosa misura | Perché conta per OSX |
 |---|---|---|
-| **NVIDIA NCCL Tests** (`all_reduce_perf`, `sendrecv_perf`) | Banda passante reale GPU↔GPU e GPU↔host, oltre i dati di targa PCIe/NVLink | È esattamente il tipo di misura che manca oggi al path DDR4→VRAM di `GPUTransfer` — la differenza pin=True/pin=False misurata in `bench_tier.py::bench_promote_live_tensor` (194µs vs 684µs p50) è plausibile ma non è mai stata confrontata contro il tetto fisico del link PCIe di questa macchina, solo contro un numero teorico hardcoded (`_PCIE_GEN3_BANDWIDTH_BYTES_PER_SEC` in `bench_tier.py`) |
-| **MLPerf (MLCommons)** | Metriche applicative standardizzate — Tokens/second, Time-to-First-Token, su modelli reali pre-configurati | Standard di settore per confrontare OSX con altri sistemi di inference (vedi anche `related_work_petals_exllama.md`), ma richiede una suite Training/Inference completa — fuori scope per il PoC attuale, rilevante per Sprint 5/Berg (paper) se si vuole un numero comparabile pubblicabile |
-| **DCGM (`dcgmproftester`)** | Stress al 100% TDP per ore — certifica che alimentazione/raffreddamento reggano senza thermal throttling | Diagnostico, non un benchmark applicativo: rileva se una regressione di latenza osservata da `bench_tier.py` è in realtà throttling termico della GPU, non un problema di `TierManager` |
+| **[NVIDIA NCCL Tests](https://github.com/NVIDIA/nccl-tests)** (`all_reduce_perf`, `sendrecv_perf`) | Banda passante reale GPU↔GPU e GPU↔host, oltre i dati di targa PCIe/NVLink | È esattamente il tipo di misura che manca oggi al path DDR4→VRAM di `GPUTransfer` — la differenza pin=True/pin=False misurata in `bench_tier.py::bench_promote_live_tensor` (194µs vs 684µs p50) è plausibile ma non è mai stata confrontata contro il tetto fisico del link PCIe di questa macchina, solo contro un numero teorico hardcoded (`_PCIE_GEN3_BANDWIDTH_BYTES_PER_SEC` in `bench_tier.py`) |
+| **[MLPerf (MLCommons)](https://github.com/mlcommons/inference)** ([Training](https://github.com/mlcommons/training)) | Metriche applicative standardizzate — Tokens/second, Time-to-First-Token, su modelli reali pre-configurati | Standard di settore per confrontare OSX con altri sistemi di inference (vedi anche `related_work_petals_exllama.md`), ma richiede una suite Training/Inference completa — fuori scope per il PoC attuale, rilevante per Sprint 5/Berg (paper) se si vuole un numero comparabile pubblicabile |
+| **[DCGM](https://github.com/NVIDIA/DCGM)** (`dcgmproftester`) | Stress al 100% TDP per ore — certifica che alimentazione/raffreddamento reggano senza thermal throttling | Diagnostico, non un benchmark applicativo: rileva se una regressione di latenza osservata da `bench_tier.py` è in realtà throttling termico della GPU, non un problema di `TierManager` |
 
 ---
 
@@ -59,7 +59,7 @@ di esecuzione; la §6 li mappa contro lo stato reale hardware/software di questo
 
 | Tool | Cosa misura | Perché conta per OSX |
 |---|---|---|
-| **FIO (Flexible I/O Tester)** | IOPS/latenza per pattern di I/O configurabile (letture 4K random, high queue depth, ecc.) | Direttamente rilevante per `AsyncNVMeIO` (M2) e per `bench_nvme_to_ddr4`: senza un numero FIO di riferimento per il volume NVMe usato in dev, non c'è modo di sapere se la latenza NVMe→DDR4 misurata riflette il volume fisico o l'overhead di `asyncio`/`aiofiles` (vedi README, "Perché `asyncio + aiofiles` invece di `io_uring`") |
+| **[FIO (Flexible I/O Tester)](https://github.com/axboe/fio)** | IOPS/latenza per pattern di I/O configurabile (letture 4K random, high queue depth, ecc.) | Direttamente rilevante per `AsyncNVMeIO` (M2) e per `bench_nvme_to_ddr4`: senza un numero FIO di riferimento per il volume NVMe usato in dev, non c'è modo di sapere se la latenza NVMe→DDR4 misurata riflette il volume fisico o l'overhead di `asyncio`/`aiofiles` (vedi README, "Perché `asyncio + aiofiles` invece di `io_uring`") |
 
 ---
 
@@ -103,3 +103,25 @@ taggata, numeri pubblicati nel paper), non un sostituto dei benchmark applicativ
 - STREAM sulla Z8 G4 — stabilisce il tetto teorico per interpretare `bench_nvme_to_ddr4`/`bench_ddr4_to_vram`
 - NCCL Tests — bloccato fino all'arrivo della seconda GPU (issue #8)
 - MLPerf/DCGM — da valutare in sede di pianificazione Sprint 5/Berg, non prima
+
+---
+
+## 8. Licenze
+
+Tutti i tool sopra sono gratuiti nell'uso; la distinzione è tra open source e
+proprietario-ma-free:
+
+| Tool | Licenza |
+|---|---|
+| STREAM | Open source (custom academic license, John McCalpin) |
+| Intel MLC | Proprietario, gratuito — EULA Intel con restrizioni su redistribuzione/pubblicazione di risultati comparativi |
+| HPL | Open source (Netlib) |
+| HPCG | Open source (Sandia National Labs) |
+| NCCL Tests | Open source (NVIDIA, BSD-style) |
+| MLPerf (MLCommons) | Open source — solo la sottomissione di risultati ufficiali richiede membership MLCommons a pagamento |
+| DCGM | Proprietario, gratuito — architettura open-core: librerie/binding open source su GitHub, alcuni tool di diagnostica restano proprietari |
+| FIO | Open source (GPLv2) |
+
+Nota: l'URL di download di Intel MLC contiene un ID interno alla pagina Intel che può
+cambiare nei redesign del sito — se il link smette di funzionare, cercare "Intel Memory
+Latency Checker" dal developer portal Intel lo ritrova comunque.
