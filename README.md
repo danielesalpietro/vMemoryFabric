@@ -7,6 +7,8 @@ Developed under the internal codename **OSX** ("Operating System for Experts") �
 > *Current release: **Tekniska** (v0.5.0-dev) — August 13, 2026 — previous: Oskarshamn (v0.4.0-dev), Eketorp (v0.3.0-dev), Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev). Sprint 4 complete; Sprint 5 (PoC delivery + paper, codename **Berg**) in planning — see [`osx-poc/reports/sprint5_berg_plan.md`](osx-poc/reports/sprint5_berg_plan.md).*
 >
 > *Related work (sub-project **Marstrand**): how vMemoryFabric's paged memory fabric compares to Petals (P2P pipeline parallelism) and ExLlamaV2/V3/tabbyAPI (local heterogeneous multi-GPU split) — see [`osx-poc/reports/related_work_petals_exllama.md`](osx-poc/reports/related_work_petals_exllama.md), plus a concrete component-reuse assessment against this repo's actual code in [`osx-poc/reports/component_reuse_analysis.md`](osx-poc/reports/component_reuse_analysis.md) (both Italian) — tracked as issue [#32](https://github.com/danielesalpietro/vMemoryFabric/issues/32).*
+>
+> *Hardware validation methodology: [`osx-poc/reports/hardware_benchmark_suite.md`](osx-poc/reports/hardware_benchmark_suite.md) (Italian) — the industry-standard bottom-up benchmark suite (STREAM, Intel MLC, HPL/HPCG, NCCL Tests, MLPerf, DCGM, FIO) for validating the physical memory/CPU/GPU/storage subsystems that `benchmarks/bench_eat.py`/`bench_tier.py` run on top of, mapped against this project's actual dev-vs-target hardware constraints. Reference only — none of these tools have been run in this repo yet.*
 
 ---
 
