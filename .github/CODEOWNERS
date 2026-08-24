@@ -1,0 +1,54 @@
+# CODEOWNERS — mappa delle aree del progetto, review-request automatica
+# su ogni PR che le tocca. Enforcement NON ancora attivo: nessuna branch
+# protection rule richiede la review di un code owner prima del merge,
+# per non rallentare il ciclo rapido merge->build->test usato oggi
+# (osx-poc/LOGBOOK_NEW_Z8.md). Da valutare se/quando serve un gate reale
+# invece di sola visibilità.
+#
+# Owner unico oggi (Daniele Carmelo Salpietro) — la scomposizione per
+# area non serve a smistare tra persone diverse, serve come mappa
+# leggibile di cosa appartiene a cosa: più sessioni parallele (Claude
+# Code o altro) che aprono PR sulla stessa area si vedono comunque
+# assegnare la stessa review-request, rendendo visibile la sovrapposizione
+# prima del conflitto di merge, non solo dopo (vedi PR #42 vs #50/#51/#52
+# di oggi: nessuna delle due sapeva dell'altra finché Git non ha
+# segnalato "CONFLICTING").
+
+# Default: tutto il resto
+* @danielesalpietro
+
+# ── M1 — Expert Access Table ────────────────────────────────────────────
+/osx-poc/src/eat/ @danielesalpietro
+
+# ── M2 — EMH Tier Manager (VRAM/DDR4/PMEM/NVMe) ─────────────────────────
+/osx-poc/src/tier/ @danielesalpietro
+
+# ── M3 — Expert Scheduler (PT-PEP/GCSG/AER) ─────────────────────────────
+/osx-poc/src/scheduler/ @danielesalpietro
+
+# ── Benchmark / performance framework ───────────────────────────────────
+/osx-poc/benchmarks/ @danielesalpietro
+
+# ── Test ─────────────────────────────────────────────────────────────────
+/osx-poc/tests/ @danielesalpietro
+
+# ── Infrastruttura container/build ──────────────────────────────────────
+/Dockerfile @danielesalpietro
+/docker-compose.yml @danielesalpietro
+/docker-compose.override.yml.example @danielesalpietro
+/osx-poc/Makefile @danielesalpietro
+/osx-poc/configs/ @danielesalpietro
+
+# ── CI ───────────────────────────────────────────────────────────────────
+/.github/ @danielesalpietro
+
+# ── Report / log / narrativa di progetto ────────────────────────────────
+# Meno soggetti a conflitto di codice, ma cambi ai numeri/claim citati
+# vanno comunque rivisti (vedi B5 in sprint5_berg_plan.md: ogni numero
+# deve essere riconducibile a un file reale, non trascritto a mano).
+/osx-poc/reports/ @danielesalpietro
+/osx-poc/LOGBOOK.md @danielesalpietro
+/osx-poc/LOGBOOK_*.md @danielesalpietro
+/osx-poc/LOGBOOK_*.MD @danielesalpietro
+/osx-poc/CHANGELOG.MD @danielesalpietro
+/README.md @danielesalpietro
