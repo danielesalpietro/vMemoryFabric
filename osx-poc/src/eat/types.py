@@ -14,18 +14,23 @@ SHARD_SIZE_BYTES: int = SHARD_SIZE_MB * 1024 * 1024
 
 
 class Tier(IntEnum):
-    """EMH tier identifiers — adattati al setup dev corrente (no PMEM).
+    """EMH tier identifiers.
 
-    Layout fisico su Z8 G4 (dev target):
+    Layout fisico su Z8 G4 bare-metal (osx-poc/LOGBOOK_NEW_Z8.md, "passo 4"):
         EMH-1a  RTX 3090 VRAM    24 GB  (hot)
-        EMH-1c  DDR4             256 GB (warm buffer)
+        EMH-1c  DDR4             ~236 GB (warm buffer)
+        EMH-2   Optane PMEM      252 GB (fsdax, tra DDR4 e NVMe)
         EMH-3   NVMe / volume    1 TB   (cold)
 
-    PMEM (EMH-2) deferred — sarà inserito tra DDR4 e NVMe quando disponibile.
+    PMEM = 3, non inserito numericamente tra DDR4 (1) e NVME (2), per non
+    rinumerare NVME su un enum già in uso altrove (log/telemetria) — la
+    posizione "tra DDR4 e NVMe" è nel percorso di promote()/evict()
+    (tier/manager.py), non nel valore numerico dell'IntEnum.
     """
     VRAM   = 0   # EMH-1a: RTX 3090
     DDR4   = 1   # EMH-1c: host RAM
     NVME   = 2   # EMH-3 : cold storage
+    PMEM   = 3   # EMH-2 : Optane DC Persistent Memory (fsdax)
     UNKNOWN = 99
 
 

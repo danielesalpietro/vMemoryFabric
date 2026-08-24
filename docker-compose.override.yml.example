@@ -1,0 +1,12 @@
+# Host-specific overrides — copy to docker-compose.override.yml (gitignored,
+# auto-merged by `docker compose` if present) and adjust the host path.
+#
+# PMEM (EMH-2) bind mount: only meaningful on a host with a DAX-mounted
+# Optane namespace (see osx-poc/LOGBOOK_NEW_Z8.md — /dev/pmem1, xfs,
+# `mount -o dax`). Not added to the base docker-compose.yml because that
+# host path doesn't exist on the Docker-on-Windows/WSL2 dev setup or on
+# RunPod pods — this file is local-only, not portable.
+services:
+  osx-dev:
+    volumes:
+      - /mnt/pmem_emh2:/data/pmem
