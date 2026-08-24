@@ -46,6 +46,9 @@ bench-eat:
 bench-tier:
 	$(RUN) python benchmarks/bench_tier.py
 
+bench-pmem-tier:
+	$(RUN) python benchmarks/bench_pmem_tier.py
+
 # ── Diagnostic repros (manual, not wired into CI) ───────────────────────────────
 # Requires the real checkpoint on disk (/data/nvme/models/mixtral-instruct-awq)
 # and a real GPU — not CI-safe (some variants are designed to crash, that's the
@@ -107,6 +110,7 @@ help:
 	@echo "  make test-tier    pytest M2 only"
 	@echo "  make test-scheduler pytest M3 only"
 	@echo "  make bench        Benchmark M1 + M2"
+	@echo "  make bench-pmem-tier  Benchmark EMH-2 PMEM (skip se nessun mount DAX)"
 	@echo "  make gpu-repro-issue10  Diagnostic repros, issue #10 offload crash (manual, one at a time)"
 	@echo "  make lint         Ruff linter"
 	@echo "  make typecheck    mypy"

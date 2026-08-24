@@ -19,7 +19,7 @@ import pytest
 
 from eat import ExpertAccessTable, Tier
 from eat.types import EATEntry
-from tier import AsyncNVMeIO, GPUTransfer, LRUPolicy, SEEPolicy, TierManager
+from tier import AsyncNVMeIO, GPUTransfer, LRUPolicy, PMEMTransfer, SEEPolicy, TierManager
 
 
 def _write_shard_file(base_path, expert_id, shard_idx, payload=b"x" * 128):
@@ -69,6 +69,83 @@ class TestAsyncNVMeIO:
         await io.write_shard(expert_id=0, shard_idx=0, data=np.zeros(4, dtype=np.uint8))
         await io.delete(expert_id=0, shard_idx=0)
         assert await io.exists(expert_id=0, shard_idx=0) is False
+
+
+# ── PMEMTransfer (EMH-2) ─────────────────────────────────────────────────────
+# Correttezza di alloc/free/read/write non richiede un mount DAX reale — un
+# mmap su un file normale su un qualunque filesystem si comporta
+# identicamente per questi scopi (DAX è una proprietà di performance/
+# latenza, non di correttezza). tmp_path basta, gira ovunque torch non
+# serva — nessun @pytest.mark.gpu qui, a differenza dei test PMEM di
+# TierManager sotto che sono cpu-only ma usano lo stesso host di CI.
+
+class TestPMEMTransfer:
+
+    @pytest.fixture
+    def pmem(self, tmp_path):
+        pt = PMEMTransfer(mount_path=str(tmp_path), n_slots=4, shard_size=1024)
+        pt.initialize()
+        yield pt
+        pt.shutdown()
+
+    def test_alloc_returns_distinct_slots(self, pmem):
+        s0 = pmem.alloc(expert_id=0, shard_idx=0, size_bytes=100)
+        s1 = pmem.alloc(expert_id=0, shard_idx=1, size_bytes=100)
+        assert s0 != s1
+        assert pmem.used_slots == 2
+        assert pmem.free_slots == 2
+
+    def test_alloc_pool_exhausted_raises(self, pmem):
+        for i in range(4):
+            pmem.alloc(expert_id=0, shard_idx=i, size_bytes=10)
+        with pytest.raises(MemoryError):
+            pmem.alloc(expert_id=0, shard_idx=4, size_bytes=10)
+
+    def test_alloc_oversized_raises(self, pmem):
+        with pytest.raises(ValueError):
+            pmem.alloc(expert_id=0, shard_idx=0, size_bytes=2048)  # > shard_size=1024
+
+    def test_write_then_read_roundtrip(self, pmem):
+        slot = pmem.alloc(expert_id=0, shard_idx=0, size_bytes=8)
+        payload = np.arange(8, dtype=np.uint8)
+        pmem.write(slot, payload)
+        result = pmem.read(slot)
+        np.testing.assert_array_equal(result[:8], payload)
+
+    def test_read_unallocated_slot_raises(self, pmem):
+        with pytest.raises(KeyError):
+            pmem.read(0)
+
+    def test_free_returns_slot_to_pool(self, pmem):
+        slot = pmem.alloc(expert_id=0, shard_idx=0, size_bytes=10)
+        pmem.free(slot)
+        assert pmem.free_slots == 4
+        with pytest.raises(KeyError):
+            pmem.free(slot)  # doppio free
+
+    def test_data_persists_across_reinitialize(self, tmp_path):
+        """Non anonima come SlabAllocator: il file pool su disco sopravvive
+        a un nuovo PMEMTransfer che lo riapre (stesso mount_path/n_slots/
+        shard_size) — la proprietà che rende PMEM un tier "persistente" a
+        differenza di DDR4."""
+        pt1 = PMEMTransfer(mount_path=str(tmp_path), n_slots=2, shard_size=64)
+        pt1.initialize()
+        slot = pt1.alloc(expert_id=0, shard_idx=0, size_bytes=4)
+        pt1.write(slot, np.array([1, 2, 3, 4], dtype=np.uint8))
+        pt1.shutdown()
+
+        pt2 = PMEMTransfer(mount_path=str(tmp_path), n_slots=2, shard_size=64)
+        pt2.initialize()
+        # pt2 non eredita l'alloc_map di pt1 (bookkeeping in-process, non
+        # persistito) — ma i byte grezzi nello slot 0 sono ancora lì.
+        raw = np.asarray(pt2._mmap[slot])
+        np.testing.assert_array_equal(raw[:4], [1, 2, 3, 4])
+        pt2.shutdown()
+
+    def test_read_before_initialize_raises(self, tmp_path):
+        pt = PMEMTransfer(mount_path=str(tmp_path), n_slots=2, shard_size=64)
+        with pytest.raises(RuntimeError):
+            pt.read(0)
 
 
 # ── GPUTransfer ────────────────────────────────────────────────────────────────
@@ -222,6 +299,85 @@ class TestTierManager:
         costruttore, non una copia — stesso pattern/contratto di
         ExpertAccessTable.slab."""
         assert manager.eat is manager._eat
+
+    def test_pmem_property_none_when_not_configured(self, manager):
+        assert manager.pmem is None
+
+    @pytest.mark.asyncio
+    async def test_promote_to_pmem_without_pmem_path_raises(self, manager, tmp_path):
+        """pmem_path non impostato (fixture `manager` sopra) — NVME->PMEM
+        deve fallire esplicitamente, non silenziosamente degradare a
+        NVME->DDR4 o restare in uno stato indefinito."""
+        manager._eat.insert(expert_id=0, shard_idx=0, tier=Tier.NVME)
+        _write_shard_file(tmp_path, 0, 0)
+        with pytest.raises(ValueError):
+            await manager.promote(expert_id=0, shard_idx=0, target_tier=Tier.PMEM)
+
+
+class TestTierManagerPMEM:
+    """EMH-2 (PMEM): host-agnostico come TestPMEMTransfer — nessun
+    @pytest.mark.gpu qui, la correttezza degli hop NVME<->PMEM/PMEM<->DDR4
+    non richiede una GPU né un mount DAX reale, solo pmem_path impostato."""
+
+    @pytest.fixture
+    def manager(self, tmp_path):
+        eat = ExpertAccessTable(capacity=100, n_slots=2)
+        eat.initialize()
+        pmem_dir = tmp_path / "pmem"
+        mgr = TierManager(
+            eat=eat, nvme_path=str(tmp_path / "nvme"), gpu_device=0,
+            pmem_path=str(pmem_dir), pmem_n_slots=2,
+        )
+        yield mgr
+        mgr.pmem.shutdown()
+        eat.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_promote_nvme_to_pmem(self, manager, tmp_path):
+        manager._eat.insert(expert_id=0, shard_idx=0, tier=Tier.NVME)
+        _write_shard_file(tmp_path / "nvme", 0, 0)
+        latency = await manager.promote(expert_id=0, shard_idx=0, target_tier=Tier.PMEM)
+        assert latency >= 0
+        assert manager._eat.lookup(0, 0).tier == Tier.PMEM
+        assert manager.pmem.used_slots == 1
+
+    @pytest.mark.asyncio
+    async def test_promote_pmem_to_ddr4(self, manager, tmp_path):
+        manager._eat.insert(expert_id=0, shard_idx=0, tier=Tier.NVME)
+        payload = b"x" * 128
+        _write_shard_file(tmp_path / "nvme", 0, 0, payload=payload)
+        await manager.promote(expert_id=0, shard_idx=0, target_tier=Tier.PMEM)
+        latency = await manager.promote(expert_id=0, shard_idx=0, target_tier=Tier.DDR4)
+        assert latency >= 0
+        assert manager._eat.lookup(0, 0).tier == Tier.DDR4
+        # PMEM slot liberato dall'hop, DDR4 slab ora possiede lo shard.
+        assert manager.pmem.used_slots == 0
+        assert manager._eat.slab.used_slots == 1
+        buffer = manager._eat.slab.get_buffer(manager._slots[(0, 0)])
+        np.testing.assert_array_equal(bytes(buffer[: len(payload)]), payload)
+
+    @pytest.mark.asyncio
+    async def test_promote_nvme_to_ddr4_direct_unaffected_by_pmem(self, manager, tmp_path):
+        """NVME->DDR4 diretto resta disponibile e invariato anche quando
+        pmem_path è impostato — PMEM è una rotta aggiuntiva, non una
+        sostituzione (vedi docstring di promote())."""
+        manager._eat.insert(expert_id=0, shard_idx=0, tier=Tier.NVME)
+        _write_shard_file(tmp_path / "nvme", 0, 0)
+        await manager.promote(expert_id=0, shard_idx=0, target_tier=Tier.DDR4)
+        assert manager._eat.lookup(0, 0).tier == Tier.DDR4
+        assert manager.pmem.used_slots == 0
+
+    @pytest.mark.asyncio
+    async def test_evict_pmem_to_nvme(self, manager, tmp_path):
+        manager._eat.insert(expert_id=0, shard_idx=0, tier=Tier.NVME)
+        payload = b"y" * 64
+        _write_shard_file(tmp_path / "nvme", 0, 0, payload=payload)
+        await manager.promote(expert_id=0, shard_idx=0, target_tier=Tier.PMEM)
+        await manager.evict(expert_id=0, shard_idx=0)
+        assert manager._eat.lookup(0, 0).tier == Tier.NVME
+        assert manager.pmem.used_slots == 0
+        written = (tmp_path / "nvme" / "0" / "0.bin").read_bytes()
+        assert written[: len(payload)] == payload
 
 
 @pytest.mark.gpu
