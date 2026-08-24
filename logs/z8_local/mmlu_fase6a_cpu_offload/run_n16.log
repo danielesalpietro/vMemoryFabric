@@ -1,0 +1,134 @@
+ Container vmemoryfabric-osx-dev-run-e37af10a082f Creating 
+ Container vmemoryfabric-osx-dev-run-e37af10a082f Created 
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.1.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+[T+   0.0s] Loading cais/mmlu (all subjects, dev + test splits)...
+Downloading readme: 0.00B [00:00, ?B/s]Downloading readme: 53.2kB [00:00, 21.2MB/s]
+Downloading metadata: 0.00B [00:00, ?B/s]Downloading metadata: 138kB [00:00, 118MB/s]
+Downloading data:   0%|          | 0.00/3.50M [00:00<?, ?B/s]Downloading data: 100%|██████████| 3.50M/3.50M [00:01<00:00, 2.60MB/s]Downloading data: 100%|██████████| 3.50M/3.50M [00:01<00:00, 2.60MB/s]
+Downloading data:   0%|          | 0.00/408k [00:00<?, ?B/s]Downloading data: 100%|██████████| 408k/408k [00:00<00:00, 770kB/s]Downloading data: 100%|██████████| 408k/408k [00:00<00:00, 758kB/s]
+Downloading data:   0%|          | 0.00/76.5k [00:00<?, ?B/s]Downloading data: 100%|██████████| 76.5k/76.5k [00:00<00:00, 173kB/s]Downloading data: 100%|██████████| 76.5k/76.5k [00:00<00:00, 173kB/s]
+Downloading data:   0%|          | 0.00/47.5M [00:00<?, ?B/s]Downloading data:  22%|██▏       | 10.5M/47.5M [00:01<00:06, 5.67MB/s]Downloading data:  44%|████▍     | 21.0M/47.5M [00:03<00:03, 6.81MB/s]Downloading data:  66%|██████▌   | 31.5M/47.5M [00:04<00:02, 7.30MB/s]Downloading data:  88%|████████▊ | 41.9M/47.5M [00:06<00:00, 5.64MB/s]Downloading data: 100%|██████████| 47.5M/47.5M [00:07<00:00, 6.12MB/s]Downloading data: 100%|██████████| 47.5M/47.5M [00:07<00:00, 6.21MB/s]
+Generating test split:   0%|          | 0/14042 [00:00<?, ? examples/s]Generating test split: 100%|██████████| 14042/14042 [00:00<00:00, 230699.45 examples/s]
+Generating validation split:   0%|          | 0/1531 [00:00<?, ? examples/s]Generating validation split: 100%|██████████| 1531/1531 [00:00<00:00, 319778.87 examples/s]
+Generating dev split:   0%|          | 0/285 [00:00<?, ? examples/s]Generating dev split: 100%|██████████| 285/285 [00:00<00:00, 157100.36 examples/s]
+Generating auxiliary_train split:   0%|          | 0/99842 [00:00<?, ? examples/s]Generating auxiliary_train split:  15%|█▌        | 15000/99842 [00:00<00:00, 140776.49 examples/s]Generating auxiliary_train split:  33%|███▎      | 33000/99842 [00:00<00:00, 157338.43 examples/s]Generating auxiliary_train split:  55%|█████▌    | 55000/99842 [00:00<00:00, 144995.27 examples/s]Generating auxiliary_train split:  80%|████████  | 80000/99842 [00:00<00:00, 152132.14 examples/s]Generating auxiliary_train split: 100%|██████████| 99842/99842 [00:00<00:00, 167430.87 examples/s]
+[T+  15.2s] Built 570 prompts across 57 subjects (10/subject cap).
+[T+  15.2s] Fetta [0:16] — 16 prompt (--prompt-start/--max-prompts).
+[T+  15.2s] --wire-tier-manager: TierManager/EAT wired via GCSGWorker.configure_tier_manager().
+[T+  15.2s] --enable-cpu-offload: routing CPU/DDR4-resident (issue #33) attivato via GCSGWorker.configure_cpu_offload(True).
+[T+  15.2s] Loading /data/nvme/models/mixtral-instruct-awq via GCSGWorker (shadow execution active — issues #10/#16), quantization=awq, wire_tier_manager=True, cpu_offload_enabled=True...
+INFO 08-17 12:11:48 config.py:280] Overriding HF config with {'head_dim': 128}
+`torch_dtype` is deprecated! Use `dtype` instead!
+[T+  30.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+INFO 08-17 12:11:58 config.py:510] This model supports multiple tasks: {'score', 'generate', 'embed', 'classify', 'reward'}. Defaulting to 'generate'.
+INFO 08-17 12:11:59 awq_marlin.py:113] Detected that the model can run with awq_marlin, however you specified quantization=awq explicitly, so forcing awq. Use quantization=awq_marlin for faster inference
+WARNING 08-17 12:11:59 config.py:588] awq quantization is not fully optimized yet. The speed can be slower than non-quantized models.
+WARNING 08-17 12:11:59 cuda.py:98] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+WARNING 08-17 12:11:59 config.py:642] Async output processing is not supported on the current platform type cuda.
+INFO 08-17 12:11:59 llm_engine.py:234] Initializing an LLM engine (v0.6.6.post1) with config: model='/data/nvme/models/mixtral-instruct-awq', speculative_config=None, tokenizer='/data/nvme/models/mixtral-instruct-awq', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=3328, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=awq, enforce_eager=True, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=/data/nvme/models/mixtral-instruct-awq, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=False, chunked_prefill_enabled=False, use_async_output_proc=False, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"candidate_compile_sizes":[],"compile_sizes":[],"capture_sizes":[],"max_capture_size":0}, use_cached_outputs=False, 
+WARNING 08-17 12:11:59 interface.py:236] Using 'pin_memory=False' as WSL is detected. This may slow down the performance.
+INFO 08-17 12:11:59 selector.py:129] Using XFormers backend.
+INFO 08-17 12:12:00 model_runner.py:1094] Starting to load model /data/nvme/models/mixtral-instruct-awq...
+Loading safetensors checkpoint shards:   0% Completed | 0/3 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:  33% Completed | 1/3 [00:02<00:05,  2.80s/it]
+Loading safetensors checkpoint shards:  67% Completed | 2/3 [00:08<00:04,  4.49s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:14<00:00,  5.31s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:14<00:00,  4.92s/it]
+
+[T+  60.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+INFO 08-17 12:12:27 model_runner.py:1099] Loading model weights took 18.9548 GB
+[T+  90.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 120.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 150.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+INFO 08-17 12:14:24 worker.py:241] Memory profiling takes 7.03 seconds
+INFO 08-17 12:14:24 worker.py:241] the current vLLM instance can use total_gpu_memory (24.00GiB) x gpu_memory_utilization (0.95) = 22.80GiB
+INFO 08-17 12:14:24 worker.py:241] model weights take 18.95GiB; non_torch_memory takes 1.27GiB; PyTorch activation peak memory takes 1.07GiB; the rest of the memory reserved for KV Cache is 1.51GiB.
+INFO 08-17 12:14:24 gpu_executor.py:76] # GPU blocks: 771, # CPU blocks: 2048
+INFO 08-17 12:14:24 gpu_executor.py:80] Maximum concurrency for 3328 tokens per request: 3.71x
+INFO 08-17 12:14:26 llm_engine.py:431] init engine (profile, create kv cache, warmup model) took 8.84 seconds
+[T+ 178.7s] LLM ready.
+[T+ 178.7s] Answer-letter token ids: {'A': 330, 'B': 365, 'C': 334, 'D': 384}
+[T+ 178.7s] Running generate() on all prompts (max_tokens=1, logprobs=20)...
+Processed prompts:   0%|          | 0/16 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s][T+ 180.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 210.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 240.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 270.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 300.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 330.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 360.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 390.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 420.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 450.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 480.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 510.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 540.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 570.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 600.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 630.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 660.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 690.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 720.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 750.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 780.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 810.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 840.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 870.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 900.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 930.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 960.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 990.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1020.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1050.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1080.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1110.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1140.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1170.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1200.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1230.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1260.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1290.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1320.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1350.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1380.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1410.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1440.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1470.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1500.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1530.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1560.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1590.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1620.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1650.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1680.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1710.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1740.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1770.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1800.0s] WATCHDOG: timeout di 1800s raggiunto — nessun completamento. Invio SIGTERM.
+[T+1800.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1805.0s] WATCHDOG: SIGTERM non ha terminato il processo entro 5s — invio SIGKILL.
+[T+1830.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1860.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1890.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1920.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1950.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+1980.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+2010.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+2040.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+2070.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+2100.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+2130.1s] heartbeat — processo ancora vivo, in attesa del prossimo log
+

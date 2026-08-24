@@ -1,0 +1,20 @@
+ Container vmemoryfabric-osx-dev-run-57e548bbadb5 Creating 
+ Container vmemoryfabric-osx-dev-run-57e548bbadb5 Created 
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.1.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+               total        used        free      shared  buff/cache   available
+Mem:           436Gi       1.6Gi       432Gi       4.0Mi       3.0Gi       431Gi
+Swap:          8.0Gi          0B       8.0Gi

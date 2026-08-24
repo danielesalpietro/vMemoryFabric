@@ -34,6 +34,9 @@ test-tier:
 test-scheduler:
 	$(RUN) pytest tests/test_scheduler.py -v --tb=short
 
+test-cpu-kernel:
+	$(RUN) pytest tests/test_cpu_kernel.py -v --tb=short
+
 # ── Benchmarks ────────────────────────────────────────────────────────────────
 
 bench:
@@ -46,8 +49,29 @@ bench-eat:
 bench-tier:
 	$(RUN) python benchmarks/bench_tier.py
 
+bench-cpu-kernel:
+	$(RUN) python benchmarks/bench_cpu_kernel.py
+
+bench-route-forward:
+	$(RUN) python benchmarks/bench_route_forward.py
+
+bench-hybrid:
+	$(RUN) python benchmarks/bench_hybrid.py
+
 bench-pmem-tier:
 	$(RUN) python benchmarks/bench_pmem_tier.py
+
+# ── Performance framework (issue #33, riutilizzabile oltre l'issue) ────────────
+# perf-test-hardware caratterizza CPU/RAM/GPU/PCIe di questo host/pod;
+# perf-tuning-report legge quel JSON e produce raccomandazioni (thread count,
+# budget RAM CPU-pool, verdetto cpu-offload) — vedi i docstring dei due script
+# per come sono ancorati ai dati già misurati in LOGBOOK_ISSUE33.MD.
+
+perf-test-hardware:
+	$(RUN) python benchmarks/perf_test_hardware.py
+
+perf-tuning-report:
+	$(RUN) sh -c "python benchmarks/perf_test_hardware.py | python benchmarks/perf_tuning_report.py"
 
 # ── Diagnostic repros (manual, not wired into CI) ───────────────────────────────
 # Requires the real checkpoint on disk (/data/nvme/models/mixtral-instruct-awq)
@@ -109,8 +133,12 @@ help:
 	@echo "  make test-eat     pytest M1 only"
 	@echo "  make test-tier    pytest M2 only"
 	@echo "  make test-scheduler pytest M3 only"
+	@echo "  make test-cpu-kernel pytest issue #33 Fase 1 (CPU kernel, no GPU needed)"
 	@echo "  make bench        Benchmark M1 + M2"
+	@echo "  make bench-cpu-kernel  Benchmark issue #33 Fase 1 (CPU forward throughput)"
 	@echo "  make bench-pmem-tier  Benchmark EMH-2 PMEM (skip se nessun mount DAX)"
+	@echo "  make perf-test-hardware  Caratterizza CPU/RAM/GPU/PCIe di questo host/pod (issue #33)"
+	@echo "  make perf-tuning-report  Raccomandazioni (thread/RAM/cpu-offload) da perf-test-hardware"
 	@echo "  make gpu-repro-issue10  Diagnostic repros, issue #10 offload crash (manual, one at a time)"
 	@echo "  make lint         Ruff linter"
 	@echo "  make typecheck    mypy"

@@ -1,0 +1,28 @@
+ Container vmemoryfabric-osx-dev-run-43d1fbc883e2 Creating 
+ Container vmemoryfabric-osx-dev-run-43d1fbc883e2 Created 
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.1.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+Filesystem      Size  Used Avail Use% Mounted on
+overlay        1007G  311G  646G  33% /
+tmpfs            64M     0   64M   0% /dev
+C:\             477G  130G  347G  28% /workspace
+shm             8.0G     0  8.0G   0% /dev/shm
+/dev/sdd       1007G  311G  646G  33% /data/nvme
+none            219G     0  219G   0% /usr/lib/wsl/lib/libdxcore.so
+drivers         477G  130G  347G  28% /usr/lib/wsl/drivers/nv_dispi.inf_amd64_b26cc1edfbb8f4d0/nvidia-smi
+tmpfs           219G     0  219G   0% /proc/acpi
+tmpfs           219G     0  219G   0% /proc/scsi
+tmpfs           219G     0  219G   0% /sys/firmware

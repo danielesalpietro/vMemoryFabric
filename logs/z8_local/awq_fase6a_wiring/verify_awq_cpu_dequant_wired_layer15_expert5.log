@@ -1,0 +1,58 @@
+ Container vmemoryfabric-osx-dev-run-24ab1d9e9995 Creating 
+ Container vmemoryfabric-osx-dev-run-24ab1d9e9995 Created 
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.1.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+Caricamento modello reale via vLLM (plain LLM(), quantization=awq)...
+INFO 08-17 11:42:32 config.py:280] Overriding HF config with {'head_dim': 128}
+`torch_dtype` is deprecated! Use `dtype` instead!
+INFO 08-17 11:42:41 config.py:510] This model supports multiple tasks: {'embed', 'generate', 'classify', 'reward', 'score'}. Defaulting to 'generate'.
+INFO 08-17 11:42:42 awq_marlin.py:113] Detected that the model can run with awq_marlin, however you specified quantization=awq explicitly, so forcing awq. Use quantization=awq_marlin for faster inference
+WARNING 08-17 11:42:42 config.py:588] awq quantization is not fully optimized yet. The speed can be slower than non-quantized models.
+WARNING 08-17 11:42:42 cuda.py:98] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+WARNING 08-17 11:42:42 config.py:642] Async output processing is not supported on the current platform type cuda.
+INFO 08-17 11:42:42 llm_engine.py:234] Initializing an LLM engine (v0.6.6.post1) with config: model='/data/nvme/models/mixtral-instruct-awq', speculative_config=None, tokenizer='/data/nvme/models/mixtral-instruct-awq', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=3328, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=awq, enforce_eager=True, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=/data/nvme/models/mixtral-instruct-awq, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=False, chunked_prefill_enabled=False, use_async_output_proc=False, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"candidate_compile_sizes":[],"compile_sizes":[],"capture_sizes":[],"max_capture_size":0}, use_cached_outputs=False, 
+WARNING 08-17 11:42:42 interface.py:236] Using 'pin_memory=False' as WSL is detected. This may slow down the performance.
+INFO 08-17 11:42:42 selector.py:129] Using XFormers backend.
+INFO 08-17 11:42:43 model_runner.py:1094] Starting to load model /data/nvme/models/mixtral-instruct-awq...
+Loading safetensors checkpoint shards:   0% Completed | 0/3 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:  33% Completed | 1/3 [00:01<00:03,  1.78s/it]
+Loading safetensors checkpoint shards:  67% Completed | 2/3 [00:04<00:02,  2.45s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:08<00:00,  3.08s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:08<00:00,  2.84s/it]
+
+INFO 08-17 11:43:03 model_runner.py:1099] Loading model weights took 18.9548 GB
+INFO 08-17 11:43:10 worker.py:241] Memory profiling takes 7.38 seconds
+INFO 08-17 11:43:10 worker.py:241] the current vLLM instance can use total_gpu_memory (24.00GiB) x gpu_memory_utilization (0.95) = 22.80GiB
+INFO 08-17 11:43:10 worker.py:241] model weights take 18.95GiB; non_torch_memory takes 0.26GiB; PyTorch activation peak memory takes 1.24GiB; the rest of the memory reserved for KV Cache is 2.35GiB.
+INFO 08-17 11:43:10 gpu_executor.py:76] # GPU blocks: 1201, # CPU blocks: 2048
+INFO 08-17 11:43:10 gpu_executor.py:80] Maximum concurrency for 3328 tokens per request: 5.77x
+INFO 08-17 11:43:12 llm_engine.py:431] init engine (profile, create kv cache, warmup model) took 8.72 seconds
+Modello caricato in 39.6s
+Modulo estratto: layer=15 expert=5 type=MixtralMLP
+Modulo già GPU-resident (cuda:0), nessun pinning necessario.
+
+Forward REALE (kernel CUDA AWQ, modulo MixtralMLP vero)...
+output reale: shape=(4, 4096) range=[-6.6250, 1.2393]
+
+Forward CPU via GCSGWorker._build_cpu_shadow_pool_awq() REALE (bits/group_size derivati dalle shape, non da quant_config.json)...
+_build_cpu_shadow_pool_awq() completato in 2.66s
+output CPU: shape=(4, 4096) range=[-6.6271, 1.2397]
+
+Errore relativo L2: 0.000555
+Differenza assoluta massima: 0.002098
+
+PARITÀ CONFERMATA (errore 0.000555 < soglia 0.01) — il codice REALE agganciato a GCSGWorker._load_shadow_pool() produce lo stesso risultato del kernel CUDA reale, non solo la reimplementazione standalone del Passo 2.
+[rank0]:[W817 11:43:15.608158543 ProcessGroupNCCL.cpp:1250] Warning: WARNING: process group has NOT been destroyed before we destruct ProcessGroupNCCL. On normal program exit, the application should call destroy_process_group to ensure that any pending NCCL operations have finished in this process. In rare cases this process can exit before this point and block the progress of another member of the process group. This constraint has always been present,  but this warning has only been added since PyTorch 2.4 (function operator())

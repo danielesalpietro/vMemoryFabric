@@ -8,7 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from eat import ExpertAccessTable, Tier
 from scheduler import AERManager, DomainLabel, GCSGGuard, PTPEPClassifier
 from scheduler import gcsg as gcsg_module
@@ -477,12 +476,14 @@ class TestGCSGTierManagerWiring:
 
     @pytest.fixture(autouse=True)
     def _reset_pending_tier_manager(self):
-        """_pending_tier_manager è stato di classe (necessario perché
-        vLLM costruisce GCSGWorker da solo — vedi configure_tier_manager()) —
-        senza reset, un test che lo imposta trapelerebbe negli altri test
-        di questo file e di scheduler.gcsg in generale."""
+        """_pending_tier_manager/_pending_enable_cpu_offload sono stato di
+        classe (necessario perché vLLM costruisce GCSGWorker da solo —
+        vedi configure_tier_manager()/configure_cpu_offload()) — senza
+        reset, un test che li imposta trapelerebbe negli altri test di
+        questo file e di scheduler.gcsg in generale."""
         yield
         GCSGWorker.configure_tier_manager(None)
+        GCSGWorker.configure_cpu_offload(False)
 
     @staticmethod
     def _real_tier_manager(tmp_path):
@@ -514,6 +515,24 @@ class TestGCSGTierManagerWiring:
         GCSGWorker.configure_tier_manager(mgr)
         GCSGWorker.configure_tier_manager(None)
         assert GCSGWorker._pending_tier_manager is None
+
+    # ── configure_cpu_offload() — issue #33 Fase 4, default False ───────────
+
+    def test_configure_cpu_offload_defaults_to_false(self):
+        """Nessuna leak da altri test — vedi _reset_pending_tier_manager.
+        Default False (non None come tier_manager): la funzionalità
+        DDR4-resident resta spenta finché non esplicitamente richiesta,
+        vedi il commento su _pending_enable_cpu_offload in gcsg.py."""
+        assert GCSGWorker._pending_enable_cpu_offload is False
+
+    def test_configure_cpu_offload_sets_class_level_pending(self):
+        GCSGWorker.configure_cpu_offload(True)
+        assert GCSGWorker._pending_enable_cpu_offload is True
+
+    def test_configure_cpu_offload_false_clears_pending(self):
+        GCSGWorker.configure_cpu_offload(True)
+        GCSGWorker.configure_cpu_offload(False)
+        assert GCSGWorker._pending_enable_cpu_offload is False
 
     # ── _select_shadow_expert_ids ──────────────────────────────────────────
 
@@ -694,6 +713,845 @@ class TestGCSGTierManagerWiring:
         worker.refresh_shadow_pool_selection()   # nessun traffico -> selezione invariata [0,1]
 
         assert calls == []
+
+
+# ── CPU-resident shadow pool (2026-08-17, issue #33 Fase 2) ───────────────────
+#
+# Pool DDR4-resident parallelo al pool GPU esistente — stesso principio di
+# TestGCSGTierManagerWiring: GCSGWorker.__new__() + attributi a mano,
+# TierManager reale (torch importabile basta, non serve CUDA). La garanzia
+# "mai .to('cuda')" si verifica negando l'assunzione del fix 2026-08-12 (pesi
+# offloaded restano CPU-resident finché non promossi esplicitamente) — vedi
+# _build_cpu_shadow_pool()/_load_shadow_pool() in gcsg.py.
+
+class TestGCSGCpuShadowPool:
+
+    @staticmethod
+    def _real_tier_manager(tmp_path):
+        return TestGCSGTierManagerWiring._real_tier_manager(tmp_path)
+
+    @staticmethod
+    def _make_worker(tier_manager=None, shadow_pool_size=2, cpu_offload_enabled=True):
+        """cpu_offload_enabled default True qui (a differenza della
+        produzione, dove il default è False — issue #33 Fase 4): questa
+        classe testa specificamente il comportamento del pool CPU, quindi
+        il default locale riflette lo scenario "funzionalità attiva".
+        test_load_shadow_pool_cpu_pool_disabled_by_default_even_with_tier_manager
+        sotto copre esplicitamente il caso opposto (default reale)."""
+        worker = TestGCSGTierManagerWiring._make_worker(tier_manager, shadow_pool_size)
+        worker._cpu_shadow_pool = {}
+        worker._cpu_offload_enabled = cpu_offload_enabled
+        return worker
+
+    @staticmethod
+    def _fake_offloaded_fused_layers(num_layers, num_experts):
+        """Stesso fake di
+        TestGCSG.test_load_shadow_pool_moves_offloaded_fused_weights_to_gpu_before_quantizing
+        (path 1, FusedMoE fp16 grezzo con expert offloaded — CPU-resident
+        per costruzione), estratto come helper riusabile: sia il pool GPU
+        (invariato) sia il nuovo pool CPU condividono lo stesso setup."""
+        class _FakeOffloadedTensor:
+            def __init__(self, device_type):
+                self.device = SimpleNamespace(type=device_type)
+
+            def to(self, device):
+                assert device == "cuda"
+                return _FakeOffloadedTensor("cuda")
+
+        class _FakeWeightData:
+            def __getitem__(self, expert_id):
+                return _FakeOffloadedTensor("cpu")
+
+        class _FakeFusedExperts:
+            def __init__(self):
+                self.num_experts = num_experts
+                self.w13_weight = SimpleNamespace(data=_FakeWeightData())
+                self.w2_weight = SimpleNamespace(data=_FakeWeightData())
+
+        return [
+            SimpleNamespace(block_sparse_moe=SimpleNamespace(experts=_FakeFusedExperts()))
+            for _ in range(num_layers)
+        ]
+
+    def test_load_shadow_pool_builds_parallel_cpu_pool_when_tier_manager_wired(
+        self, tmp_path, monkeypatch,
+    ):
+        """Con un TierManager wired, _load_shadow_pool() costruisce ANCHE un
+        pool CPU-resident per gli stessi expert_ids del pool GPU —
+        parallelo, non sostitutivo (self._shadow_pool resta invariato).
+        Stesso monkeypatch di _quantize_int4 di
+        TestGCSG.test_load_shadow_pool_moves_offloaded_fused_weights_to_gpu_before_quantizing,
+        qui usato per distinguere le due popolazioni per device visto."""
+        seen_devices = []
+
+        def _fake_quantize(weight):
+            seen_devices.append(weight.device.type)
+            return weight, 1.0
+
+        monkeypatch.setattr(gcsg_module, "_quantize_int4", _fake_quantize)
+
+        layers = self._fake_offloaded_fused_layers(num_layers=2, num_experts=8)
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=layers)),
+            ),
+        )
+
+        worker._load_shadow_pool()
+
+        assert set(worker._shadow_pool.keys()) == {0, 1}
+        assert set(worker._cpu_shadow_pool.keys()) == {0, 1}
+
+        # 2 layer * 2 expert * 2 tensori (w13 + w2) = 8 chiamate per pool:
+        # GPU pool promosso a cuda (fix 2026-08-12), CPU pool mai toccato —
+        # resta al device originale ("cpu", come lo restituisce _FakeWeightData).
+        assert seen_devices.count("cuda") == 8
+        assert seen_devices.count("cpu") == 8
+
+    def test_load_shadow_pool_cpu_pool_stays_empty_without_tier_manager(
+        self, monkeypatch,
+    ):
+        """Comportamento di default invariato: senza TierManager nessun
+        pool CPU viene costruito — stesso principio opt-in del resto del
+        wiring issue #17."""
+        monkeypatch.setattr(gcsg_module, "_quantize_int4", lambda w: (w, 1.0))
+
+        layers = self._fake_offloaded_fused_layers(num_layers=1, num_experts=4)
+        worker = self._make_worker(tier_manager=None, shadow_pool_size=2)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=layers)),
+            ),
+        )
+
+        worker._load_shadow_pool()
+
+        assert set(worker._shadow_pool.keys()) == {0, 1}
+        assert worker._cpu_shadow_pool == {}
+
+    def test_load_shadow_pool_cpu_pool_disabled_by_default_even_with_tier_manager(
+        self, tmp_path, monkeypatch,
+    ):
+        """Issue #33 Fase 4: un TierManager wired NON basta più da solo —
+        cpu_offload_enabled default False in produzione (qui esplicito
+        via cpu_offload_enabled=False, il default reale di
+        GCSGWorker.__init__), il pool CPU resta vuoto anche con
+        tier_manager presente. Prova diretta che il flag, non solo la
+        presenza di un TierManager, governa la costruzione — negazione
+        esplicita di test_load_shadow_pool_builds_parallel_cpu_pool_when_tier_manager_wired
+        sopra, stessa fixture con un solo parametro cambiato."""
+        monkeypatch.setattr(gcsg_module, "_quantize_int4", lambda w: (w, 1.0))
+
+        layers = self._fake_offloaded_fused_layers(num_layers=2, num_experts=8)
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(
+            tier_manager=mgr, shadow_pool_size=2, cpu_offload_enabled=False,
+        )
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=layers)),
+            ),
+        )
+
+        worker._load_shadow_pool()
+
+        assert set(worker._shadow_pool.keys()) == {0, 1}   # pool GPU invariato
+        assert worker._cpu_shadow_pool == {}
+
+    def test_build_cpu_shadow_pool_produces_working_forward(self):
+        """Non solo "non solleva": il pool costruito è realmente
+        utilizzabile end-to-end (estrazione dello slice
+        w13_weight.data[expert_id]/w2_weight.data[expert_id] inclusa, non
+        solo la costruzione diretta di _ShadowExpertINT4 come in
+        test_cpu_kernel.py) — stesso schema di
+        TestShadowExpertINT4CPU.test_runs_on_cpu_without_cuda (Fase 1)."""
+        import torch
+
+        generator = torch.Generator().manual_seed(0)
+        hidden, intermediate, num_layers, num_experts = 16, 32, 2, 4
+        w13 = torch.randn(num_experts, 2 * intermediate, hidden, generator=generator)
+        w2 = torch.randn(num_experts, hidden, intermediate, generator=generator)
+        layers = [
+            SimpleNamespace(block_sparse_moe=SimpleNamespace(experts=SimpleNamespace(
+                num_experts=num_experts,
+                w13_weight=SimpleNamespace(data=w13),
+                w2_weight=SimpleNamespace(data=w2),
+            )))
+            for _ in range(num_layers)
+        ]
+        worker = self._make_worker(tier_manager=None)
+
+        cpu_pool = worker._build_cpu_shadow_pool(layers, expert_ids=[1, 2])
+
+        assert set(cpu_pool.keys()) == {1, 2}
+        hidden_states = torch.randn(4, hidden, generator=generator)
+        for shadow in cpu_pool.values():
+            output = shadow(hidden_states, layer_id=0)
+            assert output.device.type == "cpu"
+            assert not output.is_cuda
+            assert output.shape == (4, hidden)
+            assert torch.isfinite(output).all()
+
+    def test_refresh_shadow_pool_selection_clears_cpu_pool_too(self, tmp_path):
+        """refresh_shadow_pool_selection() svuota self._shadow_pool prima
+        di ricaricare (vedi TestGCSGTierManagerWiring) — deve fare lo
+        stesso per self._cpu_shadow_pool, altrimenti expert_id rimossi
+        dalla nuova selezione resterebbero fantasma nel pool CPU."""
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(4):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        worker._n_experts_cached = 4
+        worker._shadow_pool = {0: object(), 1: object()}
+        worker._cpu_shadow_pool = {0: object(), 1: object()}
+
+        cleared = {}
+
+        def _fake_load():
+            cleared["shadow_pool"] = dict(worker._shadow_pool)
+            cleared["cpu_shadow_pool"] = dict(worker._cpu_shadow_pool)
+        worker._load_shadow_pool = _fake_load
+
+        for _ in range(3):
+            mgr.eat.access(expert_id=3, shard_idx=0)   # selezione cambia -> reload
+
+        worker.refresh_shadow_pool_selection()
+
+        assert cleared == {"shadow_pool": {}, "cpu_shadow_pool": {}}
+
+
+# ── AWQ CPU dequant pipeline (2026-08-17, issue #33 Fase 6a) ──────────────────
+#
+# Il pool CPU di Fase 2 (classe sopra) copre solo path 1 (FusedMoE fp16
+# grezzo) — MAI il path usato dal checkpoint reale di produzione
+# (casperhansen/mixtral-instruct-awq, path 3/AWQ-ModuleList, pre-quantizzato).
+# Fase 6a collega _dequantize_awq_linear_to_fp32()/_build_cpu_shadow_pool_awq()
+# (nuovi, vendorizzano il dequant GEMM AutoAWQ già verificato contro il
+# kernel CUDA reale — LOGBOOK_ISSUE33.MD "Passo 2") al path 3 di
+# _load_shadow_pool(). Tre livelli di test, ciascuno isolato dagli altri via
+# monkeypatch del livello sottostante — stesso principio delle altre classi
+# in questo file: testare un layer alla volta senza dover costruire tensori
+# AWQ bit-packed reali end-to-end.
+
+class TestDequantizeAwqLinearToFp32:
+
+    def test_derives_bits_and_group_size_from_real_checkpoint_shapes(self, monkeypatch):
+        """bits/group_size non vengono da un file di config esterno — sono
+        derivati dalle shape dei tensori stessi (vedi docstring del
+        metodo). Shape usate qui sono quelle osservate sul checkpoint
+        reale casperhansen/mixtral-instruct-awq, layer 0 expert 0, w1
+        (gate_proj): hidden=4096, intermediate=14336, bits=4 (pack_factor
+        8), group_size=128 — verificate live durante Fase 6a Passo 1/2
+        (LOGBOOK_ISSUE33.MD), non inventate. _dequantize_awq_gemm()
+        monkeypatchata: il suo output è già provato altrove (dequant
+        vendorizzato da AutoAWQ, parità numerica ~0.0005 contro il kernel
+        CUDA reale) — qui l'obiettivo è isolare SOLO la derivazione
+        bits/group_size e la conversione di layout (.T + .contiguous()),
+        non ri-provare la matematica del dequant."""
+        import torch
+
+        seen = {}
+
+        def _fake_dequantize_awq_gemm(qweight, qzeros, scales, bits, group_size):
+            seen["bits"] = bits
+            seen["group_size"] = group_size
+            # layout nativo AWQ GEMM: (in_features, out_features) = (2, 3) qui
+            return torch.arange(6, dtype=torch.float32).reshape(2, 3)
+
+        monkeypatch.setattr(gcsg_module, "_dequantize_awq_gemm", _fake_dequantize_awq_gemm)
+
+        hidden, intermediate, pack_factor, group_size = 4096, 14336, 8, 128
+        linear = SimpleNamespace(
+            qweight=torch.zeros(hidden, intermediate // pack_factor, dtype=torch.int32),
+            qzeros=torch.zeros(hidden // group_size, intermediate // pack_factor, dtype=torch.int32),
+            scales=torch.zeros(hidden // group_size, intermediate, dtype=torch.float16),
+        )
+
+        result = gcsg_module._dequantize_awq_linear_to_fp32(linear)
+
+        assert seen["bits"] == 4
+        assert seen["group_size"] == 128
+        assert result.dtype == torch.float32
+        assert result.is_contiguous()
+        want = torch.arange(6, dtype=torch.float32).reshape(2, 3).T.contiguous()
+        assert torch.equal(result, want)   # layout nn.Linear (out_features, in_features)
+
+
+class TestBuildCpuShadowPoolAwq:
+
+    @staticmethod
+    def _make_worker(tier_manager=None, shadow_pool_size=2):
+        worker = TestGCSGTierManagerWiring._make_worker(tier_manager, shadow_pool_size)
+        worker._cpu_shadow_pool = {}
+        return worker
+
+    def test_concatenates_gate_and_up_proj_and_uses_scale_one(self, monkeypatch):
+        """w13 dev'essere cat([w1_dequant, w3_dequant], dim=0) — stesso
+        ordine gate-poi-up documentato su _ShadowExpertINT4 per il path 1
+        (w1=gate_proj, w3=up_proj, w2=down_proj: naming Mixtral reale,
+        verificato via model.safetensors.index.json del checkpoint reale,
+        Fase 6a Passo 0/1). scale=1.0 per ogni layer: i pesi sono già
+        dequantizzati in unità reali, non un residuo di quantizzazione
+        int4 da riscalare — vedi la docstring del metodo per il perché
+        (ri-quantizzare per-tensore un formato per-gruppo distrugge il
+        segnale, errore relativo ~0.95, TestQuantizeInt4KnownLimitation in
+        test_cpu_kernel.py)."""
+        import torch
+
+        hidden, intermediate = 8, 4
+        generator = torch.Generator().manual_seed(0)
+        w1 = torch.randn(intermediate, hidden, generator=generator)
+        w3 = torch.randn(intermediate, hidden, generator=generator)
+        w2 = torch.randn(hidden, intermediate, generator=generator)
+
+        def _fake_dequant(linear):
+            return {"w1": w1, "w3": w3, "w2": w2}[linear.tag]
+
+        monkeypatch.setattr(gcsg_module, "_dequantize_awq_linear_to_fp32", _fake_dequant)
+
+        def _fake_expert():
+            return SimpleNamespace(
+                w1=SimpleNamespace(tag="w1"),
+                w3=SimpleNamespace(tag="w3"),
+                w2=SimpleNamespace(tag="w2"),
+            )
+
+        layers = [
+            SimpleNamespace(block_sparse_moe=SimpleNamespace(
+                experts=[_fake_expert() for _ in range(4)],
+            ))
+            for _ in range(2)
+        ]
+        worker = self._make_worker()
+
+        cpu_pool = worker._build_cpu_shadow_pool_awq(layers, expert_ids=[1, 2])
+
+        assert set(cpu_pool.keys()) == {1, 2}
+        for shadow in cpu_pool.values():
+            for layer_id in (0, 1):
+                w13_got, w13_scale = shadow._per_layer_w13[layer_id]
+                w2_got, w2_scale = shadow._per_layer_w2[layer_id]
+                assert w13_scale == 1.0
+                assert w2_scale == 1.0
+                assert torch.equal(w13_got, torch.cat([w1, w3], dim=0))
+                assert torch.equal(w2_got, w2)
+
+    def test_produces_working_cpu_forward(self, monkeypatch):
+        """End-to-end come test_build_cpu_shadow_pool_produces_working_forward
+        (path 1, TestGCSGCpuShadowPool): il pool costruito è realmente
+        eseguibile, non solo strutturalmente corretto."""
+        import torch
+
+        hidden, intermediate = 16, 32
+        generator = torch.Generator().manual_seed(1)
+        w1 = torch.randn(intermediate, hidden, generator=generator)
+        w3 = torch.randn(intermediate, hidden, generator=generator)
+        w2 = torch.randn(hidden, intermediate, generator=generator)
+
+        monkeypatch.setattr(
+            gcsg_module, "_dequantize_awq_linear_to_fp32",
+            lambda linear: {"w1": w1, "w3": w3, "w2": w2}[linear.tag],
+        )
+
+        def _fake_expert():
+            return SimpleNamespace(
+                w1=SimpleNamespace(tag="w1"),
+                w3=SimpleNamespace(tag="w3"),
+                w2=SimpleNamespace(tag="w2"),
+            )
+
+        layers = [
+            SimpleNamespace(block_sparse_moe=SimpleNamespace(
+                experts=[_fake_expert() for _ in range(2)],
+            ))
+        ]
+        worker = self._make_worker()
+
+        cpu_pool = worker._build_cpu_shadow_pool_awq(layers, expert_ids=[0])
+
+        hidden_states = torch.randn(4, hidden, generator=generator)
+        output = cpu_pool[0](hidden_states, layer_id=0)
+        assert output.device.type == "cpu"
+        assert output.shape == (4, hidden)
+        assert torch.isfinite(output).all()
+
+
+class TestCheckCpuRamBudget:
+    """Issue #33, 2026-08-17 — trovato dopo un run RunPod reale che ha
+    saturato ~84% della RAM cgroup (98GB/116GB) senza mai completare un
+    solo prompt: _check_cpu_ram_budget() deve ridurre gli expert_id
+    candidati quando la RAM host reale (non /proc/meminfo grezzo, vedi
+    _read_cgroup_available_gb) non basta, con lo stesso principio "degrada
+    invece di rischiare un OOM-kill" di GCSGGuard._check_vram_budget."""
+
+    def test_no_cap_when_ram_generous(self, monkeypatch):
+        monkeypatch.setattr(gcsg_module, "_read_cgroup_available_gb", lambda: 200.0)
+
+        effective = GCSGWorker._check_cpu_ram_budget(
+            [0, 1], per_expert_cpu_gb=21.5, margin_gb=24.0,
+        )
+
+        assert effective == [0, 1]
+
+    def test_caps_when_ram_tight(self, monkeypatch, caplog):
+        # 60GB disponibili, 24GB margine -> 36GB budget -> 1 solo expert
+        # a 21.5GB/expert (2 ne costerebbero 43GB, non entra).
+        monkeypatch.setattr(gcsg_module, "_read_cgroup_available_gb", lambda: 60.0)
+
+        with caplog.at_level(logging.WARNING, logger=gcsg_module.__name__):
+            effective = GCSGWorker._check_cpu_ram_budget(
+                [0, 1, 2], per_expert_cpu_gb=21.5, margin_gb=24.0,
+            )
+
+        assert effective == [0]
+        assert "ridotto da 3 a 1" in caplog.text
+
+    def test_zero_experts_when_no_room_at_all(self, monkeypatch):
+        monkeypatch.setattr(gcsg_module, "_read_cgroup_available_gb", lambda: 10.0)
+
+        effective = GCSGWorker._check_cpu_ram_budget(
+            [0, 1], per_expert_cpu_gb=21.5, margin_gb=24.0,
+        )
+
+        assert effective == []
+
+    def test_no_cap_when_ram_undeterminable(self, monkeypatch):
+        """Stesso principio difensivo del check VRAM gemello quando NVML
+        non è disponibile (es. CI senza cgroup/psutil): non bloccare."""
+        monkeypatch.setattr(gcsg_module, "_read_cgroup_available_gb", lambda: None)
+
+        effective = GCSGWorker._check_cpu_ram_budget(
+            [0, 1, 2], per_expert_cpu_gb=21.5, margin_gb=24.0,
+        )
+
+        assert effective == [0, 1, 2]
+
+
+class TestReadCgroupAvailableGb:
+    """_read_cgroup_available_gb() — v1 -> v2 -> psutil, con fallback a
+    None se nessuno leggibile (ambienti senza cgroup, es. macOS/CI)."""
+
+    def test_reads_cgroup_v1(self, tmp_path, monkeypatch):
+        v1_dir = tmp_path / "v1" / "memory"
+        v1_dir.mkdir(parents=True)
+        (v1_dir / "memory.limit_in_bytes").write_text(str(100 * 1024**3))
+        (v1_dir / "memory.usage_in_bytes").write_text(str(40 * 1024**3))
+
+        real_open = open
+
+        def _fake_open(path, *a, **kw):
+            path = str(path)
+            if path == "/sys/fs/cgroup/memory/memory.limit_in_bytes":
+                return real_open(v1_dir / "memory.limit_in_bytes", *a, **kw)
+            if path == "/sys/fs/cgroup/memory/memory.usage_in_bytes":
+                return real_open(v1_dir / "memory.usage_in_bytes", *a, **kw)
+            raise FileNotFoundError(path)
+
+        monkeypatch.setattr("builtins.open", _fake_open)
+
+        assert gcsg_module._read_cgroup_available_gb() == pytest.approx(60.0)
+
+    def test_falls_back_to_none_when_nothing_readable(self, monkeypatch):
+        def _always_missing(path, *a, **kw):
+            raise FileNotFoundError(path)
+
+        monkeypatch.setattr("builtins.open", _always_missing)
+        monkeypatch.setitem(
+            __import__("sys").modules, "psutil", None,
+        )
+
+        assert gcsg_module._read_cgroup_available_gb() is None
+
+
+class TestLoadShadowPoolAwqCpuPoolWiring:
+    """Wiring nel branch path-3 (else) di _load_shadow_pool() — mirror dei
+    tre test-gate di TestGCSGCpuShadowPool per path 1, stesso principio,
+    stesso gate (_tier_manager wired E _cpu_offload_enabled=True).
+    _build_cpu_shadow_pool_awq() monkeypatchata direttamente: già testata
+    a parte sopra (TestBuildCpuShadowPoolAwq), qui l'obiettivo è isolare
+    SOLO il wiring (gate + populate di self._cpu_shadow_pool), non farlo
+    dipendere dal fake AWQ minimale di TestGCSG (che non ha attributi
+    w1/w2/w3 — costruito solo per testare il pinning GPU)."""
+
+    @staticmethod
+    def _make_worker(tier_manager=None, shadow_pool_size=2, cpu_offload_enabled=False):
+        worker = TestGCSGTierManagerWiring._make_worker(tier_manager, shadow_pool_size)
+        worker._cpu_shadow_pool = {}
+        worker._cpu_offload_enabled = cpu_offload_enabled
+        return worker
+
+    def _layers_and_worker(self, tmp_path, **worker_kwargs):
+        layers = TestGCSG._fake_awq_moduleslist_layers(num_layers=2, num_experts=8, to_succeeds=True)
+        mgr = TestGCSGTierManagerWiring._real_tier_manager(tmp_path) if worker_kwargs.get("tier_manager") else None
+        worker = self._make_worker(tier_manager=mgr, **{k: v for k, v in worker_kwargs.items() if k != "tier_manager"})
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=layers)),
+            ),
+        )
+        return layers, worker
+
+    def test_builds_awq_cpu_pool_when_tier_manager_wired_and_flag_enabled(
+        self, tmp_path, monkeypatch,
+    ):
+        calls = []
+        monkeypatch.setattr(
+            gcsg_module.GCSGWorker, "_build_cpu_shadow_pool_awq",
+            lambda self, layers, expert_ids: calls.append(tuple(expert_ids)) or {
+                e: object() for e in expert_ids
+            },
+        )
+
+        layers, worker = self._layers_and_worker(
+            tmp_path, tier_manager=True, cpu_offload_enabled=True,
+        )
+
+        worker._load_shadow_pool()
+
+        # Pool GPU non asserito qui: con tier_manager wired, il pinning passa
+        # da _promote_module_via_tier_manager() (richiede named_parameters(),
+        # non supportato dal fake minimale di TestGCSG, pensato solo per
+        # .to('cuda') diretto) — fuori scope per un test che isola il
+        # wiring del pool CPU, già indipendente dall'esito del pinning GPU
+        # (_build_cpu_shadow_pool_awq() è costruito per l'intero expert_ids
+        # selezionato, non solo per `loaded` — vedi commento in gcsg.py).
+        assert set(worker._cpu_shadow_pool.keys()) == {0, 1}
+        assert len(calls) == 1
+
+    def test_awq_cpu_pool_stays_empty_without_tier_manager(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            gcsg_module.GCSGWorker, "_build_cpu_shadow_pool_awq",
+            lambda self, layers, expert_ids: pytest.fail("non deve essere chiamato"),
+        )
+
+        layers, worker = self._layers_and_worker(
+            tmp_path, tier_manager=False, cpu_offload_enabled=True,
+        )
+
+        worker._load_shadow_pool()
+
+        assert set(worker._shadow_pool.keys()) == {0, 1}
+        assert worker._cpu_shadow_pool == {}
+
+    def test_awq_cpu_pool_disabled_by_default_even_with_tier_manager(self, tmp_path, monkeypatch):
+        """Stesso principio Fase 4 del path 1: tier_manager da solo non
+        basta, cpu_offload_enabled default False in produzione."""
+        monkeypatch.setattr(
+            gcsg_module.GCSGWorker, "_build_cpu_shadow_pool_awq",
+            lambda self, layers, expert_ids: pytest.fail("non deve essere chiamato"),
+        )
+
+        layers, worker = self._layers_and_worker(
+            tmp_path, tier_manager=True, cpu_offload_enabled=False,
+        )
+
+        worker._load_shadow_pool()
+
+        # Pool GPU non asserito qui — stesso motivo del test sopra.
+        assert worker._cpu_shadow_pool == {}
+
+
+# ── Hot/cold routing (2026-08-17, issue #33 Fase 3) ────────────────────────────
+#
+# route_forward()/_RoutedShadowPool decidono, per un expert_id già presente in
+# entrambi i pool (Fase 2), quale residenza eseguire — usando la
+# classificazione di Fase 0 (SEEPolicy.classify_hot_cold(), issue #21-informed,
+# vedi LOGBOOK_ISSUE33.MD). Stesso principio di test di TestGCSGTierManagerWiring:
+# GCSGWorker.__new__() + attributi a mano, TierManager reale.
+
+class TestGCSGRouteForward:
+
+    @staticmethod
+    def _make_worker(tier_manager=None, shadow_pool_size=2):
+        return TestGCSGCpuShadowPool._make_worker(tier_manager, shadow_pool_size)
+
+    @staticmethod
+    def _real_tier_manager(tmp_path):
+        return TestGCSGTierManagerWiring._real_tier_manager(tmp_path)
+
+    # ── route_forward(): dispatch puro, nessun _load_shadow_pool() coinvolto ──
+
+    def test_route_forward_dispatches_hot_expert_to_gpu_pool(self):
+        calls = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: calls.append(("gpu", hs, lid))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: calls.append(("cpu", hs, lid))}
+        worker._hot_expert_ids = {0}
+
+        worker.route_forward(expert_id=0, layer_id=3, hidden_states="hs")
+
+        assert calls == [("gpu", "hs", 3)]
+
+    def test_route_forward_force_cpu_env_var_overrides_hot_classification(self, monkeypatch):
+        """OSX_GCSG_FORCE_CPU_ROUTE (issue #33, 2026-08-17 — benchmark
+        "solo CPU" controllato, richiesto dal project owner per
+        confrontare GPU-only/CPU-only/misto sullo stesso n=16): quando
+        impostata, un expert "caldo" ma presente nel pool CPU deve
+        comunque essere instradato a CPU."""
+        import torch
+        monkeypatch.setenv("OSX_GCSG_FORCE_CPU_ROUTE", "1")
+        calls = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: calls.append(("gpu", hs, lid))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: calls.append(("cpu", hs, lid))}
+        worker._hot_expert_ids = {0}   # "caldo" -> andrebbe su GPU senza l'override
+
+        hidden_states = torch.zeros(1)
+        worker.route_forward(expert_id=0, layer_id=3, hidden_states=hidden_states)
+
+        assert calls == [("cpu", hidden_states, 3)]
+
+    def test_route_forward_force_cpu_env_var_absent_keeps_default_behavior(self, monkeypatch):
+        """Assenza della env var: comportamento invariato bit per bit —
+        expert caldo va su GPU come sempre."""
+        monkeypatch.delenv("OSX_GCSG_FORCE_CPU_ROUTE", raising=False)
+        calls = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: calls.append(("gpu", hs, lid))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: calls.append(("cpu", hs, lid))}
+        worker._hot_expert_ids = {0}
+
+        worker.route_forward(expert_id=0, layer_id=3, hidden_states="hs")
+
+        assert calls == [("gpu", "hs", 3)]
+
+    def test_route_forward_dispatches_cold_expert_to_cpu_pool(self):
+        """hidden_states è un torch.Tensor CPU reale, non una stringa
+        (come prima del bug fix sotto): route_forward() ora chiama
+        .device su hidden_states prima di dispatchare a freddo — vedi
+        test_route_forward_moves_cuda_hidden_states_to_cpu_before_cold_dispatch
+        per il caso che ha trovato il bug."""
+        import torch
+        calls = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: calls.append(("gpu", hs, lid))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: calls.append(("cpu", hs, lid))}
+        worker._hot_expert_ids = set()   # 0 non è "caldo" -> freddo
+
+        hidden_states = torch.zeros(1)
+        worker.route_forward(expert_id=0, layer_id=3, hidden_states=hidden_states)
+
+        assert calls == [("cpu", hidden_states, 3)]
+
+    def test_route_forward_moves_cuda_hidden_states_to_cpu_before_cold_dispatch(self):
+        """Bug reale trovato in benchmarks/bench_hybrid.py (Fase 5, non in
+        un unit test isolato): hidden_states nel path reale arriva
+        CUDA-resident dalla forward pass del modello — un expert
+        instradato a freddo deve normalizzarlo su CPU prima di passarlo a
+        pesi CPU-resident, altrimenti lo stesso "Expected all tensors to
+        be on the same device" del bug 2026-08-12 sui pesi (vedi
+        _load_shadow_pool()), stavolta sull'input. Fake minimale, nessuna
+        CUDA reale richiesta — stesso principio di
+        TestGCSG.test_load_shadow_pool_moves_offloaded_fused_weights_to_gpu_before_quantizing."""
+        class _FakeCudaTensor:
+            def __init__(self, device_type):
+                self.device = SimpleNamespace(type=device_type)
+                self.cpu_calls = 0
+
+            def cpu(self):
+                self.cpu_calls += 1
+                return _FakeCudaTensor("cpu")
+
+        received = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: received.append(("gpu", hs))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: received.append(("cpu", hs))}
+        worker._hot_expert_ids = set()   # freddo
+
+        cuda_hidden_states = _FakeCudaTensor("cuda")
+        worker.route_forward(expert_id=0, layer_id=0, hidden_states=cuda_hidden_states)
+
+        assert cuda_hidden_states.cpu_calls == 1
+        assert len(received) == 1
+        pool, received_hs = received[0]
+        assert pool == "cpu"
+        assert received_hs.device.type == "cpu"
+        assert received_hs is not cuda_hidden_states   # normalizzato, non l'oggetto CUDA originale
+
+    def test_route_forward_does_not_call_cpu_on_already_cpu_hidden_states(self):
+        """Complementare al test sopra: nessuna copia/chiamata .cpu()
+        inutile se hidden_states è già CPU-resident."""
+        class _FakeCpuTensor:
+            def __init__(self):
+                self.device = SimpleNamespace(type="cpu")
+
+            def cpu(self):
+                raise AssertionError(".cpu() non doveva essere chiamato su un tensore già CPU")
+
+        received = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: None}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: received.append(hs)}
+        worker._hot_expert_ids = set()
+
+        cpu_hidden_states = _FakeCpuTensor()
+        worker.route_forward(expert_id=0, layer_id=0, hidden_states=cpu_hidden_states)
+
+        assert received == [cpu_hidden_states]   # stesso oggetto, nessuna copia inutile
+
+    def test_route_forward_falls_back_to_gpu_when_not_in_cpu_pool(self):
+        """Path 2/3 (Marlin/AWQ) — Fase 2 non costruisce un pool CPU per
+        loro: expert presente solo nel pool GPU, la classificazione hot/
+        cold (anche se dicesse "freddo") non ha un'alternativa da usare."""
+        calls = []
+        worker = self._make_worker()
+        worker._shadow_pool = {0: lambda hs, lid: calls.append("gpu")}
+        worker._cpu_shadow_pool = {}
+        worker._hot_expert_ids = set()   # "freddo", ma non c'è pool CPU
+
+        worker.route_forward(expert_id=0, layer_id=0, hidden_states="hs")
+
+        assert calls == ["gpu"]
+
+    def test_route_forward_falls_back_to_cpu_when_not_in_gpu_pool(self):
+        """Caso limite (oggi non raggiunto da _load_shadow_pool(), che
+        costruisce i due pool per gli stessi expert_id nel path 1): un
+        expert presente solo nel pool CPU deve comunque funzionare.
+        hidden_states è un torch.Tensor CPU reale — route_forward() vi
+        accede .device anche in questo ramo di fallback."""
+        import torch
+        calls = []
+        worker = self._make_worker()
+        worker._shadow_pool = {}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: calls.append("cpu")}
+        worker._hot_expert_ids = {0}   # "caldo", ma non c'è pool GPU
+
+        worker.route_forward(expert_id=0, layer_id=0, hidden_states=torch.zeros(1))
+
+        assert calls == ["cpu"]
+
+    # ── _refresh_hot_cold_classification() ───────────────────────────────────
+
+    def test_refresh_hot_cold_defaults_all_hot_without_traffic(self, tmp_path):
+        """Cold start onesto: EAT seeded ma access_count=0 ovunque (o EAT
+        vuota) -> TUTTI gli expert_id dei due pool restano "caldi",
+        comportamento pre-Fase-3 invariato (GPU-only) — non instradare
+        tutto a freddo su un segnale che non esiste ancora, stesso
+        principio di _select_shadow_expert_ids()."""
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr)
+        worker._shadow_pool = {0: object(), 1: object()}
+        worker._cpu_shadow_pool = {0: object(), 1: object()}
+
+        worker._refresh_hot_cold_classification()
+
+        assert worker._hot_expert_ids == {0, 1}
+
+    def test_refresh_hot_cold_without_tier_manager_defaults_all_hot(self):
+        worker = self._make_worker(tier_manager=None)
+        worker._shadow_pool = {0: object()}
+        worker._cpu_shadow_pool = {0: object()}
+
+        worker._refresh_hot_cold_classification()
+
+        assert worker._hot_expert_ids == {0}
+
+    def test_refresh_hot_cold_uses_real_traffic(self, tmp_path):
+        mgr = self._real_tier_manager(tmp_path)
+        for expert_id in range(4):
+            mgr.eat.insert(expert_id, shard_idx=0, tier=Tier.DDR4)
+        for _ in range(5):
+            mgr.eat.access(expert_id=2, shard_idx=0)   # 2 è nettamente il più caldo
+        worker = self._make_worker(tier_manager=mgr)
+        worker._shadow_pool = {i: object() for i in range(4)}
+        worker._cpu_shadow_pool = {i: object() for i in range(4)}
+
+        worker._refresh_hot_cold_classification()
+
+        assert 2 in worker._hot_expert_ids
+
+    # ── _RoutedShadowPool ─────────────────────────────────────────────────────
+
+    def test_routed_shadow_pool_contains_union_of_both_pools(self):
+        worker = self._make_worker()
+        worker._shadow_pool = {0: object()}
+        worker._cpu_shadow_pool = {1: object()}
+        pool = gcsg_module._RoutedShadowPool(worker)
+
+        assert 0 in pool
+        assert 1 in pool
+        assert 2 not in pool
+
+    # ── Integrazione con _load_shadow_pool()/_evaluate_gcsg_for_rows() ────────
+
+    def test_load_shadow_pool_refreshes_hot_cold_classification(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(gcsg_module, "_quantize_int4", lambda w: (w, 1.0))
+        layers = TestGCSGCpuShadowPool._fake_offloaded_fused_layers(
+            num_layers=2, num_experts=8,
+        )
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=2)
+        worker._base = SimpleNamespace(
+            model_runner=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=layers)),
+            ),
+        )
+
+        worker._load_shadow_pool()
+
+        # Nessun traffico EAT reale ancora -> cold start onesto, entrambi
+        # gli expert_id selezionati restano "caldi".
+        assert worker._hot_expert_ids == {0, 1}
+
+    def test_evaluate_gcsg_for_rows_routes_cold_expert_to_cpu_pool_never_touching_gpu_pool(
+        self, tmp_path,
+    ):
+        """La versione testata di quello che issue #33 Fase 3 chiedeva
+        esplicitamente: un expert instradato a freddo non deve MAI
+        attraversare il pool GPU (e quindi mai GPUTransfer.to_vram()/
+        TierManager.promote_live_tensor(), che vivono solo dietro le
+        callable del pool GPU) — end-to-end da _evaluate_gcsg_for_rows()
+        (hook .gate reale) fino al dispatch, non solo da route_forward()
+        isolato."""
+        import torch
+
+        gpu_calls = []
+        cpu_calls = []
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=1)
+        worker.guard = GCSGGuard(
+            theta_gate=0.5, theta_entropy=0.9, theta_contamination=1.0,
+            shadow_pool_size=1, check_vram=False,
+        )
+        worker._shadow_pool = {0: lambda hs, lid: gpu_calls.append((hs.shape, lid))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: cpu_calls.append((hs.shape, lid))}
+        worker._hot_expert_ids = set()   # expert 0 classificato "freddo"
+        worker._current_row_request_ids = ["req-0"]
+
+        # Logit fortemente piccato su expert 0 -> supera should_activate_shadow.
+        router_logits = torch.tensor([[10.0, -10.0, -10.0]])
+        hidden_states = torch.randn(1, 4096)
+
+        worker._evaluate_gcsg_for_rows(router_logits, hidden_states, layer_id=7)
+
+        assert cpu_calls == [((1, 4096), 7)]
+        assert gpu_calls == []   # mai toccato il pool GPU per questo expert
+
+    def test_evaluate_gcsg_for_rows_routes_hot_expert_to_gpu_pool(self, tmp_path):
+        import torch
+
+        gpu_calls = []
+        cpu_calls = []
+        mgr = self._real_tier_manager(tmp_path)
+        worker = self._make_worker(tier_manager=mgr, shadow_pool_size=1)
+        worker.guard = GCSGGuard(
+            theta_gate=0.5, theta_entropy=0.9, theta_contamination=1.0,
+            shadow_pool_size=1, check_vram=False,
+        )
+        worker._shadow_pool = {0: lambda hs, lid: gpu_calls.append((hs.shape, lid))}
+        worker._cpu_shadow_pool = {0: lambda hs, lid: cpu_calls.append((hs.shape, lid))}
+        worker._hot_expert_ids = {0}   # expert 0 classificato "caldo"
+        worker._current_row_request_ids = ["req-0"]
+
+        router_logits = torch.tensor([[10.0, -10.0, -10.0]])
+        hidden_states = torch.randn(1, 4096)
+
+        worker._evaluate_gcsg_for_rows(router_logits, hidden_states, layer_id=7)
+
+        assert gpu_calls == [((1, 4096), 7)]
+        assert cpu_calls == []
 
 
 # ── Marlin path TierManager wiring (2026-08-12, issue #17) ────────────────────

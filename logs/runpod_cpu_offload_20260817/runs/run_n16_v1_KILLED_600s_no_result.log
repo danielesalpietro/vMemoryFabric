@@ -1,0 +1,62 @@
+[T+   0.0s] Loading cais/mmlu (all subjects, dev + test splits)...
+Downloading readme: 0.00B [00:00, ?B/s]Downloading readme: 53.2kB [00:00, 99.2MB/s]
+Downloading metadata: 0.00B [00:00, ?B/s]Downloading metadata: 138kB [00:00, 70.3MB/s]
+Downloading data:   0%|          | 0.00/3.50M [00:00<?, ?B/s]Downloading data: 100%|██████████| 3.50M/3.50M [00:00<00:00, 5.76MB/s]Downloading data: 100%|██████████| 3.50M/3.50M [00:00<00:00, 5.74MB/s]
+Downloading data:   0%|          | 0.00/408k [00:00<?, ?B/s]Downloading data: 100%|██████████| 408k/408k [00:00<00:00, 1.07MB/s]Downloading data: 100%|██████████| 408k/408k [00:00<00:00, 1.07MB/s]
+Downloading data:   0%|          | 0.00/76.5k [00:00<?, ?B/s]Downloading data: 100%|██████████| 76.5k/76.5k [00:00<00:00, 201kB/s]Downloading data: 100%|██████████| 76.5k/76.5k [00:00<00:00, 201kB/s]
+Downloading data:   0%|          | 0.00/47.5M [00:00<?, ?B/s]Downloading data:  22%|██▏       | 10.5M/47.5M [00:01<00:04, 8.42MB/s]Downloading data:  44%|████▍     | 21.0M/47.5M [00:02<00:03, 7.44MB/s]Downloading data:  66%|██████▌   | 31.5M/47.5M [00:04<00:02, 6.15MB/s]Downloading data:  88%|████████▊ | 41.9M/47.5M [00:06<00:01, 5.56MB/s]Downloading data: 100%|██████████| 47.5M/47.5M [00:07<00:00, 6.72MB/s]Downloading data: 100%|██████████| 47.5M/47.5M [00:07<00:00, 6.55MB/s]
+Generating test split:   0%|          | 0/14042 [00:00<?, ? examples/s]Generating test split: 100%|██████████| 14042/14042 [00:00<00:00, 444994.95 examples/s]
+Generating validation split:   0%|          | 0/1531 [00:00<?, ? examples/s]Generating validation split: 100%|██████████| 1531/1531 [00:00<00:00, 329932.66 examples/s]
+Generating dev split:   0%|          | 0/285 [00:00<?, ? examples/s]Generating dev split: 100%|██████████| 285/285 [00:00<00:00, 104628.15 examples/s]
+Generating auxiliary_train split:   0%|          | 0/99842 [00:00<?, ? examples/s]Generating auxiliary_train split:  16%|█▌        | 16000/99842 [00:00<00:00, 149484.59 examples/s]Generating auxiliary_train split:  34%|███▍      | 34000/99842 [00:00<00:00, 163886.37 examples/s]Generating auxiliary_train split:  55%|█████▌    | 55000/99842 [00:00<00:00, 176832.62 examples/s]Generating auxiliary_train split:  76%|███████▌  | 76000/99842 [00:00<00:00, 189052.50 examples/s]Generating auxiliary_train split: 100%|██████████| 99842/99842 [00:00<00:00, 200399.83 examples/s]
+[T+  12.0s] Built 570 prompts across 57 subjects (10/subject cap).
+[T+  12.0s] Fetta [0:16] — 16 prompt (--prompt-start/--max-prompts).
+[T+  12.0s] --wire-tier-manager: TierManager/EAT wired via GCSGWorker.configure_tier_manager().
+[T+  12.0s] --enable-cpu-offload: routing CPU/DDR4-resident (issue #33) attivato via GCSGWorker.configure_cpu_offload(True).
+[T+  12.0s] Loading /root/models/mixtral-instruct-awq via GCSGWorker (shadow execution active — issues #10/#16), quantization=awq, wire_tier_manager=True, cpu_offload_enabled=True...
+INFO 08-17 13:41:31 config.py:280] Overriding HF config with {'head_dim': 128}
+`torch_dtype` is deprecated! Use `dtype` instead!
+INFO 08-17 13:41:38 config.py:510] This model supports multiple tasks: {'classify', 'generate', 'reward', 'embed', 'score'}. Defaulting to 'generate'.
+INFO 08-17 13:41:39 awq_marlin.py:113] Detected that the model can run with awq_marlin, however you specified quantization=awq explicitly, so forcing awq. Use quantization=awq_marlin for faster inference
+WARNING 08-17 13:41:39 config.py:588] awq quantization is not fully optimized yet. The speed can be slower than non-quantized models.
+WARNING 08-17 13:41:39 cuda.py:98] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+WARNING 08-17 13:41:39 config.py:642] Async output processing is not supported on the current platform type cuda.
+INFO 08-17 13:41:39 llm_engine.py:234] Initializing an LLM engine (v0.6.6.post1) with config: model='/root/models/mixtral-instruct-awq', speculative_config=None, tokenizer='/root/models/mixtral-instruct-awq', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=3328, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=awq, enforce_eager=True, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=/root/models/mixtral-instruct-awq, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=False, chunked_prefill_enabled=False, use_async_output_proc=False, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"candidate_compile_sizes":[],"compile_sizes":[],"capture_sizes":[],"max_capture_size":0}, use_cached_outputs=False, 
+INFO 08-17 13:41:39 selector.py:120] Using Flash Attention backend.
+INFO 08-17 13:41:40 model_runner.py:1094] Starting to load model /root/models/mixtral-instruct-awq...
+Loading safetensors checkpoint shards:   0% Completed | 0/3 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:  33% Completed | 1/3 [00:00<00:01,  1.26it/s]
+[T+  30.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+Loading safetensors checkpoint shards:  67% Completed | 2/3 [00:02<00:01,  1.19s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:03<00:00,  1.22s/it]
+Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:03<00:00,  1.17s/it]
+
+INFO 08-17 13:41:49 model_runner.py:1099] Loading model weights took 18.9548 GB
+[T+  60.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+  90.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 120.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+INFO 08-17 13:43:17 worker.py:241] Memory profiling takes 5.39 seconds
+INFO 08-17 13:43:17 worker.py:241] the current vLLM instance can use total_gpu_memory (23.56GiB) x gpu_memory_utilization (0.95) = 22.38GiB
+INFO 08-17 13:43:17 worker.py:241] model weights take 18.95GiB; non_torch_memory takes 1.13GiB; PyTorch activation peak memory takes 1.07GiB; the rest of the memory reserved for KV Cache is 1.23GiB.
+INFO 08-17 13:43:17 gpu_executor.py:76] # GPU blocks: 627, # CPU blocks: 2048
+INFO 08-17 13:43:17 gpu_executor.py:80] Maximum concurrency for 3328 tokens per request: 3.01x
+INFO 08-17 13:43:20 llm_engine.py:431] init engine (profile, create kv cache, warmup model) took 8.67 seconds
+[T+ 124.0s] LLM ready.
+[T+ 124.0s] Answer-letter token ids: {'A': 330, 'B': 365, 'C': 334, 'D': 384}
+[T+ 124.0s] Running generate() on all prompts (max_tokens=1, logprobs=20)...
+Processed prompts:   0%|          | 0/16 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s][T+ 150.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 180.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 210.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 240.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 270.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 300.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 330.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 360.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 390.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 420.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 450.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 480.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 510.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 540.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 570.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 600.0s] WATCHDOG: timeout di 600s raggiunto — nessun completamento. Invio SIGTERM.

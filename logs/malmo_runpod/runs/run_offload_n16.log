@@ -1,0 +1,24 @@
+[T+   0.0s] Loading cais/mmlu (all subjects, dev + test splits)...
+[T+   3.0s] Built 570 prompts across 57 subjects (10/subject cap).
+[T+   3.0s] Fetta [0:16] — 16 prompt (--prompt-start/--max-prompts).
+[T+   3.0s] --wire-tier-manager: TierManager/EAT wired via GCSGWorker.configure_tier_manager().
+[T+   3.0s] --enable-cpu-offload: routing CPU/DDR4-resident (issue #33) attivato via GCSGWorker.configure_cpu_offload(True).
+[T+   3.0s] Loading /data/nvme/models/mixtral-instruct-awq via GCSGWorker (shadow execution active — issues #10/#16), quantization=awq, wire_tier_manager=True, cpu_offload_enabled=True...
+INFO 08-17 00:50:51 config.py:280] Overriding HF config with {'head_dim': 128}
+`torch_dtype` is deprecated! Use `dtype` instead!
+INFO 08-17 00:50:57 config.py:510] This model supports multiple tasks: {'score', 'embed', 'classify', 'reward', 'generate'}. Defaulting to 'generate'.
+INFO 08-17 00:50:57 awq_marlin.py:113] Detected that the model can run with awq_marlin, however you specified quantization=awq explicitly, so forcing awq. Use quantization=awq_marlin for faster inference
+WARNING 08-17 00:50:57 config.py:588] awq quantization is not fully optimized yet. The speed can be slower than non-quantized models.
+WARNING 08-17 00:50:57 cuda.py:98] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+WARNING 08-17 00:50:57 config.py:642] Async output processing is not supported on the current platform type cuda.
+INFO 08-17 00:50:57 llm_engine.py:234] Initializing an LLM engine (v0.6.6.post1) with config: model='/data/nvme/models/mixtral-instruct-awq', speculative_config=None, tokenizer='/data/nvme/models/mixtral-instruct-awq', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=3328, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=awq, enforce_eager=True, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=/data/nvme/models/mixtral-instruct-awq, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=False, chunked_prefill_enabled=False, use_async_output_proc=False, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"candidate_compile_sizes":[],"compile_sizes":[],"capture_sizes":[],"max_capture_size":0}, use_cached_outputs=False, 
+INFO 08-17 00:50:59 selector.py:120] Using Flash Attention backend.
+INFO 08-17 00:51:00 model_runner.py:1094] Starting to load model /data/nvme/models/mixtral-instruct-awq...
+Loading safetensors checkpoint shards:   0% Completed | 0/3 [00:00<?, ?it/s]
+[T+  30.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+  60.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+  90.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 120.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 150.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 180.0s] heartbeat — processo ancora vivo, in attesa del prossimo log
+[T+ 210.0s] heartbeat — processo ancora vivo, in attesa del prossimo log

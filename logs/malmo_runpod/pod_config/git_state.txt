@@ -1,0 +1,3 @@
+commit=ddbcc01e0ae5b8dd91b3a020f8063a5285f31d9f
+date=Mon Aug 17 02:22:04 2026 +0200
+msg=Issue #33: log the Malmo RunPod pod setup before the real test run

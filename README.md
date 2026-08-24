@@ -4,7 +4,7 @@ A heterogeneous multi-tier memory fabric for MoE and LLM inference. Hot AI objec
 
 Developed under the internal codename **OSX** ("Operating System for Experts") — a system-level framework for managing the lifecycle of experts in Mixture-of-Experts (MoE) large language models. It treats experts as first-class objects governed by a dedicated runtime, with hierarchical memory placement, predictive prefetching, gating-aware scheduling, and adaptive replication.
 
-> *Current release: **Tekniska** (v0.5.0-dev) — August 13, 2026 — previous: Oskarshamn (v0.4.0-dev), Eketorp (v0.3.0-dev), Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev). Sprint 4 complete; Sprint 5 (PoC delivery + paper, codename **Berg**) in planning — see [`osx-poc/reports/sprint5_berg_plan.md`](osx-poc/reports/sprint5_berg_plan.md).*
+> *Current release: **Tekniska** (v0.5.0-dev), last updated August 17, 2026 — previous: Oskarshamn (v0.4.0-dev), Eketorp (v0.3.0-dev), Möllstorp (v0.2.0-dev), Karlshamn (v0.1.0-dev). Sprint 4 complete; Sprint 5 (PoC delivery + paper, codename **Berg**, in progress since Aug 13) — see [`osx-poc/reports/sprint5_berg_plan.md`](osx-poc/reports/sprint5_berg_plan.md). Issue #33 (DDR4 compute-offload tier), opened mid-Berg, has correctness closed and performance measured but open — see Sprint 5 below and PR [#42](https://github.com/danielesalpietro/vMemoryFabric/pull/42).*
 >
 > *Related work (sub-project **Marstrand**): how vMemoryFabric's paged memory fabric compares to Petals (P2P pipeline parallelism) and ExLlamaV2/V3/tabbyAPI (local heterogeneous multi-GPU split) — see [`osx-poc/reports/related_work_petals_exllama.md`](osx-poc/reports/related_work_petals_exllama.md), plus a concrete component-reuse assessment against this repo's actual code in [`osx-poc/reports/component_reuse_analysis.md`](osx-poc/reports/component_reuse_analysis.md) (both Italian) — tracked as issue [#32](https://github.com/danielesalpietro/vMemoryFabric/issues/32).*
 
@@ -117,8 +117,12 @@ vMemoryFabric/                  (repo root)
 │   └── workflows/
 │       └── ci.yml              # cpu-tests (push/PR) + full-gpu-tests (manual)
 │
-├── logs/                        # run logs/artifacts, one subfolder per sprint
-│   └── sprint4_tekniska/        #   regression/, subgoal6/, marlin_mmlu/, mmlu/, bench_tier_pod/, smoke_test/, pod_config/, misc/, logbook_20260812_1344/
+├── logs/                        # run logs/artifacts, one subfolder per sprint/pod session
+│   ├── sprint4_tekniska/        #   regression/, subgoal6/, marlin_mmlu/, mmlu/, bench_tier_pod/, smoke_test/, pod_config/, misc/, logbook_20260812_1344/
+│   ├── malmo_runpod/            #   issue #33 — first real cpu-offload correctness run (RunPod RTX A6000)
+│   ├── z8_local/                #   issue #33 — Z8 local telemetry (host/GPU/PCIe samplers)
+│   ├── runpod_cpu_offload_20260817/            # issue #33 — first completed cpu-offload run + thread A/B test
+│   └── runpod_perf_framework_validation_20260817/  # issue #33 — 3-host perf-test/tuning validation + COMPARISON_ANALYSIS.md
 │
 └── osx-poc/                    # PoC implementation — everything below is here, not repo root
     ├── Makefile
@@ -145,11 +149,19 @@ vMemoryFabric/                  (repo root)
     ├── tests/
     │   ├── test_eat.py
     │   ├── test_tier.py      #   TestGPUTransfer marked @pytest.mark.gpu
-    │   └── test_scheduler.py
+    │   ├── test_scheduler.py
+    │   ├── test_cpu_kernel.py            # issue #33 — CPU shadow-expert kernel
+    │   ├── test_perf_test_hardware.py    # issue #33 — perf-test framework unit tests
+    │   └── test_perf_tuning_report.py    # issue #33 — perf-tuning framework unit tests
     │
     ├── benchmarks/
-    │   ├── bench_eat.py      # Sprint 1 (Möllstorp) — implemented
-    │   └── bench_tier.py     # Sprint 2 (Eketorp) — implemented
+    │   ├── bench_eat.py           # Sprint 1 (Möllstorp) — implemented
+    │   ├── bench_tier.py          # Sprint 2 (Eketorp) — implemented
+    │   ├── bench_cpu_kernel.py    # issue #33 — CPU forward throughput
+    │   ├── bench_route_forward.py # issue #33 — dispatch overhead vs. compute
+    │   ├── bench_hybrid.py        # issue #33 — aggregate GPU/CPU-offload impact
+    │   ├── perf_test_hardware.py  # issue #33 — reusable CPU/RAM/GPU/PCIe characterization (`make perf-test-hardware`)
+    │   └── perf_tuning_report.py  # issue #33 — derives tuning recommendations from the above (`make perf-tuning-report`)
     │
     ├── scripts/
     │   └── smoke_test.py     # Hardware + env validation — 13/13 passing
@@ -170,7 +182,7 @@ vMemoryFabric/                  (repo root)
 | 2      | M2 — Tier Manager      | 5–6 | ✅ **Eketorp** (~85%) |
 | 3      | M3 — Expert Scheduler  | 7–8 | ✅ **Oskarshamn** (100%) — merged into `develop` 2026-08-14 (PR #9) |
 | 4      | Integration + benchmarks | 9–12 | ✅ **Tekniska** (100%) — merged into `develop` 2026-08-14 (PR #29) |
-| 5      | PoC delivery + paper   | 13–16 | 🟡 planning — **Berg** |
+| 5      | PoC delivery + paper   | 13–16 | 🟡 in progress — **Berg** (RLock/#2/#23 closed; issue #33 CPU-offload tier: correctness closed, performance open) |
 | 6      | Telemetry + observability dashboard | TBD | 🔲 pending (~10%) — **Stockholm** |
 | —      | Component reuse & upstream monitoring (Petals/ExLlamaV2/V3/tabbyAPI) | — | 🟡 research phase — **Marstrand** (issue [#32](https://github.com/danielesalpietro/vMemoryFabric/issues/32)) |
 
@@ -402,6 +414,34 @@ sandbox CI and on real hardware (`Z8-G4-RTX3090`, `full-gpu-tests` run
 `osx-poc/reports/poc_final_report.md` §1.2 for the full before/after
 numbers. #2 and #23 are closed.
 
+**Issue #33 — DDR4 compute-offload tier**, exploratory work opened
+mid-Berg (2026-08-16) and substantial by the time this README caught up
+with it (~22 working sessions, `osx-poc/LOGBOOK_ISSUE33.MD`): a
+CPU/DDR4-resident shadow-expert path for cold MoE experts, kept
+entirely opt-in and off by default (`GCSGWorker(enable_cpu_offload=...)`,
+zero behavior change unless enabled). **Correctness is closed**:
+`_ShadowExpertINT4` needed no new CPU kernel (device-agnostic by
+construction), and a CPU-side AWQ dequant path was added for the
+project's real quantized checkpoint (path 1 alone never touches it) —
+verified numerically against the real CUDA AWQ kernel, then on real
+hardware across three independent GPU-only/CPU-only/mixed comparisons,
+all landing at identical accuracy and identical shadow-activation
+counts. **Performance is not production-ready**: the CPU forward is
+17–570× slower than GPU, depending on host — root-caused to a
+genuinely memory-bandwidth-bound single-row GEMV (not a config bug),
+backed by a new reusable characterization tool
+(`benchmarks/perf_test_hardware.py` + `perf_tuning_report.py`,
+`make perf-test-hardware`/`perf-tuning-report`, 38 unit tests)
+validated on three real hosts — see
+[`logs/runpod_perf_framework_validation_20260817/COMPARISON_ANALYSIS.md`](logs/runpod_perf_framework_validation_20260817/COMPARISON_ANALYSIS.md).
+Counter-intuitive finding from that comparison: newer hardware made the
+gap *worse*, not better, on the one H200 pod measured — see issue #33's
+row in "Known limitations / open issues" below and follow-on issue
+[#45](https://github.com/danielesalpietro/vMemoryFabric/issues/45).
+Branch `claude/ddr4-ram-processing-unzseh`, PR
+[#42](https://github.com/danielesalpietro/vMemoryFabric/pull/42) into
+`develop`, open — not yet merged.
+
 Sprint 6 (Stockholm) is a new leg, added without reordering or reweighting
 Sprints 0–5 above — those stay exactly as planned. Named deliberately:
 Stockholm is the seat of the Swedish government, and this sprint's job is
@@ -478,14 +518,16 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#3](https://github.com/danielesalpietro/vMemoryFabric/issues/3) | `bench_tier.py` DDR4→VRAM p95/p99 skewed by CUDA cold-start | No warm-up iteration before timing |
 | ~~[#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4)~~ | `BloomFilter.remove_expert()` unimplemented | **Closed 2026-08-12** — fixed with a Counting Bloom Filter, then superseded hours later when #1's re-measurement led to removing the Bloom filter entirely; see Sprint 1 above |
 | [#5](https://github.com/danielesalpietro/vMemoryFabric/issues/5) | No CUDA stream pipelining in `GPUTransfer` | Deferred since Sprint 0, needs real compute to overlap with |
-| [#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6) | No `pyproject.toml`/`ruff.toml` | Pre-existing style debt across the whole codebase |
+| ~~[#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6)~~ | No `pyproject.toml`/`ruff.toml` | **Closed 2026-08-14** — `pyproject.toml` added with a deliberate rule set (PR #11), plus a repo-wide `ruff --fix` pass; not reflected here until this pass, a Sprint 5 issue-triage gap of its own |
 | [#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7) | PMEM (EMH-2) integration | Blocked on hardware availability |
 | [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival |
 | [#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12) | `make lint`/`test`/`bench` fail on relative paths — container `WORKDIR` (`/workspace`) doesn't match `osx-poc/`'s relative paths | Workaround in use everywhere: `docker compose run --rm osx-dev bash -c "cd osx-poc && ..."` |
+| [#41](https://github.com/danielesalpietro/vMemoryFabric/issues/41) | Self-hosted runner (`Z8-G4-RTX3090`) `D:` drive at 83% full (395/477 GB), 81 GB free | Mostly unrelated Docker images/volumes from other projects sharing the box, not vMemoryFabric's own ~49 GB volume — real risk to `full-gpu-tests`/local iteration if it fills further, not yet acted on |
 | ~~[#17](https://github.com/danielesalpietro/vMemoryFabric/issues/17)~~ | `TierManager`/`EAT` (M1/M2) not in the shadow pool's actual data path — `GCSGWorker` used vLLM's `cpu_offload_gb` directly | **Resolved 2026-08-13**: all three shadow-pool paths (AWQ, Marlin, path 1) wired/exercised and verified on real hardware (Sprint 4, complete — see roadmap above), each with its own real bug found and fixed along the way. The last open gap — an MMLU quality number for Marlin specifically routed through TierManager — is now closed too: 412/570 (72.28%), matching the historical Marlin baseline exactly (`logs/sprint4_tekniska/marlin_mmlu/`). Getting there required a small fix to `eval_mmlu_gcsg.py`, which had `--wire-tier-manager` silently forcing `quantization=awq` (stale from before Marlin was wired) — added an explicit `--quantization` flag. Promotion-latency measurement done. Issue #2 (RLock contention) decided separately, not a blocker |
 | [#18](https://github.com/danielesalpietro/vMemoryFabric/issues/18) | No environment fingerprint pre-check — `OMP_NUM_THREADS`/`shm_size`/GPU model assumed, not verified | Hit for real deploying to RunPod: `OMP_NUM_THREADS=8` fixed regardless of real vCPU count, `docker-compose.yml`'s `shm_size` doesn't apply outside local `docker compose` |
+| [#33](https://github.com/danielesalpietro/vMemoryFabric/issues/33) | GCSG CPU-offload tier (DDR4-resident shadow experts): correctness proven, performance not production-ready | Opt-in, default off, zero risk to the production path. Correctness identical across GPU-only/CPU-only/mixed on real hardware (same accuracy, same `shadow_activations` count) — but the CPU per-token forward is 17-570× slower than GPU depending on host, a genuine memory-bandwidth-bound GEMV (not a config bug, confirmed by a reusable performance-test/tuning framework — `make perf-test-hardware`/`perf-tuning-report` — validated on three real hosts). Full trail: `osx-poc/LOGBOOK_ISSUE33.MD`; follow-on hardware question: [#45](https://github.com/danielesalpietro/vMemoryFabric/issues/45) |
 
-**Closed:** [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) (2026-08-11) — GCSG shadow-execution crash and the related batch-composition slowdown, both root-caused to WSL2/CUDA pageable-memory offload behavior (structural, upstream-confirmed, not a project bug). Full trail: `osx-poc/reports/gcsg_shadow_execution_report.md`. [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) (2026-08-12) — `BloomFilter.remove_expert()` implemented for real (Counting Bloom Filter, replaces `pybloom_live`) and wired into `EAT.evict()`, which never called it before. [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) (2026-08-12, same day) — re-measuring against #4's new implementation showed lookup latency got *worse*, not better, settling the question: the Bloom filter is removed from `EAT` entirely, not kept as an unjustified fast-path (which also makes #4's fix moot, but it stays recorded as its own closed issue — the bug it fixed was real while the Bloom filter still existed). Full trail: `osx-poc/LOGBOOK.md`, 2026-08-12 "issue #4 actually fixed" and "Bloom filter removed" entries. [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2)/[#23](https://github.com/danielesalpietro/vMemoryFabric/issues/23) (2026-08-13) — `RLock` contention fixed for real: selectable `locking_strategy` on `ExpertAccessTable` (`single`/`striped`/`lockfree_read`), `lockfree_read` now the default, ~700-900× p99 improvement confirmed on both sandbox CI and the `Z8-G4-RTX3090` self-hosted runner. Full trail: `osx-poc/LOGBOOK.md`, 2026-08-13 entry; `osx-poc/reports/poc_final_report.md` §1.2.
+**Closed:** [#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6) (2026-08-14) — `pyproject.toml` added with a deliberate ruff rule set (PR #11), plus a one-time repo-wide `ruff --fix` pass, separated from functional PRs. [#10](https://github.com/danielesalpietro/vMemoryFabric/issues/10)/[#16](https://github.com/danielesalpietro/vMemoryFabric/issues/16) (2026-08-11) — GCSG shadow-execution crash and the related batch-composition slowdown, both root-caused to WSL2/CUDA pageable-memory offload behavior (structural, upstream-confirmed, not a project bug). Full trail: `osx-poc/reports/gcsg_shadow_execution_report.md`. [#4](https://github.com/danielesalpietro/vMemoryFabric/issues/4) (2026-08-12) — `BloomFilter.remove_expert()` implemented for real (Counting Bloom Filter, replaces `pybloom_live`) and wired into `EAT.evict()`, which never called it before. [#1](https://github.com/danielesalpietro/vMemoryFabric/issues/1) (2026-08-12, same day) — re-measuring against #4's new implementation showed lookup latency got *worse*, not better, settling the question: the Bloom filter is removed from `EAT` entirely, not kept as an unjustified fast-path (which also makes #4's fix moot, but it stays recorded as its own closed issue — the bug it fixed was real while the Bloom filter still existed). Full trail: `osx-poc/LOGBOOK.md`, 2026-08-12 "issue #4 actually fixed" and "Bloom filter removed" entries. [#2](https://github.com/danielesalpietro/vMemoryFabric/issues/2)/[#23](https://github.com/danielesalpietro/vMemoryFabric/issues/23) (2026-08-13) — `RLock` contention fixed for real: selectable `locking_strategy` on `ExpertAccessTable` (`single`/`striped`/`lockfree_read`), `lockfree_read` now the default, ~700-900× p99 improvement confirmed on both sandbox CI and the `Z8-G4-RTX3090` self-hosted runner. Full trail: `osx-poc/LOGBOOK.md`, 2026-08-13 entry; `osx-poc/reports/poc_final_report.md` §1.2.
 
 ---
 
