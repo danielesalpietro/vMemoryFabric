@@ -1,7 +1,9 @@
 """M2 — EMH Tier Manager — orchestratore principale.
 
-Coordina promozione/evizione shard tra i tier EMH disponibili in dev:
-    NVMe (EMH-3) → DDR4 (EMH-1c) → VRAM RTX 3090 (EMH-1a)
+Coordina promozione/evizione shard tra i tier EMH disponibili:
+    NVMe (EMH-3) → DDR4 (EMH-1c) → VRAM RTX 3090 (EMH-1a)   [sempre]
+    NVMe (EMH-3) → PMEM (EMH-2) → DDR4 (EMH-1c)              [solo se
+        pmem_path impostato — host con mount DAX reale, vedi pmem.py]
 
 Interfacce verso altri moduli:
     ← EAT  (M1): lettura tier corrente, aggiornamento post-transizione
@@ -19,6 +21,7 @@ from eat.types import ExpertID, ShardID, Tier
 
 from .gpu import GPUTransfer
 from .io import AsyncNVMeIO
+from .pmem import PMEMTransfer
 from .policies import EvictionCandidate, LRUPolicy, SEEPolicy
 
 log = logging.getLogger(__name__)
@@ -34,6 +37,15 @@ class TierManager:
         nvme_path:  Path del volume NVMe cold storage.
         gpu_device: CUDA device ID (0 = RTX 3090).
         use_see:    Se True usa SEE policy; altrimenti LRU puro.
+        pmem_path:  Path del mount DAX per EMH-2 (es. /data/pmem nel
+                    container). None (default) = tier PMEM disabilitato,
+                    stesso comportamento di prima di questo parametro —
+                    la maggior parte degli ambienti dev (Docker-on-
+                    Windows/WSL2, RunPod) non ha PMEM. Vedi tier/pmem.py
+                    e osx-poc/LOGBOOK_NEW_Z8.md "passo 4".
+        pmem_n_slots: Slot pre-allocati nel pool PMEM, solo se pmem_path
+                    è impostato. Default piccolo (dev/bench), non
+                    dimensionato per un pool di produzione.
     """
 
     def __init__(
@@ -42,6 +54,8 @@ class TierManager:
         nvme_path: str = "/data/nvme",
         gpu_device: int = 0,
         use_see: bool = True,
+        pmem_path: str | None = None,
+        pmem_n_slots: int = 4,
     ) -> None:
         self._eat    = eat
         self._io     = AsyncNVMeIO(base_path=nvme_path)
@@ -52,6 +66,14 @@ class TierManager:
         # e quale torch.Tensor VRAM possiede quale shard.
         self._slots: dict[_Key, int] = {}
         self._vram: dict[_Key, "torch.Tensor"] = {}
+        # EMH-2 (PMEM): stesso pattern di self._slots, ma per gli slot del
+        # pool PMEM. self._pmem è None se il tier non è disponibile su
+        # questo host — ogni hop NVME<->PMEM/PMEM<->DDR4 verifica esplicito.
+        self._pmem: PMEMTransfer | None = None
+        self._pmem_slots: dict[_Key, int] = {}
+        if pmem_path is not None:
+            self._pmem = PMEMTransfer(mount_path=pmem_path, n_slots=pmem_n_slots)
+            self._pmem.initialize()
         # Lock per-key: serializza l'intera transizione di tier per uno
         # stesso shard. Senza questo, due promote() concorrenti sulla
         # stessa chiave vedrebbero entrambi lo stesso tier di partenza
@@ -70,6 +92,13 @@ class TierManager:
         copia scollegata."""
         return self._eat
 
+    @property
+    def pmem(self) -> PMEMTransfer | None:
+        """Pool PMEM (EMH-2) sottostante, o None se questo host non ha
+        pmem_path impostato — esposta per lo shutdown esplicito da parte
+        del chiamante (es. benchmark), stesso pattern di `eat` sopra."""
+        return self._pmem
+
     def _lock_for(self, key: _Key) -> asyncio.Lock:
         """Lock asyncio per-key, creato lazy alla prima transizione su quella key."""
         lock = self._locks.get(key)
@@ -84,8 +113,15 @@ class TierManager:
                       target_tier: Tier) -> float:
         """Promuove uno shard verso un tier superiore.
 
-        Percorso supportato in dev: NVME → DDR4 → VRAM.
-        PMEM (tra DDR4 e NVME) sarà inserito quando disponibile.
+        Percorso base: NVME → DDR4 → VRAM (sempre disponibile).
+        Percorso EMH-2 (solo se self._pmem è impostato — vedi __init__):
+        NVME → PMEM (single-hop) e PMEM → DDR4 (single-hop). Non ancora
+        incatenato in un percorso NVME → PMEM → VRAM a due hop come
+        NVME → VRAM lo è per DDR4/VRAM sotto — il chiamante che vuole
+        PMEM come tappa intermedia verso VRAM chiama promote() due volte
+        (NVME→PMEM, poi PMEM→DDR4, poi DDR4→VRAM). NVME → DDR4 diretto
+        resta invariato e disponibile a prescindere da self._pmem: PMEM
+        è una rotta aggiuntiva, non una sostituzione.
 
         Args:
             expert_id:   ID expert.
@@ -117,6 +153,12 @@ class TierManager:
                 t1 = await self._nvme_to_ddr4(expert_id, shard_idx)
                 t2 = await self._ddr4_to_vram(expert_id, shard_idx)
                 return t1 + t2
+            if current == Tier.NVME and target_tier == Tier.PMEM:
+                if self._pmem is None:
+                    raise ValueError("tier PMEM non disponibile su questo host (pmem_path non impostato)")
+                return await self._nvme_to_pmem(expert_id, shard_idx)
+            if current == Tier.PMEM and target_tier == Tier.DDR4:
+                return await self._pmem_to_ddr4(expert_id, shard_idx)
             raise ValueError(
                 f"promote non supportata: {current.name} -> {target_tier.name}"
             )
@@ -135,6 +177,49 @@ class TierManager:
         buffer = self._eat.slab.get_buffer(slot_idx)
         buffer[: len(data)] = data
         self._slots[key] = slot_idx
+        self._eat.update_tier(expert_id, shard_idx, Tier.DDR4)
+        return time.monotonic() - t0
+
+    async def _nvme_to_pmem(self, expert_id: ExpertID, shard_idx: ShardID) -> float:
+        """NVMe → PMEM (EMH-2): stessa lettura di _nvme_to_ddr4(), scrive
+        nel pool PMEM (mmap DAX) invece che nel pool DDR4 (SlabAllocator).
+
+        Chiamata con il lock della key già posseduto da promote(), e solo
+        se self._pmem è impostato (verificato dal chiamante).
+
+        Returns: latenza in secondi.
+        """
+        key = (expert_id, shard_idx)
+        t0 = time.monotonic()
+        data = await self._io.read_shard(expert_id, shard_idx)
+        slot_idx = self._pmem.alloc(expert_id, shard_idx, len(data))
+        self._pmem.write(slot_idx, data)
+        self._pmem_slots[key] = slot_idx
+        self._eat.update_tier(expert_id, shard_idx, Tier.PMEM)
+        return time.monotonic() - t0
+
+    async def _pmem_to_ddr4(self, expert_id: ExpertID, shard_idx: ShardID) -> float:
+        """PMEM → DDR4: copia dal pool PMEM (mmap DAX, zero-copy read) al
+        pool DDR4 (SlabAllocator) — un vero memcpy, non I/O asincrono
+        come l'hop NVMe→DDR4 (niente da awaitare qui, la mmap è già
+        mappata in process; la funzione resta `async def` solo per
+        coerenza di firma con gli altri hop, non perché ceda il
+        controllo internamente).
+
+        Chiamata con il lock della key già posseduto da promote().
+
+        Returns: latenza in secondi.
+        """
+        key = (expert_id, shard_idx)
+        t0 = time.monotonic()
+        pmem_slot_idx = self._pmem_slots[key]
+        data = self._pmem.read(pmem_slot_idx)
+        ddr4_slot_idx = self._eat.slab.alloc(expert_id, shard_idx, len(data))
+        buffer = self._eat.slab.get_buffer(ddr4_slot_idx)
+        buffer[: len(data)] = data
+        self._pmem.free(pmem_slot_idx)
+        del self._pmem_slots[key]
+        self._slots[key] = ddr4_slot_idx
         self._eat.update_tier(expert_id, shard_idx, Tier.DDR4)
         return time.monotonic() - t0
 
@@ -282,9 +367,20 @@ class TierManager:
                 self._eat.update_tier(expert_id, shard_idx, Tier.NVME)
                 return
 
+            if current == Tier.PMEM:
+                if self._pmem is None:
+                    raise ValueError("tier PMEM non disponibile su questo host (pmem_path non impostato)")
+                slot_idx = self._pmem_slots[key]
+                buffer = self._pmem.read(slot_idx)
+                await self._io.write_shard(expert_id, shard_idx, buffer)
+                self._pmem.free(slot_idx)
+                del self._pmem_slots[key]
+                self._eat.update_tier(expert_id, shard_idx, Tier.NVME)
+                return
+
             raise ValueError(
                 f"evict non supportata da tier {current.name} "
-                "(solo VRAM->DDR4 o DDR4->NVME, single-hop)"
+                "(solo VRAM->DDR4, DDR4->NVME o PMEM->NVME, single-hop)"
             )
 
     async def evict_to_free_vram(self, target_free_bytes: int,

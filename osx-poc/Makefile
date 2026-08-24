@@ -58,6 +58,9 @@ bench-route-forward:
 bench-hybrid:
 	$(RUN) python benchmarks/bench_hybrid.py
 
+bench-pmem-tier:
+	$(RUN) python benchmarks/bench_pmem_tier.py
+
 # ── Performance framework (issue #33, riutilizzabile oltre l'issue) ────────────
 # perf-test-hardware caratterizza CPU/RAM/GPU/PCIe di questo host/pod;
 # perf-tuning-report legge quel JSON e produce raccomandazioni (thread count,
@@ -133,6 +136,7 @@ help:
 	@echo "  make test-cpu-kernel pytest issue #33 Fase 1 (CPU kernel, no GPU needed)"
 	@echo "  make bench        Benchmark M1 + M2"
 	@echo "  make bench-cpu-kernel  Benchmark issue #33 Fase 1 (CPU forward throughput)"
+	@echo "  make bench-pmem-tier  Benchmark EMH-2 PMEM (skip se nessun mount DAX)"
 	@echo "  make perf-test-hardware  Caratterizza CPU/RAM/GPU/PCIe di questo host/pod (issue #33)"
 	@echo "  make perf-tuning-report  Raccomandazioni (thread/RAM/cpu-offload) da perf-test-hardware"
 	@echo "  make gpu-repro-issue10  Diagnostic repros, issue #10 offload crash (manual, one at a time)"

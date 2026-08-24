@@ -9,15 +9,24 @@ hardware:
     vram_gb: 24
     pinned_memory: false          # non disponibile Docker/Windows
   pmem:
-    enabled: false                # deferred — non disponibile in dev
+    # false qui = default per la maggior parte degli ambienti dev
+    # (Docker-on-Windows/WSL2, RunPod) che non hanno un mount DAX. Non è
+    # più "deferred per mancanza di codice" (issue #7, chiuso): il tier
+    # esiste (src/tier/pmem.py, Tier.PMEM) ed è già usato su almeno un
+    # host reale (Z8 G4 bare-metal, osx-poc/LOGBOOK_NEW_Z8.md "passo 4")
+    # — path/enabled restano host-specific, non letti automaticamente da
+    # qui: il chiamante passa pmem_path esplicito a TierManager. Questo
+    # file resta il default "sicuro" per ambienti senza PMEM.
+    enabled: false
     path: null
   nvme:
     path: "/data/nvme"            # volume Docker montato
     use_io_uring: false           # non disponibile su WSL2/Windows Docker
 
 # ── EMH tiers attivi (dev) ────────────────────────────────────────────────────
-# Tier attivi: VRAM (0) → DDR4 (1) → NVMe (2)
-# PMEM (tra DDR4 e NVMe) deferred.
+# Tier attivi di default: VRAM (0) → DDR4 (1) → NVMe (2).
+# PMEM (3, tra DDR4 e NVMe) disponibile solo se hardware.pmem.enabled è
+# true E TierManager riceve pmem_path — vedi nota sopra.
 emh:
   tiers_active: [0, 1, 2]   # VRAM, DDR4, NVME
   shard_size_mb: 256
