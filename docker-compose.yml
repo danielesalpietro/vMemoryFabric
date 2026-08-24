@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     image: osx-poc:dev
     container_name: osx-dev
+    working_dir: /workspace/osx-poc
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=0          # RTX 3090 only
