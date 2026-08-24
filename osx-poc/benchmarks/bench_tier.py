@@ -127,15 +127,27 @@ async def bench_ddr4_to_vram() -> dict:
         # VRAM→VRAM sullo stesso shard.
         await mgr.promote(expert_id=0, shard_idx=_WARMUP_SHARD_IDX, target_tier=Tier.DDR4)
         await mgr.promote(expert_id=0, shard_idx=_WARMUP_SHARD_IDX, target_tier=Tier.VRAM)
+        await mgr.evict(expert_id=0, shard_idx=_WARMUP_SHARD_IDX)  # see issue #48
 
         for shard_idx in range(N_SHARDS):
             await mgr.promote(expert_id=0, shard_idx=shard_idx, target_tier=Tier.DDR4)
 
+        # Each VRAM slot is the fixed SHARD_SIZE_BYTES (256 MB) slab slot, not
+        # BENCH_SHARD_SIZE_BYTES (4 MB) — SlabAllocator.get_buffer() always
+        # returns the whole slot. With N_SHARDS=100 and nothing evicting the
+        # promoted tensor, this loop used to accumulate 100 x 256 MB = 25.6 GB
+        # of permanently-resident VRAM, exceeding a single RTX 3090's 24 GB
+        # capacity (guaranteed CUDA OOM, not host-specific — see issue #48).
+        # evict() after each timed sample keeps steady-state VRAM usage at
+        # ~1 shard, closer to how a real tier manager would behave, and runs
+        # outside the timed t0/latencies_us window so it doesn't skew the
+        # promotion latency being measured.
         latencies_us = []
         for shard_idx in range(N_SHARDS):
             t0 = time.perf_counter()
             await mgr.promote(expert_id=0, shard_idx=shard_idx, target_tier=Tier.VRAM)
             latencies_us.append((time.perf_counter() - t0) * 1e6)
+            await mgr.evict(expert_id=0, shard_idx=shard_idx)
 
         eat.shutdown()
         return {
