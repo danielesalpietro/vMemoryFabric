@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OSX Sprint 5 Review</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --paper: #EEF0F3;
+    --surface: #FFFFFF;
+    --sunken: #E3E6EC;
+    --ink: #1A1E27;
+    --ink-muted: #5B6472;
+    --ink-faint: #848D9C;
+    --line: #D6DAE2;
+    --accent: #A85A28;
+    --accent-ink: #7C4018;
+    --accent-soft: #F3E3D2;
+    --good: #2F7D5A;
+    --good-soft: #E1F0E7;
+    --warn: #A6740F;
+    --warn-soft: #F7EDD3;
+    --risk: #B23B3B;
+    --risk-soft: #F8E1E1;
+    --explore: #52579E;
+    --explore-soft: #E6E6F4;
+    --shadow: 0 1px 2px rgba(20,22,30,0.06), 0 8px 24px -12px rgba(20,22,30,0.18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #14161C;
+      --surface: #1B1E26;
+      --sunken: #22262F;
+      --ink: #E8EAF0;
+      --ink-muted: #A2A9B7;
+      --ink-faint: #767E8E;
+      --line: #323744;
+      --accent: #E0954F;
+      --accent-ink: #F0B37D;
+      --accent-soft: rgba(224,149,79,0.14);
+      --good: #63BE8E;
+      --good-soft: rgba(99,190,142,0.14);
+      --warn: #E0B94F;
+      --warn-soft: rgba(224,185,79,0.14);
+      --risk: #E27E7E;
+      --risk-soft: rgba(226,126,126,0.14);
+      --explore: #9498E0;
+      --explore-soft: rgba(148,152,224,0.16);
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -12px rgba(0,0,0,0.5);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #14161C;
+    --surface: #1B1E26;
+    --sunken: #22262F;
+    --ink: #E8EAF0;
+    --ink-muted: #A2A9B7;
+    --ink-faint: #767E8E;
+    --line: #323744;
+    --accent: #E0954F;
+    --accent-ink: #F0B37D;
+    --accent-soft: rgba(224,149,79,0.14);
+    --good: #63BE8E;
+    --good-soft: rgba(99,190,142,0.14);
+    --warn: #E0B94F;
+    --warn-soft: rgba(224,185,79,0.14);
+    --risk: #E27E7E;
+    --risk-soft: rgba(226,126,126,0.14);
+    --explore: #9498E0;
+    --explore-soft: rgba(148,152,224,0.16);
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -12px rgba(0,0,0,0.5);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+  }
+  ::selection { background: var(--accent-soft); color: var(--ink); }
+
+  a { color: var(--accent-ink); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible, .navlink:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px;
+  }
+
+  .mono { font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace; }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* ---------- Shell ---------- */
+  .shell {
+    max-width: 1160px;
+    margin: 0 auto;
+    padding: 0 24px;
+    display: grid;
+    grid-template-columns: 200px minmax(0,1fr);
+    gap: 56px;
+  }
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: 1fr; gap: 0; }
+  }
+
+  /* ---------- Rail nav ---------- */
+  .rail {
+    position: sticky;
+    top: 32px;
+    align-self: start;
+    padding-top: 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  @media (max-width: 860px) { .rail { display: none; } }
+  .rail-eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 10px 12px;
+  }
+  .navlink {
+    display: block;
+    padding: 7px 12px;
+    border-radius: 7px;
+    color: var(--ink-muted);
+    text-decoration: none;
+    font-size: 13.5px;
+    border-left: 2px solid transparent;
+  }
+  .navlink:hover { color: var(--ink); background: var(--surface); }
+
+  /* ---------- Header ---------- */
+  header.hero {
+    grid-column: 1 / -1;
+    padding: 64px 0 40px;
+    border-bottom: 1px solid var(--line);
+  }
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); display: inline-block; }
+  h1.title {
+    font-family: "Newsreader", Georgia, serif;
+    font-weight: 500;
+    font-size: clamp(2.1rem, 4.4vw, 3.1rem);
+    line-height: 1.08;
+    letter-spacing: -0.01em;
+    margin: 0 0 18px;
+    text-wrap: balance;
+    max-width: 20ch;
+  }
+  .dek {
+    font-size: 17px;
+    color: var(--ink-muted);
+    max-width: 62ch;
+    margin: 0 0 22px;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 22px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12.5px;
+    color: var(--ink-faint);
+  }
+  .meta-row b { color: var(--ink-muted); font-weight: 500; }
+
+  main { min-width: 0; padding-bottom: 90px; }
+
+  /* ---------- Stat dashboard ---------- */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 34px 0 8px;
+  }
+  .stat {
+    background: var(--surface);
+    padding: 18px 18px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .stat .n {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 1.9rem;
+    font-weight: 600;
+    line-height: 1;
+  }
+  .stat .n small { font-size: 0.95rem; font-weight: 500; color: var(--ink-faint); }
+  .stat .l { font-size: 12px; color: var(--ink-muted); line-height: 1.35; }
+  .stat.risk .n { color: var(--risk); }
+  .stat.warn .n { color: var(--warn); }
+  .stat.good .n { color: var(--good); }
+
+  /* ---------- Sections ---------- */
+  section { padding: 56px 0 0; scroll-margin-top: 24px; }
+  section:first-of-type { padding-top: 44px; }
+  .s-eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 6px;
+  }
+  h2 {
+    font-family: "Newsreader", Georgia, serif;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 1.7rem;
+    margin: 0 0 20px;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-weight: 600;
+    font-size: 1.02rem;
+    margin: 30px 0 10px;
+    color: var(--ink);
+  }
+  p { margin: 0 0 14px; max-width: 72ch; }
+  p.lede { font-size: 16.5px; color: var(--ink-muted); max-width: 68ch; }
+  ul, ol { max-width: 70ch; padding-left: 22px; margin: 0 0 16px; }
+  li { margin-bottom: 7px; }
+  li::marker { color: var(--ink-faint); }
+  strong { font-weight: 600; }
+  code {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.88em;
+    background: var(--sunken);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+  }
+
+  /* ---------- Pills / badges ---------- */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    padding: 3px 9px 3px 8px;
+    border-radius: 100px;
+    white-space: nowrap;
+    line-height: 1.5;
+  }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+  .pill.good { background: var(--good-soft); color: var(--good); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.risk { background: var(--risk-soft); color: var(--risk); }
+  .pill.explore { background: var(--explore-soft); color: var(--explore); }
+  .pill.neutral { background: var(--sunken); color: var(--ink-muted); }
+
+  /* ---------- Callout ---------- */
+  .callout {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    background: var(--surface);
+    border-radius: 0 10px 10px 0;
+    padding: 18px 22px;
+    margin: 22px 0 26px;
+    box-shadow: var(--shadow);
+  }
+  .callout.risk { border-left-color: var(--risk); }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .k { font-weight: 600; display: block; margin-bottom: 6px; }
+
+  /* ---------- Sprint timeline ---------- */
+  .timeline-wrap {
+    margin: 26px 0 8px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 22px 16px;
+    box-shadow: var(--shadow);
+  }
+  .timeline-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--ink-faint);
+    margin-bottom: 12px;
+  }
+  .timeline-bar {
+    position: relative;
+    height: 34px;
+    background: var(--sunken);
+    border-radius: 8px;
+    display: flex;
+    overflow: hidden;
+  }
+  .tl-seg { position: relative; display: flex; align-items: center; justify-content: center; font-family:"IBM Plex Mono",monospace; font-size:11px; color: var(--surface); }
+  .tl-seg span { position: relative; z-index: 2; }
+  .tl-seg.w1 { width: 36.8%; background: #8A9199; }
+  .tl-seg.w2 { width: 36.8%; background: var(--ink-muted); }
+  .tl-seg.w3 { width: 26.4%; background: var(--risk); color: var(--surface); }
+  .tl-today {
+    position: absolute; top: -6px; bottom: -6px; width: 2px; background: var(--accent);
+    left: 68.4%;
+  }
+  .tl-today::after {
+    content: "oggi · 25 ago";
+    position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--accent-ink);
+    white-space: nowrap; font-weight: 600;
+  }
+  .timeline-legend { display:flex; flex-wrap:wrap; gap: 16px; margin-top: 14px; font-size: 12px; color: var(--ink-muted); }
+  .timeline-legend .sw { display:inline-flex; align-items:center; gap:6px; }
+  .timeline-legend .sw i { width:10px; height:10px; border-radius:3px; display:inline-block; }
+
+  /* ---------- Target cards ---------- */
+  .targets {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 14px;
+    margin: 22px 0 8px;
+  }
+  .tcard {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .tcard h4 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.35; }
+  .tcard .result { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--ink-muted); }
+  .tcard .margin { font-size: 12px; color: var(--ink-faint); }
+
+  /* ---------- Tables ---------- */
+  .tbl-wrap { overflow-x: auto; margin: 18px 0 28px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13.5px; }
+  thead th {
+    text-align: left; font-family: "IBM Plex Mono", monospace; font-weight: 500;
+    font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-faint);
+    padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--sunken);
+    white-space: nowrap;
+  }
+  tbody td { padding: 12px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--sunken); }
+  td.num, td.id { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--ink-muted); white-space: nowrap; }
+  td.why { color: var(--ink-muted); font-size: 13px; }
+
+  /* ---------- Recommendation list ---------- */
+  .reco { display: flex; flex-direction: column; gap: 12px; margin: 20px 0 10px; }
+  .reco-item {
+    display: grid; grid-template-columns: 30px 1fr; gap: 14px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; box-shadow: var(--shadow);
+  }
+  .reco-item .rank {
+    font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 13px;
+    color: var(--accent-ink); background: var(--accent-soft);
+    width: 30px; height: 30px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .reco-item h4 { margin: 0 0 5px; font-size: 14.5px; font-weight: 600; }
+  .reco-item p { margin: 0; font-size: 13.5px; color: var(--ink-muted); }
+
+  /* ---------- Strength list ---------- */
+  .strengths { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); gap: 14px; margin: 20px 0 8px; }
+  .strength { border: 1px solid var(--line); border-left: 3px solid var(--good); background: var(--surface); border-radius: 0 10px 10px 0; padding: 15px 18px; box-shadow: var(--shadow); }
+  .strength h4 { margin: 0 0 6px; font-size: 13.5px; font-weight: 600; }
+  .strength p { margin: 0; font-size: 13px; color: var(--ink-muted); }
+
+  hr.div { border: none; border-top: 1px solid var(--line); margin: 46px 0; }
+
+  footer {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--line);
+    padding: 28px 0 60px;
+    font-size: 12.5px;
+    color: var(--ink-faint);
+  }
+  footer .src { font-family: "IBM Plex Mono", monospace; }
+
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  html { scroll-behavior: smooth; }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <header class="hero">
+    <div class="eyebrow"><span class="dot"></span>Project Plan Review — danielesalpietro/vMemoryFabric</div>
+    <h1 class="title">OSX Sprint 5 Review</h1>
+    <p class="dek">Lettura incrociata di README, CHANGELOG, dei report tecnici e delle 39 issue GitHub (26 aperte, 13 chiuse) del progetto OSX / vMemoryFabric, alla vigilia del target auto-imposto di fine Sprint 5.</p>
+    <div class="meta-row">
+      <span><b>Data review:</b> 25 ago 2026</span>
+      <span><b>Release corrente:</b> Tekniska v0.5.0-dev · Berg v0.6.0-dev in corso</span>
+      <span><b>Sprint attiva:</b> 5 — Berg (PoC delivery + paper)</span>
+      <span><b>Target dichiarato:</b> 31 ago 2026</span>
+    </div>
+
+    <div class="stats">
+      <div class="stat risk">
+        <div class="n tnum">6<small>&nbsp;giorni</small></div>
+        <div class="l">al target auto-dichiarato del paper (31 ago) — nessuna deadline esterna, ma trattato come vincolo reale nel piano</div>
+      </div>
+      <div class="stat warn">
+        <div class="n tnum">3<small>/4</small></div>
+        <div class="l">target non funzionali del PoC pienamente confermati — il quarto (PT-PEP p99) ha evidenza debole</div>
+      </div>
+      <div class="stat">
+        <div class="n tnum">26</div>
+        <div class="l">issue aperte su GitHub, contro 13 chiuse dall'avvio del progetto (7 ago)</div>
+      </div>
+      <div class="stat risk">
+        <div class="n tnum">16<small>/26</small></div>
+        <div class="l">issue aperte create nella finestra 16&ndash;24 ago — nella settimana che il piano assegnava al paper</div>
+      </div>
+      <div class="stat">
+        <div class="n tnum">0</div>
+        <div class="l">file prodotti finora nel filone B4 (infrastruttura paper: <code>osx-poc/paper/</code> non esiste ancora)</div>
+      </div>
+    </div>
+  </header>
+
+  <nav class="rail" aria-label="Sezioni">
+    <div class="rail-eyebrow">Indice</div>
+    <a class="navlink" href="#sintesi">Sintesi</a>
+    <a class="navlink" href="#roadmap">Roadmap vs. realtà</a>
+    <a class="navlink" href="#target">Target non funzionali</a>
+    <a class="navlink" href="#rischio">Rischio principale</a>
+    <a class="navlink" href="#backlog">Triage backlog</a>
+    <a class="navlink" href="#mergiato">Mergiato vs. dichiarato</a>
+    <a class="navlink" href="#raccomandazioni">Raccomandazioni</a>
+    <a class="navlink" href="#punti-forza">Punti di forza</a>
+  </nav>
+
+  <main>
+
+    <section id="sintesi">
+      <p class="s-eyebrow">01 — Sintesi</p>
+      <h2>Il PoC è tecnicamente solido; il piano di consegna sta scivolando</h2>
+      <p class="lede">Il lavoro applicativo (M1/M2/M3, i quattro sprint 0&ndash;4) è completo, mersato e verificato su hardware reale con una disciplina metodologica superiore alla media — misure ripetute, risultati negativi dichiarati onestamente, nessun numero sovrascritto silenziosamente. Il rischio non è nel codice: è nel piano stesso della Sprint 5 (Berg), che a sei giorni dal proprio target dichiarato ha completato la metà a bassa incertezza (delivery del PoC) e quasi nulla della metà a rischio più alto (il paper), mentre il tempo è stato assorbito da tre filoni di lavoro non previsti dal piano.</p>
+      <p>Questa review copre: lo stato reale della roadmap rispetto a quanto dichiarato in README/CHANGELOG; i quattro target di accettazione del PoC; il rischio principale identificato (deriva del Filone B / paper); un triage del backlog di 26 issue aperte per categoria e urgenza; un confronto puntuale tra ciò che i documenti dichiarano chiuso e ciò che risulta davvero mersato su <code>develop</code>; e una lista di raccomandazioni ordinate per priorità.</p>
+    </section>
+
+    <section id="roadmap">
+      <p class="s-eyebrow">02 — Roadmap vs. realtà</p>
+      <h2>Sette filoni paralleli, uno dei quali è il piano stesso</h2>
+      <p>La tabella roadmap del README riporta Sprint 0&ndash;4 come completi e mersati (PR #9, #29, #25, #26), Sprint 5 (Berg) in corso, Sprint 6 (Stockholm, telemetria) in attesa, e Marstrand come filone di ricerca parallelo sul component-reuse rispetto a Petals/ExLlamaV2/V3/tabbyAPI. Fin qui coerente con quanto verificato su GitHub.</p>
+      <p>Il punto debole è dentro la Sprint 5 stessa: il piano dichiarato in <code>sprint5_berg_plan.md</code> (12 ago) definisce due filoni dipendenti ma paralleli — <strong>Filone A</strong> (PoC delivery: triage issue, report finale, riproducibilità, release) e <strong>Filone B</strong> (paper: related-work survey, outline, scrittura, revisione, submission arXiv) — con un target dichiarato di fine agosto. Lo stato reale a oggi:</p>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Voce</th><th>Filone</th><th>Stato dichiarato nel piano</th><th>Stato verificato</th></tr></thead>
+          <tbody>
+            <tr><td class="id">A1</td><td>A — Delivery</td><td>Triage issue #3/#5/#6/#7/#8/#12/#18</td><td><span class="pill good">quasi completo</span> #3, #6, #12 chiuse; #18 ancora aperta</td></tr>
+            <tr><td class="id">A2</td><td>A — Delivery</td><td>PoC Final Report consolidato</td><td><span class="pill good">fatto</span> pubblicato 13 ago, unica fonte per i numeri del paper</td></tr>
+            <tr><td class="id">A3</td><td>A — Delivery</td><td>Script repro end-to-end, ambiente di riferimento fissato</td><td><span class="pill warn">non confermato</span> nessuna evidenza nei documenti letti che sia stato completato</td></tr>
+            <tr><td class="id">A4</td><td>A — Delivery</td><td>Tag release (v0.5.0 o v1.0.0-poc, da decidere)</td><td><span class="pill risk">non fatto</span> banner README ancora su Tekniska v0.5.0-dev; nessun tag Berg</td></tr>
+            <tr><td class="id">A5</td><td>A — Delivery</td><td>Gate di uscita (4 condizioni congiunte)</td><td><span class="pill risk">non raggiungibile</span> dipende da A3/A4, entrambe aperte</td></tr>
+            <tr><td class="id">B0&ndash;B2</td><td>B — Paper</td><td>Venue, outline, materiale da riusare</td><td><span class="pill good">fatto</span> deciso 12 ago: arXiv, stile ACM sigconf</td></tr>
+            <tr><td class="id">B3</td><td>B — Paper</td><td>Related-work survey — <em>"la voce a rischio più alto, parte per prima"</em></td><td><span class="pill risk">fermo dal 13 ago</span> bibliografia di lavoro non verificata alla fonte; blocco esplicito auto-imposto ("non chiudere B3 senza aver letto FineMoE integralmente") non risolto</td></tr>
+            <tr><td class="id">B4</td><td>B — Paper</td><td>Infrastruttura LaTeX (<code>osx-poc/paper/</code>, sigconf, .bib)</td><td><span class="pill risk">non iniziato</span> directory inesistente, zero file <code>.tex</code> nel repo</td></tr>
+            <tr><td class="id">B5</td><td>B — Paper</td><td>Revisione interna del draft</td><td><span class="pill risk">non iniziabile</span> nessun draft esiste</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="timeline-wrap">
+        <div class="timeline-head"><span>Timeline Sprint 5 (Berg) — 12&ndash;31 ago 2026</span><span>3 settimane dichiarate</span></div>
+        <div class="timeline-bar">
+          <div class="tl-today"></div>
+          <div class="tl-seg w1"><span>Sett. 1 · 12&ndash;18</span></div>
+          <div class="tl-seg w2"><span>Sett. 2 · 19&ndash;25</span></div>
+          <div class="tl-seg w3"><span>Sett. 3 · 26&ndash;31</span></div>
+        </div>
+        <div class="timeline-legend">
+          <span class="sw"><i style="background:#8A9199"></i>Sett. 1 — A1 + avvio B3</span>
+          <span class="sw"><i style="background:var(--ink-muted)"></i>Sett. 2 — A2 + B3/grafici + draft</span>
+          <span class="sw"><i style="background:var(--risk)"></i>Sett. 3 — A3&ndash;A5 + B5 + submission arXiv</span>
+        </div>
+      </div>
+      <p style="font-size:13px; color:var(--ink-faint); margin-top:14px;">Oggi (25 ago) cade all'ultimo giorno della Settimana 2 — la settimana in cui il piano prevedeva "assemblaggio draft completo". Nessun draft, outline a parte, risulta esistere.</p>
+    </section>
+
+    <section id="target">
+      <p class="s-eyebrow">03 — Target non funzionali</p>
+      <h2>Tre solidi, uno con evidenza debole</h2>
+      <p>I quattro criteri di accettazione del PoC, dal <code>poc_final_report.md</code> consolidato del 13 agosto — la base fattuale unica da cui il paper dovrebbe attingere:</p>
+
+      <div class="targets">
+        <div class="tcard">
+          <span class="pill warn">evidenza debole</span>
+          <h4>PT-PEP latency &lt; 3&nbsp;ms p99 (CPU)</h4>
+          <div class="result">Unico numero mai registrato: un fallimento isolato a 3.71&nbsp;ms, mai ri-misurato con un valore pulito</div>
+          <div class="margin">Nessun margine documentato — a differenza degli altri tre, qui non esiste un numero "misurato e passato", solo un test pass/fail</div>
+        </div>
+        <div class="tcard">
+          <span class="pill good">soddisfatto</span>
+          <h4>PT-PEP hit rate &gt; 70%</h4>
+          <div class="result tnum">87.2% su held-out (+17.2pp)</div>
+          <div class="margin">Riserva nota: set held-out same-distribution, non OOD; classificatore TF-IDF+centroid, non il BERT-small originariamente pianificato</div>
+        </div>
+        <div class="tcard">
+          <span class="pill good">soddisfatto</span>
+          <h4>GCSG quality degradation &lt; 2% (MMLU-5shot)</h4>
+          <div class="result tnum">&minus;0.19pp / +0.7pp su 5 run indipendenti</div>
+          <div class="margin">Corroborazione insolitamente forte: piattaforma, hardware, quantizzazione e data-path tutti diversi, tutti entro 0.7pp l'uno dall'altro</div>
+        </div>
+        <div class="tcard">
+          <span class="pill good">soddisfatto a P50</span>
+          <h4>Promotion latency entro 1.5&times; bandwidth teorica</h4>
+          <div class="result tnum">pin=True P50 194&ndash;208&micro;s vs. soglia 732&micro;s</div>
+          <div class="margin">~3.5&times; di margine a P50; P95/P99 mancano il target in entrambi i round, ma n=20 shard sintetici è un campione troppo piccolo per la coda</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="rischio">
+      <p class="s-eyebrow">04 — Rischio principale</p>
+      <h2>Il backlog è cresciuto esattamente dove il piano chiedeva di fermarsi</h2>
+      <div class="callout risk">
+        <span class="k">Il finding centrale di questa review</span>
+        <p>Delle 26 issue oggi aperte, <strong>16 sono state create tra il 16 e il 24 agosto</strong> — cioè dentro la finestra che <code>sprint5_berg_plan.md</code> assegnava esplicitamente ad A1 (chiusura triage) e all'avvio di B3 (related-work), non a nuovi filoni di ricerca. Nessuna di queste 16 issue appartiene al Filone B. Nello stesso periodo, il Filone B non ha prodotto alcun artefatto verificabile oltre l'outline: <code>logbook_paper.md</code> è fermo alla bibliografia "prima raccolta" del 13 agosto, esplicitamente marcata come non verificata alla fonte, e <code>osx-poc/paper/</code> non esiste sul filesystem.</p>
+      </div>
+      <p>Il tempo è confluito in tre filoni reali ma non pianificati per questa finestra:</p>
+      <ul>
+        <li><strong>Migrazione bare-metal della Z8 G4</strong> (avviata 24 ago, <code>LOGBOOK_NEW_Z8.md</code>) — dal Docker-on-Windows/WSL2 di riferimento a Ubuntu 24.04 bare-metal, per sbloccare <code>io_uring</code>, NUMA reale e PMEM. Lavoro infrastrutturale legittimo e di valore, ma non presente nel piano Sprint 5 né in nessuna stima di sforzo residuo.</li>
+        <li><strong>Approfondimento prestazionale del tier DDR4/CPU-offload</strong> (issue #33, ~22 sessioni secondo il README, con follow-on #43&ndash;#49) — il singolo filone di lavoro più costoso del periodo, culminato in confronti su hardware futuro non disponibile (#53 Vera Rubin, #55 SambaNova SN40L), entrambe esplicitamente marcate dagli stessi issue come "non azionabili ora".</li>
+        <li><strong>Marstrand</strong> (#32 e sotto-issue #34&ndash;#37) — analisi competitiva verificata sul codice di Petals/ExLlamaV2/V3/tabbyAPI, utile ma dichiarata fin dall'inizio come filone parallelo "che guarda fuori", non parte della delivery Sprint 5.</li>
+      </ul>
+      <p>Nessuno di questi tre filoni è, di per sé, lavoro sbagliato — anzi, la migrazione bare-metal in particolare sblocca direttamente #7 (PMEM) e #28, entrambi bloccati da hardware da inizio progetto. Il problema è che nessuno di essi è stato scelto <em>al posto di</em> B3&ndash;B5 tramite una decisione esplicita: è successo per accumulo, nella stessa settimana in cui il piano prevedeva l'assemblaggio del draft. Questo è precisamente il tipo di deriva silenziosa che il progetto stesso, nella regola di igiene dei §0 di questo stesso piano, dice di voler evitare — lì applicata al tracker issue, qui applicabile al piano stesso.</p>
+    </section>
+
+    <section id="backlog">
+      <p class="s-eyebrow">05 — Triage backlog</p>
+      <h2>26 issue aperte, cinque profili molto diversi</h2>
+      <p>Raggruppate per il tipo di decisione che richiedono, non per numero — replica per il piano nel suo complesso lo stesso esercizio che A1 ha già fatto per il sottoinsieme di 7 issue a inizio Sprint 5.</p>
+
+      <h3><span class="pill risk" style="margin-right:8px">blocca la delivery</span>da chiudere prima del tag di release</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Titolo</th><th>Perché blocca</th></tr></thead>
+          <tbody>
+            <tr><td class="id">#18</td><td>Environment fingerprint pre-check mancante</td><td class="why">Già mordente su RunPod; ora doppiamente rilevante con la migrazione alla nuova Z8 bare-metal in corso — è esattamente lo scenario "ambiente diverso" che l'issue esiste per prevenire</td></tr>
+            <tr><td class="id">#41</td><td>Runner self-hosted: disco all'83%, 81&nbsp;GB liberi</td><td class="why">Rischio reale per <code>full-gpu-tests</code>; stato non chiarito rispetto alla migrazione bare-metal — se il vecchio runner viene ritirato l'issue è moot, altrimenti va ancora pulito</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3><span class="pill warn" style="margin-right:8px">bloccato da hardware</span>legittimamente in attesa</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Titolo</th><th>Nota</th></tr></thead>
+          <tbody>
+            <tr><td class="id">#8</td><td>Dual-GPU / AER</td><td class="why">In attesa dell'arrivo della RTX 5080 — nessuna azione possibile</td></tr>
+            <tr><td class="id">#5</td><td>Nessuna pipeline CUDA stream in GPUTransfer</td><td class="why">Deferred dallo Sprint 0, serve compute reale con cui sovrapporsi</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3><span class="pill explore" style="margin-right:8px">esplorativo, non azionabile</span>ricerca dichiarata tale dagli stessi issue</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Titolo</th><th>Nota</th></tr></thead>
+          <tbody>
+            <tr><td class="id">#53</td><td>Vera Rubin (NVLink-C2C) invalida l'estrapolazione del gap CPU/GPU?</td><td class="why">Specifiche roadmap NVIDIA, non hardware misurato — l'issue stessa lo dichiara "non azionabile ora"</td></tr>
+            <tr><td class="id">#55</td><td>SambaNova SN40L — confronto architetturale con EMH</td><td class="why">Nessun hardware disponibile per validazione diretta; "ricerca esplorativa, non azionabile a livello di codice"</td></tr>
+            <tr><td class="id">#44</td><td>Architettura CPU-first (DDR4-resident) ispirata a MoE-Infinity</td><td class="why">Valutazione architetturale, non un fix — rischia di aprire un quarto filone di ricerca sopra #33</td></tr>
+            <tr><td class="id">#37</td><td>Monitor periodico upstream Petals/ExLlama/tabbyAPI</td><td class="why">Per costruzione è un impegno ricorrente, non un item da chiudere</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3><span class="pill neutral" style="margin-right:8px">design da decidere</span>richiede una decisione esplicita, non un fix meccanico</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Titolo</th><th>Nota</th></tr></thead>
+          <tbody>
+            <tr><td class="id">#57</td><td>Wire PMEM nel path GCSG/EAT reale (follow-up a #7)</td><td class="why">Infrastruttura PMEM valida e testata, ma <code>promote_live_tensor()</code>/<code>evict_to_free_vram()</code> non la vedono ancora — richiede una vera policy di placement multi-tier, non solo un parametro</td></tr>
+            <tr><td class="id">#49</td><td>perf_test_hardware.py cieco a NUMA/affinity</td><td class="why">Segnale reale (~8% su Z8) ma tre decisioni di design aperte (rilevamento vs. pinning esplicito, dipendenza da <code>libnuma</code>) prima di poter chiudere</td></tr>
+            <tr><td class="id">#27</td><td>EPM — persistere la hotness EAT tra riavvii</td><td class="why">Root cause del gap "mixed" mai osservato in #33 — architetturale, non un bug puntuale</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3><span class="pill neutral" style="margin-right:8px">tracking Sprint 6</span>fuori scope Sprint 5 per esplicita dichiarazione del piano</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Titolo</th><th>Nota</th></tr></thead>
+          <tbody>
+            <tr><td class="id">#46</td><td>Performance tuning immagine Docker/RunPod</td><td class="why">Stockholm, fase 1 — corretto tenerla separata da Berg</td></tr>
+            <tr><td class="id">#47</td><td>Telemetria/dashboard osservabilità GCSG/EAT/Tier Manager</td><td class="why">Stockholm, fase 1 — idem</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="mergiato">
+      <p class="s-eyebrow">06 — Mergiato vs. dichiarato</p>
+      <h2>Il progetto ha già scritto la regola per questo, e vale la pena riapplicarla</h2>
+      <p>Il 14 agosto un controllo indipendente ha scoperto che Sprint 3 e 4 erano documentati come "✅ complete" da giorni mentre il codice viveva solo su branch non mersati, e <code>develop</code> eseguiva ancora gli stub <code>NotImplementedError</code> di Sprint 0/1. La correzione ha prodotto una regola esplicita, ora in <code>sprint5_berg_plan.md</code>: <em>"nessun issue/sprint si considera chiuso finché il codice che lo risolve non è in <code>develop</code>, non solo su un branch."</em> È una buona regola, applicata bene in quel momento.</p>
+      <div class="callout">
+        <span class="k">Il sintomo opposto, verificato via API GitHub in questa stessa review</span>
+        <p>Il README descrive issue #33 (tier DDR4 compute-offload, ~22 sessioni di lavoro) come <strong>"correctness closed, performance open"</strong>, e riporta il branch <code>claude/ddr4-ram-processing-unzseh</code> con la PR <a href="https://github.com/danielesalpietro/vMemoryFabric/pull/42">#42</a> verso <code>develop</code> come <strong>"open — not yet merged"</strong>. Verificato direttamente sull'API: PR #42 risulta <strong>mersata il 24 agosto alle 19:59</strong> — insieme ad altre quattro PR mersate lo stesso giorno (<a href="https://github.com/danielesalpietro/vMemoryFabric/pull/51">#51</a> fix OOM di #48, <a href="https://github.com/danielesalpietro/vMemoryFabric/pull/50">#50</a> fix Makefile/chiude #12, <a href="https://github.com/danielesalpietro/vMemoryFabric/pull/52">#52</a> PMEM/chiude #7, <a href="https://github.com/danielesalpietro/vMemoryFabric/pull/54">#54</a> telemetria host). Nessuna delle cinque si riflette ancora nel testo pubblico sullo stesso commit di <code>develop</code>: il README elenca ancora Optane PMEM come <code>❌ deferred</code> nella tabella dei vincoli d'ambiente e l'issue #12 come ancora aperta nella tabella "Known limitations" — entrambe chiuse su GitHub — mentre <code>CHANGELOG.MD</code> non ha alcuna voce per queste cinque PR: la sua sezione [Berg] più recente è ferma al 13 agosto.</p>
+        <p>È l'esatto contrario dell'incidente del 14 agosto: lì il codice non era ancora su <code>develop</code> mentre i documenti lo dicevano fatto; qui il codice <em>è</em> su <code>develop</code> da ieri, ma i documenti non se ne sono ancora accorti. Stessa causa in entrambi i casi &mdash; nessun passo esplicito di sincronizzazione doc&harr;repo subito dopo un merge &mdash; sintomo speculare.</p>
+      </div>
+      <p>Un terzo segnale, indipendente dai primi due: issue <a href="https://github.com/danielesalpietro/vMemoryFabric/issues/48">#48</a> (chiusa il 24 agosto) ha trovato che <code>bench_ddr4_to_vram()</code> andava in OOM garantito su una singola GPU da quando <code>N_SHARDS</code> era stato alzato da 20 a 100 — un bug dormiente, mai eseguito fino in fondo dal momento del bump. I numeri "✅ rispettato" citati per il target 4 in <code>poc_final_report.md</code> vengono correttamente dalla sezione <code>promote_live_tensor</code>, misurata prima del bump — ma l'episodio è un promemoria diretto: prima di citare qualunque numero di benchmark nel paper (B3/B5), vale la pena una passata esplicita per verificare che ogni script citato sia stato rieseguito con i parametri correnti, non solo che esista un log storico.</p>
+    </section>
+
+    <section id="raccomandazioni">
+      <p class="s-eyebrow">07 — Raccomandazioni</p>
+      <h2>Nove azioni, in ordine di priorità</h2>
+      <div class="reco">
+        <div class="reco-item">
+          <div class="rank">1</div>
+          <div><h4>Decidere esplicitamente il destino del 31 agosto</h4><p>O si congela ogni nuovo filone esplorativo (#49, #53, #55, integrazione PMEM #57, Sprint 6) fino a submission, e i prossimi 6 giorni vanno interamente a B3&rarr;B5 — oppure si sposta il target pubblicamente in README/piano. In entrambi i casi, come decisione scritta e datata, non come deriva silenziosa: è lo stesso principio che il progetto ha già applicato ad A1 ("decisione esplicita fix-vs-documenta, non lasciata implicita").</p></div>
+        </div>
+        <div class="reco-item">
+          <div class="rank">2</div>
+          <div><h4>Sincronizzare subito README/CHANGELOG con le 5 PR già mersate il 24 agosto</h4><p>PR #42, #50, #51, #52, #54 sono su <code>develop</code> da ieri, ma README (banner PR #42, tabella vincoli PMEM, tabella Known limitations #12) e CHANGELOG (sezione [Berg] ferma al 13 agosto) non lo riflettono ancora. Meccanico, a basso rischio, e ripristina prima di ogni submission la garanzia che i documenti pubblici corrispondano allo stato reale del repo.</p></div>
+        </div>
+        <div class="reco-item">
+          <div class="rank">3</div>
+          <div><h4>Chiudere B3 al minimo indispensabile, o ridurne esplicitamente la barra</h4><p>Leggere FineMoE per intero (blocco che il progetto si è già auto-imposto) oppure decidere apertamente che, trattandosi di un self-archive arXiv senza peer review, una survey più snella è accettabile. È il singolo rischio più alto sul calendario.</p></div>
+        </div>
+        <div class="reco-item">
+          <div class="rank">4</div>
+          <div><h4>Creare lo scheletro <code>osx-poc/paper/</code> ora, anche vuoto</h4><p>Template ACM sigconf + <code>.bib</code> — dodici giorni dopo la data in cui B4 doveva partire, non esiste ancora nulla su cui scrivere.</p></div>
+        </div>
+        <div class="reco-item">
+          <div class="rank">5</div>
+          <div><h4>Chiudere il gate del Filone A: repro pulita, tag, banner README</h4><p>Un <code>make smoke && make test</code> verde da zero su ambiente pulito, la decisione v0.5.0 vs. v1.0.0-poc (ancora esplicitamente aperta nel piano), e l'aggiornamento del banner — indipendenti dal paper, possono chiudere senza rischiare la data del 31.</p></div>
+        </div>
+        <div class="reco-item">
+          <div class="rank">6</div>
+          <div><h4>Ri-eseguire la suite benchmark completa dopo il fix di #48</h4><p>E fare una passata esplicita per altri parametri "alzati ma mai rieseguiti" prima di citare qualunque numero nel paper — lezione diretta di #48.</p></div>
+        </div>
+        <div class="reco-item">
+          <div class="rank">7</div>
+          <div><h4>Chiarire la disposizione di #41 rispetto alla migrazione Z8</h4><p>Se il vecchio runner Docker-on-Windows viene ritirato a favore della nuova Z8 bare-metal, #41 è moot e va chiusa come tale; altrimenti il disco va ancora liberato prima che blocchi un <code>full-gpu-tests</code>.</p></div>
+        </div>
+        <div class="reco-item">
+          <div class="rank">8</div>
+          <div><h4>Fissare #18 prima di ulteriore lavoro sulla nuova Z8 bare-metal</h4><p>È esattamente lo scenario ("ambiente diverso da quello assunto") che l'issue esiste per prevenire, e la migrazione appena iniziata lo rende concreto, non ipotetico.</p></div>
+        </div>
+        <div class="reco-item">
+          <div class="rank">9</div>
+          <div><h4>Ottenere un numero p99 pulito per il target PT-PEP prima di citarlo nel paper</h4><p>È l'unico dei quattro target senza una misura pulita alle spalle — citarlo come "measured" nel paper senza prima risolvere questo sarebbe un'inconsistenza che un reviewer esterno individuerebbe subito.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="punti-forza">
+      <p class="s-eyebrow">08 — Punti di forza</p>
+      <h2>Pratiche da preservare, non da correggere</h2>
+      <div class="strengths">
+        <div class="strength">
+          <h4>La regola di igiene del tracker issue</h4>
+          <p>"Chiuso su GitHub" e "mersato su <code>develop</code>" sono trattati come due condizioni distinte, entrambe necessarie — una disciplina rara, nata da un errore reale scoperto e corretto in modo trasparente.</p>
+        </div>
+        <div class="strength">
+          <h4>Verifica su hardware reale, non solo in sandbox</h4>
+          <p>Le misure di contention su #2/#23 sono state ripetute su <code>Z8-G4-RTX3090</code> proprio perché i numeri sandbox e pod non concordavano tra loro — e i quattro numeri discordanti sono stati tenuti tutti, non nascosti dietro il più favorevole.</p>
+        </div>
+        <div class="strength">
+          <h4>Risultati negativi dichiarati onestamente</h4>
+          <p>La rimozione del Bloom filter (issue #1) e la nota esplicita sull'evidenza debole del target PT-PEP sono esattamente il tipo di onestà che un paper scientifico richiede — e qui esiste già prima ancora di scrivere il paper.</p>
+        </div>
+        <div class="strength">
+          <h4>Feature flag a rischio zero per costruzione</h4>
+          <p><code>tier_manager=None</code>, <code>enable_cpu_offload=False</code>, <code>pin=False</code>: ogni funzionalità nuova è opt-in con test di regressione dedicati sul comportamento di default — un pattern applicato con costanza dallo Sprint 3 in poi.</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    <p>Fonti: <span class="src">README.md</span>, <span class="src">osx-poc/CHANGELOG.MD</span>, <span class="src">osx-poc/reports/sprint5_berg_plan.md</span>, <span class="src">osx-poc/reports/poc_final_report.md</span>, <span class="src">osx-poc/logbook_paper.md</span>, <span class="src">osx-poc/LOGBOOK_NEW_Z8.md</span>, GitHub Issues #1&ndash;#57 (danielesalpietro/vMemoryFabric) al 25 ago 2026.</p>
+  </footer>
+</div>
+</body>
+</html>

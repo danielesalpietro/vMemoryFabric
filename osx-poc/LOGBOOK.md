@@ -5,6 +5,78 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-25 — Berg, continued: first Project Plan Review (PPR) — Sprint 5 status audit finds the paper track stalled while the backlog grew around it
+
+**Release:** none — review/documentation only, no module shipped.
+
+### What we set out to do
+
+Requested externally: an independent project-plan review of OSX/vMemoryFabric
+against its own README, CHANGELOG, `reports/sprint5_berg_plan.md`,
+`reports/poc_final_report.md`, `logbook_paper.md`, and the full GitHub issue
+tracker (26 open, 13 closed as of today) — not a code review, a check on
+whether the Sprint 5 (Berg) plan itself is still on track six days out from
+its self-declared 31 August target.
+
+### What we did
+
+Cross-read every source above, plus the five most recent issues (#48, #49,
+#53, #55, #57) individually, then verified the review's own claims against
+the GitHub API rather than trusting README prose at face value — which
+caught a real error before publication (see Result, item 3). Published as
+`osx-poc/reports/ppr_20260825_sprint5_review.html` (source of record) and
+`osx-poc/reports/ppr_20260825_sprint5_review.docx` (same content, Word-native).
+
+### Result
+
+Three findings, none of them about the applicative code:
+
+1. **Filone B (the paper) has stalled since 13 August.** B0–B2 (venue,
+   outline decisions) are done; B3 (related-work survey) is stuck on its own
+   self-imposed blocker — "don't close B3 without reading FineMoE in full,"
+   not yet done; B4 (LaTeX infra) hasn't started, `osx-poc/paper/` doesn't
+   exist and there are zero `.tex` files in the repo; B5 can't start without
+   a draft. Six days remain before the declared target.
+2. **The open-issue backlog grew fastest exactly where the plan called for
+   it to slow down.** 16 of the 26 currently-open issues were filed
+   16–24 August — the window the plan assigned to closing out A1 triage and
+   starting B3 — and none of the 16 belong to the paper track. Three real,
+   valuable-but-unplanned threads absorbed that time instead: the Z8 G4
+   bare-metal migration (`LOGBOOK_NEW_Z8.md`, started 24 Aug), the #33
+   DDR4/CPU-offload follow-on cluster (#43–#49, plus speculative
+   future-hardware comparisons #53/#55), and Marstrand (#32, #34–#37).
+3. **A live documentation lag, caught while drafting the review, corrected
+   before publishing it.** The first draft repeated README's own claim that
+   PR #42 was still open. Checking the GitHub API directly found it was
+   merged 24 August at 19:59 — along with four more PRs the same day (#51
+   fixing #48, #50 closing #12, #52 closing #7/PMEM, #54). None of those
+   five merges is reflected yet in README (PMEM still listed `❌ deferred`,
+   #12 still listed as an open "Known limitation") or in `CHANGELOG.MD` (the
+   `[Berg]` entry is still dated 13 August — see the entry added below).
+   Mirror image of the 14 August branch-consolidation incident this project
+   already wrote a rule about in `sprint5_berg_plan.md` §0 — there, code
+   lagged the docs; here, the docs lag the code. Same root cause in both
+   directions: no explicit doc↔repo sync step right after a merge.
+
+Full triage of all 26 open issues by category (blocking / hardware-blocked /
+exploratory-not-actionable / design-pending / Sprint 6 tracking) and nine
+prioritized recommendations are in the report itself, not duplicated here.
+
+### Why this matters
+
+None of this is a finding about M1/M2/M3 — those remain solid,
+hardware-verified, and honestly reported, and the report says so explicitly,
+naming the practices worth keeping (the issue-tracker hygiene rule, real-
+hardware re-verification of discordant numbers, honest negative results,
+opt-in-by-construction feature flags). The finding is about the Sprint 5
+*plan* drifting without anyone making an explicit decision to let it drift —
+precisely the kind of silent scope change the project's own §0 rule exists
+to catch, just one level up: applied to the plan rather than the tracker.
+Logged rather than acted on unilaterally — the report's top recommendation
+is that this needs an explicit decision from the project owner (freeze new
+exploratory work vs. move the 31 Aug target publicly), not something a
+review should decide by itself.
+
 ## 2026-08-09 — Issue #2 follow-up: re-measuring EAT contention under a more realistic access pattern
 
 **Release:** none — investigation only, no module shipped.
