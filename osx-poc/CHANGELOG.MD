@@ -20,6 +20,13 @@ Releases are named after cities where significant project milestones were reache
 
 *Named after Berg, Stockholm, where the Sprint 5 planning conversation happened — PoC delivery + paper, two parallel tracks.*
 
+### Added — 2026-08-26 — Gate A5 (PoC delivery exit gate) at 3/4, first beta tag prepared
+
+- `reports/sprint5_berg_plan.md` §A5 updated: conditions 1–3 (issue-tracker/README consistency, clean-clone `make smoke && make test`, PoC Final Report) verified and marked closed with evidence, not just asserted — condition 2 confirmed 2026-08-26 (fresh clone, build from scratch, 13/13 smoke, 224 passed/3 skipped)
+- `v0.6.0-beta.1` prepared as an annotated tag on `develop`'s HEAD (`6a6cdfe`) — the first externally-consumable snapshot, once condition 4 (release tagged) closes. Release notes drafted, covering the four non-functional targets, known limitations (PMEM/#57 not production-wired, #33 CPU-offload tier performance, dual-GPU/#8), and environment
+- **Condition 4 stays open on purpose:** the tag couldn't actually be pushed to GitHub from the agent session preparing this update — `git push origin v0.6.0-beta.1` was rejected with HTTP 403 by that session's git proxy (scoped to push only its own working branch, not arbitrary refs like tags), and no available GitHub API tool creates tags or releases directly. Recorded as pending rather than closed, per this file's own §0 issue-tracker-hygiene rule extended to gates: a condition is not "done" until it's verifiably true, not until the surrounding work is
+- Full narrative and follow-up thread: `LOGBOOK.md`, 2026-08-26 entry
+
 ### Added — 2026-08-25 — first Project Plan Review (PPR)
 
 - `osx-poc/reports/ppr_20260825_sprint5_review.html` / `.docx` — an independent, external status audit of the Sprint 5 (Berg) plan itself (not a code review), cross-reading README, this file, `reports/sprint5_berg_plan.md`, `reports/poc_final_report.md`, `logbook_paper.md`, and all 39 GitHub issues (26 open, 13 closed) as of 25 August, six days before the plan's self-declared 31 August target. Full narrative: `LOGBOOK.md`, 2026-08-25 entry
