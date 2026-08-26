@@ -5,6 +5,60 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-26 — Berg, continued: Gate A5 closes 3/4, first beta tag prepared but not pushed — a tooling limit, recorded rather than routed around
+
+**Release:** none shipped — gate/release-prep bookkeeping only.
+
+### What we set out to do
+
+Follow through on the PPR's own top recommendation and on Gate A5
+(`reports/sprint5_berg_plan.md` §A5): with PR #59 already closing the
+documentation-lag finding and the project owner independently confirming a
+clean-clone `make smoke && make test` run (13/13 smoke, 224 passed/3
+skipped), three of Gate A5's four conditions were verifiably true. Asked to
+prepare the fourth — a tagged release, `v0.6.0-beta.1`, chosen to align the
+public beta with the project's real development state (Berg/v0.6.0-dev)
+rather than restart numbering at a misleadingly low v0.1 — plus release
+notes, plus the gate/CHANGELOG bookkeeping to close it out.
+
+### What we did
+
+Created an annotated tag `v0.6.0-beta.1` on `develop`'s HEAD (`6a6cdfe`,
+the commit PR #59 landed) with a message summarizing what the tag
+represents and pointing at the PPR and CHANGELOG. Drafted release notes
+covering the four non-functional targets, what shipped, and known
+limitations (PMEM/#57, #33's CPU-offload performance, dual-GPU/#8,
+`lockfree_read`'s torn-read rate). Updated `reports/sprint5_berg_plan.md`
+§A5 and `CHANGELOG.MD` to record conditions 1–3 as closed with evidence.
+
+### Result
+
+`git push origin v0.6.0-beta.1` failed: `HTTP 403`, connection reset by the
+session's git proxy. The proxy that scopes this kind of session's git
+access apparently authorizes pushes to that session's own working branch
+only — not arbitrary refs like `refs/tags/*`. Checked for a GitHub API-level
+workaround (a tool that creates a tag or a release object directly,
+bypassing git push entirely): none exists in the GitHub MCP toolset
+available here — only read access (`list_tags`, `get_tag`,
+`get_release_by_tag`, `list_releases`). No credential-widening or
+alternate-remote attempt was made — a push permission boundary is exactly
+the kind of thing to respect and report, not route around.
+
+Gate A5 condition 4 ("release taggata") is therefore recorded as **still
+open**, with the prepared tag, its exact message, and both remaining paths
+(`git push` with full repo access, or typing the tag name directly into
+*Releases → Draft a new release* on GitHub, which creates it on publish)
+handed back rather than guessed at.
+
+### Why this matters
+
+The tempting shortcut here was to mark condition 4 "done" since everything
+except the literal push had been prepared — exactly the gap this project's
+own §0 rule was written to catch (an issue/gate isn't closed until the
+underlying fact is verifiably true, not until the surrounding work is).
+Applied to itself this time: the gate stays honestly at 3/4 until the tag
+is actually visible on GitHub, not before.
+
 ## 2026-08-25 — Berg, continued: first Project Plan Review (PPR) — Sprint 5 status audit finds the paper track stalled while the backlog grew around it
 
 **Release:** none — review/documentation only, no module shipped.

@@ -189,11 +189,39 @@ non più in nota sparsa nel LOGBOOK.
 Sprint 5 non si considera "delivered" finché non sono vere **tutte** queste
 condizioni insieme, verificate non assunte:
 
-1. issue tracker coerente con README (nessun altro caso come §0);
-2. `make smoke && make test` verde da zero su ambiente pulito;
-3. PoC Final Report pubblicato con i 4 target non funzionali confermati in
-   un'unica lettura coerente;
-4. release taggata.
+1. ✅ **issue tracker coerente con README** (nessun altro caso come §0) —
+   verificato 2026-08-25/26 dalla prima Project Plan Review
+   ([`ppr_20260825_sprint5_review.html`](ppr_20260825_sprint5_review.html)),
+   che ha trovato e corretto in PR
+   [#59](https://github.com/danielesalpietro/vMemoryFabric/pull/59) proprio
+   un caso come §0 (PR #42/#48/#50/#52/#54 mersate il 24 agosto ma non
+   ancora riflesse in README/CHANGELOG) — chiuso lo stesso giorno in cui è
+   stato trovato, non lasciato aperto;
+2. ✅ **`make smoke && make test` verde da zero su ambiente pulito** —
+   verificato 2026-08-26: clone nuovo, build da zero, 13/13 smoke,
+   224 passed / 3 skipped;
+3. ✅ **PoC Final Report pubblicato con i 4 target non funzionali
+   confermati in un'unica lettura coerente** — fatto dal 2026-08-13,
+   vedi `reports/poc_final_report.md` §0;
+4. ⏳ **release taggata** — `v0.6.0-beta.1` preparato (tag annotato pronto,
+   messaggio redatto, note di release pronte) sull'HEAD di `develop`
+   (`6a6cdfe`) il 2026-08-26, ma il push del tag non è riuscito dalla
+   sessione che ha preparato questo aggiornamento: il proxy git di quella
+   sessione ha rifiutato `git push origin v0.6.0-beta.1` con HTTP 403 —
+   verosimilmente perché quella sessione era autorizzata a pushare solo sul
+   proprio branch di lavoro, non su ref arbitrari come i tag — e nessuno
+   strumento GitHub disponibile in quella sessione crea tag o release
+   direttamente via API. **Non marcato come chiuso finché il tag non
+   esiste per davvero su GitHub**, per la stessa regola di §0 qui sopra:
+   comando pronto per chi ha accesso push completo al repo —
+   `git tag -a v0.6.0-beta.1 -m "..." 6a6cdfe && git push origin v0.6.0-beta.1`
+   — oppure, più semplice, creare il tag direttamente in
+   *Releases → Draft a new release* digitando `v0.6.0-beta.1` come nuovo
+   tag su `develop`.
+
+Gate A5 quindi **3/4 chiuso** al 2026-08-26 — l'ultima condizione dipende
+da un'azione che richiede permessi di push non disponibili all'agente che
+ha preparato questo aggiornamento.
 
 ---
 
