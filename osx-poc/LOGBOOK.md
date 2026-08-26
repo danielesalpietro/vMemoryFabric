@@ -59,6 +59,23 @@ underlying fact is verifiably true, not until the surrounding work is).
 Applied to itself this time: the gate stays honestly at 3/4 until the tag
 is actually visible on GitHub, not before.
 
+**Resolved same day, ~2 hours later.** The project owner published
+`v0.6.0-beta.1` directly (full repo access, neither of the two blockers
+above applies to them) using the tag/notes prepared above, and reported it
+back as "fatto." Checked via API rather than taken on trust — same
+discipline the PPR itself used on the PR #42 claim two days earlier
+(`get_release_by_tag`/`get_tag`): release live, `prerelease: true`, tagged
+on commit `31f526a` — the merge of *this session's own* gate-closure PR
+(#60), so the very first public beta already contains the "3/4, not yet
+4/4" honesty this entry documents. Gate A5 updated to **4/4 closed** in
+`reports/sprint5_berg_plan.md` §A5 and `CHANGELOG.MD`; this entry is left
+as originally written rather than rewritten, per this project's own
+convention of recording corrections instead of erasing the finding that
+prompted them (same pattern as the PPR's PR #42 paragraph). README's
+banner and roadmap table updated to point at the release for real, since
+"all documentation should reflect the first release's existence" was the
+explicit ask that prompted this follow-up.
+
 ## 2026-08-25 — Berg, continued: first Project Plan Review (PPR) — Sprint 5 status audit finds the paper track stalled while the backlog grew around it
 
 **Release:** none — review/documentation only, no module shipped.
