@@ -175,14 +175,27 @@ non più in nota sparsa nel LOGBOOK.
 - verificare `make smoke && make test` verde da zero su un container pulito,
   non solo "ha funzionato l'ultima volta che l'ho girato".
 
-### A4. Release
+### A4. Release — ✅ fatto (2026-08-26), con una scelta diversa da quella qui sotto
 
-- Tag `v0.5.0` (o `v1.0.0-poc`, da decidere: dipende se si considera questo
-  il primo rilascio "completo" del PoC agli occhi di terzi);
-- aggiornare banner README ("Current release") e chiudere `CHANGELOG.MD`
-  per Sprint 5;
-- aggiornare la tabella roadmap (Sprint 5 da 🔲 pending a ✅/🟡 con link a
-  questo piano e al PoC Final Report).
+- ~~Tag `v0.5.0` (o `v1.0.0-poc`, da decidere: dipende se si considera questo
+  il primo rilascio "completo" del PoC agli occhi di terzi)~~ — deciso
+  diversamente: **`v0.6.0-beta.1`**, non `v0.5.0`/`v1.0.0-poc`. Motivo: la
+  numerazione interna del CHANGELOG (Karlshamn `v0.1.0-dev` → Berg
+  `v0.6.0-dev`) era già arrivata a v0.6.0-dev quando si è posta la domanda
+  per davvero — taggare `v0.5.0` sarebbe stato un passo indietro rispetto
+  allo stato di sviluppo reale, e `v1.0.0-poc` avrebbe dichiarato una
+  maturità (produzione-ready) che questo stesso rilascio esplicitamente
+  non ha (PMEM non ancora nel path di produzione — #57; tier CPU-offload
+  #33 non production-ready; Filone B/paper indietro). `-beta.1` comunica
+  correttamente lo stato senza sovra- né sotto-dichiarare. Pubblicata come
+  GitHub Release marcata `prerelease: true`:
+  <https://github.com/danielesalpietro/vMemoryFabric/releases/tag/v0.6.0-beta.1>;
+- ✅ banner README ("Current release") aggiornato con link alla release e
+  chiarimento che le versioni precedenti (Tekniska, Oskarshamn, ...) erano
+  solo etichette CHANGELOG, mai tag git reali fino ad ora;
+- ✅ tabella roadmap aggiornata (Sprint 5: Filone A 🟢 delivered con link
+  alla release, Filone B 🟡 ancora indietro — non un singolo stato
+  aggregato, per non nascondere che i due filoni sono a punti diversi).
 
 ### A5. Gate di uscita del Filone A
 
@@ -203,25 +216,24 @@ condizioni insieme, verificate non assunte:
 3. ✅ **PoC Final Report pubblicato con i 4 target non funzionali
    confermati in un'unica lettura coerente** — fatto dal 2026-08-13,
    vedi `reports/poc_final_report.md` §0;
-4. ⏳ **release taggata** — `v0.6.0-beta.1` preparato (tag annotato pronto,
-   messaggio redatto, note di release pronte) sull'HEAD di `develop`
-   (`6a6cdfe`) il 2026-08-26, ma il push del tag non è riuscito dalla
-   sessione che ha preparato questo aggiornamento: il proxy git di quella
-   sessione ha rifiutato `git push origin v0.6.0-beta.1` con HTTP 403 —
-   verosimilmente perché quella sessione era autorizzata a pushare solo sul
-   proprio branch di lavoro, non su ref arbitrari come i tag — e nessuno
-   strumento GitHub disponibile in quella sessione crea tag o release
-   direttamente via API. **Non marcato come chiuso finché il tag non
-   esiste per davvero su GitHub**, per la stessa regola di §0 qui sopra:
-   comando pronto per chi ha accesso push completo al repo —
-   `git tag -a v0.6.0-beta.1 -m "..." 6a6cdfe && git push origin v0.6.0-beta.1`
-   — oppure, più semplice, creare il tag direttamente in
-   *Releases → Draft a new release* digitando `v0.6.0-beta.1` come nuovo
-   tag su `develop`.
+4. ✅ **release taggata** — `v0.6.0-beta.1` pubblicata su GitHub Releases
+   2026-08-26 alle 15:58 UTC (`prerelease: true`), tag sul commit
+   `31f526a` (HEAD di `develop` a quel momento, cioè include già la
+   chiusura delle condizioni 1–3 sopra) — verificato via API
+   (`get_release_by_tag`/`get_tag`), non solo assunto dal "fatto" riportato
+   in chat: <https://github.com/danielesalpietro/vMemoryFabric/releases/tag/v0.6.0-beta.1>.
+   *(Nota per la cronaca, non più attuale: la sessione che aveva preparato
+   il tag annotato su `6a6cdfe` non è riuscita a pusharlo — `git push
+   origin v0.6.0-beta.1` rifiutato con HTTP 403 dal proprio proxy git,
+   scoped al solo branch di lavoro — e ha lasciato questa condizione
+   esplicitamente aperta invece di marcarla chiusa sulla fiducia. Il
+   push/pubblicazione è stato completato subito dopo con accesso pieno al
+   repo, sul tag e sulle note preparati in quella sessione.)*
 
-Gate A5 quindi **3/4 chiuso** al 2026-08-26 — l'ultima condizione dipende
-da un'azione che richiede permessi di push non disponibili all'agente che
-ha preparato questo aggiornamento.
+**Gate A5 completo — 4/4 chiuso al 2026-08-26.** Sprint 5 (Berg) si
+considera "delivered" per il Filone A secondo il criterio di questo §.
+Il Filone B (paper arXiv) resta un percorso separato e più indietro — vedi
+la PPR linkata sopra.
 
 ---
 
