@@ -1,0 +1,45 @@
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.1.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+{
+  "status": "done",
+  "issue": "#33/#45 \u2014 EMH-2 PMEM tier (passo 4)",
+  "pmem_path": "/data/pmem",
+  "note": "sezioni nvme_to_pmem/pmem_to_ddr4 usano shard sintetici da 4194304 byte (stessa convenzione di bench_tier.py); raw_bandwidth usa un buffer da 512 MB per un numero di banda direttamente interpretabile, non un proxy",
+  "raw_bandwidth": {
+    "status": "done",
+    "test_size_mb": 512,
+    "write_gbps": 0.613560789955982,
+    "read_gbps": 1.8464283885521457
+  },
+  "nvme_to_pmem": {
+    "n_shards": 100,
+    "shard_size_bytes": 4194304,
+    "latency_us": {
+      "p50_us": 5407.967000792269,
+      "p95_us": 5500.2090011839755,
+      "p99_us": 9752.28899915237
+    }
+  },
+  "pmem_to_ddr4": {
+    "n_shards": 100,
+    "shard_size_bytes": 4194304,
+    "latency_us": {
+      "p50_us": 2732.7499992679805,
+      "p95_us": 2757.390000624582,
+      "p99_us": 3001.044002303388
+    }
+  }
+}
