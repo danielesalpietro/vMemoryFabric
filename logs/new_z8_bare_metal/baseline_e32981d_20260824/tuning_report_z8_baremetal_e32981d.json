@@ -1,0 +1,49 @@
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.1.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+{
+  "status": "done",
+  "issue": "#33 \u2014 performance-tuning report",
+  "source_host": "3c8817f34626",
+  "cpu_offload_verdict": {
+    "verdict": "cpu-offload utile solo per risparmio VRAM, non per velocit\u00e0 - forward CPU stimato ~15.2x pi\u00f9 lento del GPU sulla stessa operazione (batch=1, il caso reale del forward per-token)",
+    "predicted_slowdown_factor": 15.200311864228812,
+    "consistency_with_known_data": "coerente con il range gi\u00e0 osservato in produzione (24-26x pipeline reale, 44.6x microbenchmark isolato, LOGBOOK_ISSUE33.MD 'continued 17') - questo host si comporta come quelli gi\u00e0 misurati",
+    "avx512f_present": true,
+    "avx512_note": null
+  },
+  "thread_count": {
+    "omp_mkl_num_threads_for_pool_build": 32,
+    "note_pool_build": "usare TUTTI i core cgroup disponibili per la build del pool (dequant AWQ/quantizzazione INT4, tensori grandi, genuinamente parallelizzabile - misurato: 183s con 2 thread vs 88s con thread pieni, 'continued 17')",
+    "note_per_token_forward": "NON aumentare i thread per il forward per-token (batch=1): falsificato con dati che aiuti \u2014 0.0967s/call a 27 thread vs 0.100-0.103s/call a 2 thread, praticamente identico (memory-bandwidth-bound, non thread-bound). Non ripetere questo test (BOOTSTRAP_ANTI_ALZHEIMER.md \u00a75.11)."
+  },
+  "ram_budget": {
+    "cgroup_available_gb": 229.33639526367188,
+    "margin_reserved_gb": 24.0,
+    "usable_budget_gb": 205.33639526367188,
+    "max_cpu_shadow_experts_path1_int4": 68,
+    "max_cpu_shadow_experts_path_awq_fp32": 9,
+    "note": "stesse costanti di GCSGWorker._check_cpu_ram_budget() (scheduler/gcsg.py) - se questo host costruisce un pool pi\u00f9 grande di questi numeri, aspettarsi lo stesso fallimento osservato una volta (RAM cgroup all'84%, zero prompt completati su 16 in 600s, 'continued 17')"
+  },
+  "pcie": {
+    "flag": "ok",
+    "pinned_min_gbps": 7.815942764286197,
+    "reason": "nessun tetto PCIe evidente su questo host"
+  },
+  "batching_signal": {
+    "gflops_ratio_batch32_over_batch1": 10.937834642681908,
+    "signal": "batchare il forward potrebbe recuperare fino a ~10.9x throughput su questo host (core oggi idle durante un forward 1x4096 GEMV) - non implementato, solo un segnale quantitativo per la direzione 'batching GEMV\u2192GEMM' se/quando verr\u00e0 scelta"
+  }
+}

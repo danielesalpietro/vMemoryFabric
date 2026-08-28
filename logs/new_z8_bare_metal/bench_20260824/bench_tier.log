@@ -1,0 +1,65 @@
+ Container vmemoryfabric-osx-dev-run-9035fcdab076 Creating 
+ Container vmemoryfabric-osx-dev-run-9035fcdab076 Created 
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.1.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+{
+  "status": "done",
+  "sprint": "2 (nvme_to_ddr4/ddr4_to_vram) + 4 (promote_live_tensor, issue #17)",
+  "module": "TierManager",
+  "note": "shard sintetici da 4194304 byte, non i 256 MB di produzione \u2014 vedi docstring del modulo",
+  "nvme_to_ddr4": {
+    "n_shards": 100,
+    "shard_size_bytes": 4194304,
+    "latency_us": {
+      "p50_us": 4128.468004637398,
+      "p95_us": 4192.257998511195,
+      "p99_us": 8316.986997670028
+    }
+  },
+  "ddr4_to_vram": {
+    "n_shards": 100,
+    "shard_size_bytes": 4194304,
+    "latency_us": {
+      "p50_us": 84049.28099480458,
+      "p95_us": 85051.98200145969,
+      "p99_us": 87029.6720022452
+    }
+  },
+  "promote_live_tensor": {
+    "theoretical_transfer_s_at_bench_size": 0.00048828125,
+    "acceptance_threshold_s_1.5x": 0.000732421875,
+    "pin_False": {
+      "n_shards": 100,
+      "shard_size_bytes": 4194304,
+      "latency_us": {
+        "p50_us": 1552.8299991274253,
+        "p95_us": 1685.1670006872155,
+        "p99_us": 2182.123003876768
+      },
+      "within_1.5x_theoretical_bandwidth_at_p50": false
+    },
+    "pin_True": {
+      "n_shards": 100,
+      "shard_size_bytes": 4194304,
+      "latency_us": {
+        "p50_us": 196.98699907166883,
+        "p95_us": 3402.589005418122,
+        "p99_us": 4247.43600160582
+      },
+      "within_1.5x_theoretical_bandwidth_at_p50": true
+    }
+  }
+}

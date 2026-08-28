@@ -1,0 +1,201 @@
+ Container vmemoryfabric-osx-dev-run-2aaf29e725f9 Creating 
+ Container vmemoryfabric-osx-dev-run-2aaf29e725f9 Created 
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.1.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+{
+  "status": "done",
+  "sprint": "1, revisited 2026-08-12 (issue #1 \u2014 Bloom filter removed)",
+  "module": "EAT",
+  "n_entries": 10000,
+  "n_lookups": 50000,
+  "hit_ratio": 0.8,
+  "eat": {
+    "insert_throughput_ops_sec": 793773.5762091209,
+    "lookup_latency_hit": {
+      "p50_us": 0.32800016924738884,
+      "p95_us": 0.4120010999031365,
+      "p99_us": 0.6589980330318213
+    },
+    "lookup_latency_miss": {
+      "p50_us": 0.2749948180280626,
+      "p95_us": 0.3590030246414244,
+      "p99_us": 0.6010013748891652
+    },
+    "lookup_latency_overall": {
+      "p50_us": 0.32399839255958796,
+      "p95_us": 0.40899612940847874,
+      "p99_us": 0.6510017556138337
+    }
+  },
+  "baseline_plain_dict": {
+    "insert_throughput_ops_sec": 2688404.7520255274,
+    "lookup_latency_hit": {
+      "p50_us": 0.4800021997652948,
+      "p95_us": 0.5250039976090193,
+      "p99_us": 0.5590045475400984
+    },
+    "lookup_latency_miss": {
+      "p50_us": 0.4350004019215703,
+      "p95_us": 0.48599758883938193,
+      "p99_us": 0.5200054147280753
+    },
+    "lookup_latency_overall": {
+      "p50_us": 0.47399953473359346,
+      "p95_us": 0.5210022209212184,
+      "p99_us": 0.5559995770454407
+    }
+  },
+  "eat_vs_baseline_delta_us": {
+    "hit_p50": -0.15200203051790595,
+    "miss_p50": -0.16000558389350772
+  },
+  "contention": {
+    "locking_strategy": "single",
+    "n_readers": 4,
+    "n_writes": 20000,
+    "writer_throughput_ops_sec_under_contention": 34376.719539710895,
+    "reader_lookups_completed": 21920,
+    "reader_lookup_latency_under_contention": {
+      "p50_us": 81.58599666785449,
+      "p95_us": 167.63400344643742,
+      "p99_us": 185.69300300441682
+    }
+  },
+  "contention_churn": {
+    "n_readers": 4,
+    "n_writes": 20000,
+    "writer_throughput_ops_sec_under_contention": 90889.26754714004,
+    "reader_lookups_completed": 83291,
+    "reader_lookup_latency_under_contention": {
+      "p50_us": 0.695996277499944,
+      "p95_us": 1.1119991540908813,
+      "p99_us": 1.2270029401406646
+    }
+  },
+  "contention_by_strategy": {
+    "single": {
+      "locking_strategy": "single",
+      "n_readers": 4,
+      "n_writes": 20000,
+      "writer_throughput_ops_sec_under_contention": 42574.44619306426,
+      "reader_lookups_completed": 25877,
+      "reader_lookup_latency_under_contention": {
+        "p50_us": 67.6970012136735,
+        "p95_us": 139.81200027046725,
+        "p99_us": 179.56800002139062
+      }
+    },
+    "striped": {
+      "locking_strategy": "striped",
+      "n_readers": 4,
+      "n_writes": 20000,
+      "writer_throughput_ops_sec_under_contention": 55353.86008130709,
+      "reader_lookups_completed": 57802,
+      "reader_lookup_latency_under_contention": {
+        "p50_us": 2.300999767612666,
+        "p95_us": 232.80899767996743,
+        "p99_us": 416.8339946772903
+      }
+    },
+    "lockfree_read": {
+      "locking_strategy": "lockfree_read",
+      "n_readers": 4,
+      "n_writes": 20000,
+      "writer_throughput_ops_sec_under_contention": 163699.52948302083,
+      "reader_lookups_completed": 54930,
+      "reader_lookup_latency_under_contention": {
+        "p50_us": 0.6600021151825786,
+        "p95_us": 0.9069990483112633,
+        "p99_us": 0.9750001481734216
+      }
+    }
+  },
+  "churn_by_strategy": {
+    "single": {
+      "locking_strategy": "single",
+      "n_readers": 4,
+      "n_keys": 2000,
+      "n_writes": 20000,
+      "reader_lookups_completed": 21418,
+      "reader_lookup_latency_under_churn": {
+        "p50_us": 110.10600428562611,
+        "p95_us": 296.6699976241216,
+        "p99_us": 442.8569955052808
+      },
+      "reader_reads_with_entry": 21418,
+      "reader_torn_reads_detected": 0,
+      "reader_torn_read_rate": 0.0
+    },
+    "striped": {
+      "locking_strategy": "striped",
+      "n_readers": 4,
+      "n_keys": 2000,
+      "n_writes": 20000,
+      "reader_lookups_completed": 63581,
+      "reader_lookup_latency_under_churn": {
+        "p50_us": 2.606000634841621,
+        "p95_us": 220.03799676895142,
+        "p99_us": 448.51099664811045
+      },
+      "reader_reads_with_entry": 63581,
+      "reader_torn_reads_detected": 0,
+      "reader_torn_read_rate": 0.0
+    },
+    "lockfree_read": {
+      "locking_strategy": "lockfree_read",
+      "n_readers": 4,
+      "n_keys": 2000,
+      "n_writes": 20000,
+      "reader_lookups_completed": 52289,
+      "reader_lookup_latency_under_churn": {
+        "p50_us": 0.8689967216923833,
+        "p95_us": 1.4399993233382702,
+        "p99_us": 1.5810001059435308
+      },
+      "reader_reads_with_entry": 52289,
+      "reader_torn_reads_detected": 7,
+      "reader_torn_read_rate": 0.00013387136873912296
+    }
+  },
+  "slab_scale": {
+    "n_slots_4": {
+      "pool_size_gb": 1.0,
+      "alloc_latency_us": {
+        "p50_us": 13.862001651432365,
+        "p95_us": 26.789995899889618,
+        "p99_us": 26.789995899889618
+      },
+      "free_latency_us": {
+        "p50_us": 3.55099473381415,
+        "p95_us": 5.003006663173437,
+        "p99_us": 5.003006663173437
+      }
+    },
+    "n_slots_32": {
+      "pool_size_gb": 8.0,
+      "alloc_latency_us": {
+        "p50_us": 1.4670004020445049,
+        "p95_us": 2.6089983293786645,
+        "p99_us": 4.026995156891644
+      },
+      "free_latency_us": {
+        "p50_us": 0.662003003526479,
+        "p95_us": 1.0450021363794804,
+        "p99_us": 1.4999968698248267
+      }
+    }
+  }
+}
