@@ -1,0 +1,122 @@
+{
+  "status": "done",
+  "issue": "#33 — performance-test framework",
+  "host": "4f6e264a18ad",
+  "note": "dimensioni matmul sintetiche hidden=4096 intermediate=14336 (default, frazione di Mixtral reale 4096x14336) - rilanciare con OSX_BENCH_HIDDEN=4096 OSX_BENCH_INTERMEDIATE=14336 per un numero comparabile al target di produzione",
+  "cpu": {
+    "status": "done",
+    "model_name": "x86_64",
+    "cgroup_cores_available": 32.0,
+    "os_cpu_count_raw": 32,
+    "note": "os_cpu_count_raw puo' riportare la topologia dell'HOST condiviso sotto Docker/RunPod, non i core allocati a questo cgroup (BOOTSTRAP_ANTI_ALZHEIMER.md SS5.9) - usare cgroup_cores_available per OMP_NUM_THREADS/MKL_NUM_THREADS",
+    "avx_support": {
+      "avx2": true,
+      "avx512f": true,
+      "avx512_vnni": true
+    },
+    "matmul_gflops": {
+      "hidden": 4096,
+      "intermediate": 14336,
+      "n_repeats": 30,
+      "batch_1": {
+        "latency": {
+          "p50_ms": 11.14768400293542,
+          "p95_ms": 11.268240996287204,
+          "p99_ms": 11.286617002042476
+        },
+        "gflops_at_p50": 31.604908778112684
+      },
+      "batch_8": {
+        "latency": {
+          "p50_ms": 34.165983997809235,
+          "p95_ms": 34.25291200255742,
+          "p99_ms": 34.728192003967706
+        },
+        "gflops_at_p50": 82.49644699771358
+      },
+      "batch_32": {
+        "latency": {
+          "p50_ms": 35.869199004082475,
+          "p95_ms": 36.02184799819952,
+          "p99_ms": 36.069978996238206
+        },
+        "gflops_at_p50": 314.3167247954662
+      }
+    }
+  },
+  "ram": {
+    "status": "done",
+    "cgroup_available_gb": 229.4311408996582,
+    "note": "None se nessun cgroup leggibile (dev locale/CI) - vedi _read_cgroup_available_gb() in scheduler/gcsg.py, gia' in produzione per _check_cpu_ram_budget()",
+    "copy_bandwidth_gbps": 35.82701526295491,
+    "copy_test_size_mb": 512.0
+  },
+  "gpu": {
+    "status": "done",
+    "name": "NVIDIA GeForce RTX 3090",
+    "driver_version": "595.84",
+    "compute_capability": "8.6",
+    "vram_total_gb": 24.0,
+    "vram_free_gb": 23.54046630859375,
+    "note": "singola lettura statica, non telemetria continua - per quella vedi `nvidia-smi dmon`/`--query-gpu` nel pattern di raccolta esistente (BOOTSTRAP_ANTI_ALZHEIMER.md SS4)",
+    "matmul_gflops": {
+      "hidden": 4096,
+      "intermediate": 14336,
+      "n_repeats": 30,
+      "batch_1": {
+        "latency": {
+          "p50_ms": 0.8183929967344739,
+          "p95_ms": 0.8275949949165806,
+          "p99_ms": 0.8363820015802048
+        },
+        "gflops_at_p50": 430.5040944947261
+      },
+      "batch_8": {
+        "latency": {
+          "p50_ms": 0.9720379966893233,
+          "p95_ms": 0.9768859963514842,
+          "p99_ms": 0.979055002972018
+        },
+        "gflops_at_p50": 2899.652377375999
+      },
+      "batch_32": {
+        "latency": {
+          "p50_ms": 0.9991289989557117,
+          "p95_ms": 1.002778997644782,
+          "p99_ms": 1.0047789983218536
+        },
+        "gflops_at_p50": 11284.11763023981
+      }
+    }
+  },
+  "pcie": {
+    "status": "done",
+    "note": "generalizzato da scripts/bench_pcie_bandwidth_wsl2.py (creato per un dubbio specifico a WSL2/GPU-PV, mai eseguito su RunPod prima di 'continued 17'). Se pinned resta sotto ~3GB/s anche sui tensori grandi: indizio di un tetto WSL2/GPU-PV, non del workload (BOOTSTRAP SS5.4)",
+    "by_size": {
+      "1mb": {
+        "h2d_pageable_gbps": 2.2281306550310043,
+        "h2d_pinned_gbps": 7.837359467575574,
+        "d2h_pageable_gbps": 2.181116251522382,
+        "d2h_pinned_gbps": 8.1317456795615
+      },
+      "16mb": {
+        "h2d_pageable_gbps": 3.173250694063505,
+        "h2d_pinned_gbps": 8.600681011486921,
+        "d2h_pageable_gbps": 3.0119378343463437,
+        "d2h_pinned_gbps": 8.262990913942865
+      },
+      "64mb": {
+        "h2d_pageable_gbps": 3.1531921724709457,
+        "h2d_pinned_gbps": 8.698717778077548,
+        "d2h_pageable_gbps": 2.978054598888934,
+        "d2h_pinned_gbps": 7.871133049716921
+      },
+      "256mb": {
+        "h2d_pageable_gbps": 3.136068541387543,
+        "h2d_pinned_gbps": 8.826711437001828,
+        "d2h_pageable_gbps": 3.003039163099916,
+        "d2h_pinned_gbps": 7.91714603583969
+      }
+    }
+  }
+}
