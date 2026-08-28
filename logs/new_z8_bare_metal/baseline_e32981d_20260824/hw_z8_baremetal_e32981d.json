@@ -1,0 +1,137 @@
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.1.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+{
+  "status": "done",
+  "issue": "#33 \u2014 performance-test framework",
+  "host": "acf6ca0644ef",
+  "note": "dimensioni matmul sintetiche hidden=4096 intermediate=14336 (default, frazione di Mixtral reale 4096x14336) - rilanciare con OSX_BENCH_HIDDEN=4096 OSX_BENCH_INTERMEDIATE=14336 per un numero comparabile al target di produzione",
+  "cpu": {
+    "status": "done",
+    "model_name": "x86_64",
+    "cgroup_cores_available": 32.0,
+    "os_cpu_count_raw": 32,
+    "note": "os_cpu_count_raw puo' riportare la topologia dell'HOST condiviso sotto Docker/RunPod, non i core allocati a questo cgroup (BOOTSTRAP_ANTI_ALZHEIMER.md SS5.9) - usare cgroup_cores_available per OMP_NUM_THREADS/MKL_NUM_THREADS",
+    "avx_support": {
+      "avx2": true,
+      "avx512f": true,
+      "avx512_vnni": true
+    },
+    "matmul_gflops": {
+      "hidden": 4096,
+      "intermediate": 14336,
+      "n_repeats": 30,
+      "batch_1": {
+        "latency": {
+          "p50_ms": 11.683368997182697,
+          "p95_ms": 11.74205699498998,
+          "p99_ms": 11.918244999833405
+        },
+        "gflops_at_p50": 30.155816878244458
+      },
+      "batch_8": {
+        "latency": {
+          "p50_ms": 35.430519994406495,
+          "p95_ms": 35.59945600136416,
+          "p99_ms": 35.6677019954077
+        },
+        "gflops_at_p50": 79.55210051799904
+      },
+      "batch_32": {
+        "latency": {
+          "p50_ms": 36.079775003599934,
+          "p95_ms": 37.40234599536052,
+          "p99_ms": 38.41830400051549
+        },
+        "gflops_at_p50": 312.48224665688974
+      }
+    }
+  },
+  "ram": {
+    "status": "done",
+    "cgroup_available_gb": 229.2240982055664,
+    "note": "None se nessun cgroup leggibile (dev locale/CI) - vedi _read_cgroup_available_gb() in scheduler/gcsg.py, gia' in produzione per _check_cpu_ram_budget()",
+    "copy_bandwidth_gbps": 33.573550879306715,
+    "copy_test_size_mb": 512.0
+  },
+  "gpu": {
+    "status": "done",
+    "name": "NVIDIA GeForce RTX 3090",
+    "driver_version": "595.84",
+    "compute_capability": "8.6",
+    "vram_total_gb": 24.0,
+    "vram_free_gb": 23.54046630859375,
+    "note": "singola lettura statica, non telemetria continua - per quella vedi `nvidia-smi dmon`/`--query-gpu` nel pattern di raccolta esistente (BOOTSTRAP_ANTI_ALZHEIMER.md SS4)",
+    "matmul_gflops": {
+      "hidden": 4096,
+      "intermediate": 14336,
+      "n_repeats": 30,
+      "batch_1": {
+        "latency": {
+          "p50_ms": 0.8185970000340603,
+          "p95_ms": 0.8279879984911531,
+          "p99_ms": 0.8284969953820109
+        },
+        "gflops_at_p50": 430.39680817953223
+      },
+      "batch_8": {
+        "latency": {
+          "p50_ms": 0.973991998762358,
+          "p95_ms": 0.9805090012378059,
+          "p99_ms": 0.9817500031203963
+        },
+        "gflops_at_p50": 2893.8351563272918
+      },
+      "batch_32": {
+        "latency": {
+          "p50_ms": 1.002004006295465,
+          "p95_ms": 1.004680001642555,
+          "p99_ms": 1.0074149977299385
+        },
+        "gflops_at_p50": 11251.740593016657
+      }
+    }
+  },
+  "pcie": {
+    "status": "done",
+    "note": "generalizzato da scripts/bench_pcie_bandwidth_wsl2.py (creato per un dubbio specifico a WSL2/GPU-PV, mai eseguito su RunPod prima di 'continued 17'). Se pinned resta sotto ~3GB/s anche sui tensori grandi: indizio di un tetto WSL2/GPU-PV, non del workload (BOOTSTRAP SS5.4)",
+    "by_size": {
+      "1mb": {
+        "h2d_pageable_gbps": 2.2149948177904375,
+        "h2d_pinned_gbps": 7.831488438303411,
+        "d2h_pageable_gbps": 2.1704233215720867,
+        "d2h_pinned_gbps": 8.133678987243908
+      },
+      "16mb": {
+        "h2d_pageable_gbps": 3.1864759776065754,
+        "h2d_pinned_gbps": 8.625278526979821,
+        "d2h_pageable_gbps": 3.020031332520528,
+        "d2h_pinned_gbps": 8.236149259181895
+      },
+      "64mb": {
+        "h2d_pageable_gbps": 3.172344455730768,
+        "h2d_pinned_gbps": 8.773088722903536,
+        "d2h_pageable_gbps": 2.9830813395963474,
+        "d2h_pinned_gbps": 7.893484451915802
+      },
+      "256mb": {
+        "h2d_pageable_gbps": 3.141066471478989,
+        "h2d_pinned_gbps": 8.841170585944026,
+        "d2h_pageable_gbps": 3.009232526857563,
+        "d2h_pinned_gbps": 7.800683399852335
+      }
+    }
+  }
+}

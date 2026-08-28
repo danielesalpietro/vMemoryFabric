@@ -1,0 +1,58 @@
+docker compose run --rm osx-dev pytest tests/ -v --tb=short \
+    --cov=src --cov-report=term-missing \
+    --asyncio-mode=auto
+ Container vmemoryfabric-osx-dev-run-2dfcfc1122bc Creating 
+ Container vmemoryfabric-osx-dev-run-2dfcfc1122bc Created 
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.1.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-8.2.1, pluggy-1.6.0
+rootdir: /workspace/osx-poc
+configfile: pytest.ini
+plugins: anyio-4.14.2, hypothesis-6.103.1, asyncio-0.23.7, cov-5.0.0
+asyncio: mode=Mode.AUTO
+collected 213 items
+
+tests/test_cpu_kernel.py .....                                           [  2%]
+tests/test_eat.py .....................................                  [ 19%]
+tests/test_perf_test_hardware.py ...................                     [ 28%]
+tests/test_perf_tuning_report.py ....................                    [ 38%]
+tests/test_scheduler.py ........................ss...................... [ 60%]
+...........................................s                             [ 81%]
+tests/test_tier.py ........................................              [100%]
+
+---------- coverage: platform linux, python 3.12.13-final-0 ----------
+Name                        Stmts   Miss  Cover   Missing
+---------------------------------------------------------
+src/__init__.py                 1      1     0%   3
+src/eat/__init__.py             4      0   100%
+src/eat/eat.py                102      2    98%   161, 292
+src/eat/slab.py                50      5    90%   69, 71, 81, 88, 90
+src/eat/types.py               36      0   100%
+src/scheduler/__init__.py       4      0   100%
+src/scheduler/aer.py           22      0   100%
+src/scheduler/gcsg.py         242     58    76%   150-152, 260-261, 266, 274, 411-414, 425, 427, 481-488, 492-500, 510-518, 657, 731-749, 827, 830-840
+src/scheduler/ptpep.py        107      7    93%   122, 172, 256, 269-276
+src/tier/__init__.py            5      0   100%
+src/tier/gpu.py                43     10    77%   39-40, 54, 93, 98-100, 103-104, 134
+src/tier/io.py                 30      0   100%
+src/tier/manager.py           134     13    90%   214, 254, 277-283, 319, 352-360
+src/tier/policies.py           48      2    96%   97-98
+---------------------------------------------------------
+TOTAL                         828     98    88%
+
+
+======================= 210 passed, 3 skipped in 38.30s ========================
