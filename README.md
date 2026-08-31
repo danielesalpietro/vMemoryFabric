@@ -54,8 +54,8 @@ This repository targets a **Docker-on-Windows** development setup with a single 
 | Pinned CUDA memory  | ❌ not available on this Docker-on-Windows setup; ✅ auto-detected and used on real Linux (`GCSGWorker._should_pin_transfers()` via `vllm.platforms.interface.in_wsl()`) — confirmed on the Z8 G4 bare-metal host | n/a — already resolved on Linux |
 | `io_uring`          | ❌ WSL2/Docker; `AsyncNVMeIO` still uses `asyncio`+`aiofiles` even on Linux bare-metal — no real `io_uring` binding wired in yet | Linux bare-metal, code not written |
 | Optane PMEM (EMH-2) | ❌ deferred here (Docker-on-Windows has no PMEM); ✅ tier implemented on the Z8 G4 bare-metal host (issue #7, PR #52) — not yet wired into the production inference path, see issue #57 | n/a — hardware unlocked, integration open |
-| Dual GPU (RTX 5080) | ❌ not yet available    | RTX 5080 arrival        |
-| AER replication     | ❌ stub (single GPU)    | Dual-GPU setup          |
+| Dual GPU | ✅ hardware present on Z8 G4 bare-metal since 2026-08-30 (RTX 3090 24GB + **RTX 5060 Ti 16GB**, not the originally-expected RTX 5080); ❌ unusable as-is — `torch==2.5.1+cu124` lacks `sm_120` (Blackwell), same failure mode already seen on a RTX PRO 6000 Blackwell pod in August, confirmed on this exact card too (see issue [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8)) | `torch>=2.7`/`cu128` + compatible vLLM pin — compatibility check handed off, see `osx-poc/handoff_rtx5060ti16gb.md` |
+| AER replication     | ❌ stub (single GPU)    | Dual-GPU toolchain unblocked (above) |
 | RecursiveMAS M4     | ❌ out of PoC scope     | Future release          |
 | vLLM (M3 GCSG hooks) | ❌ excluded from base image | Sprint 3 — see `requirements-vllm.txt` |
 
@@ -271,7 +271,8 @@ Still open within Sprint 3, keeping it below 100%: PT-PEP ships as a
 TF-IDF+centroid classifier rather than the originally-planned BERT-small,
 a documented deviation (hit rate 87.2%, past the >70% target, but on a
 same-distribution held-out set, not OOD); AER is trigger-logic-only by
-design, blocked on dual-GPU hardware (#8); path 1 (`_ShadowExpertINT4`)
+design, blocked on dual-GPU toolchain support, not hardware anymore since
+2026-08-30 (#8); path 1 (`_ShadowExpertINT4`)
 is still only verified on a tiny non-offloaded test model; and the
 shadow pool's expert selection is a round-robin placeholder **when no
 `TierManager` is wired** — now genuinely hotness-driven when one is (see
@@ -482,7 +483,8 @@ Two phases, in order, not scoped together:
    process, one dashboard.
 2. **Multi-worker aggregation** — deferred until there's more than one
    worker process to aggregate across, which today means issue #8
-   (dual-GPU / AER, blocked on RTX 5080 arrival) landing first. Needs a
+   (dual-GPU / AER, hardware present since 2026-08-30 but blocked on a
+   `torch`/`vllm` toolchain bump — see #8) landing first. Needs a
    real design decision this project hasn't made yet (Prometheus
    multi-target scraping by instance label vs. a pushgateway pattern for
    short-lived workers) — not started until phase 1 is real and the
@@ -540,7 +542,7 @@ Findings from M1/M2 benchmarking that were deliberately left unresolved, each wi
 | [#5](https://github.com/danielesalpietro/vMemoryFabric/issues/5) | No CUDA stream pipelining in `GPUTransfer` | Deferred since Sprint 0, needs real compute to overlap with |
 | ~~[#6](https://github.com/danielesalpietro/vMemoryFabric/issues/6)~~ | No `pyproject.toml`/`ruff.toml` | **Closed 2026-08-14** — `pyproject.toml` added with a deliberate rule set (PR #11), plus a repo-wide `ruff --fix` pass; not reflected here until this pass, a Sprint 5 issue-triage gap of its own |
 | ~~[#7](https://github.com/danielesalpietro/vMemoryFabric/issues/7)~~ | PMEM (EMH-2) integration | **Closed 2026-08-24** (PR #52) — hardware unblocked by the Z8 G4 bare-metal migration (`osx-poc/LOGBOOK_NEW_Z8.md`): `/dev/pmem1` reconfigured `sector`→`fsdax` via `ndctl`, `tier/pmem.py` (`PMEMTransfer`, mmap-backed fixed-slot pool), `Tier.PMEM`, new `TierManager` hops (NVME↔PMEM, PMEM↔DDR4). Not yet wired into the production GCSG/EAT path — tracked as issue [#57](https://github.com/danielesalpietro/vMemoryFabric/issues/57) |
-| [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | Blocked on RTX 5080 arrival |
+| [#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8) | Dual-GPU / AER | **Hardware arrived 2026-08-30** (RTX 5060 Ti 16GB alongside the RTX 3090, not the originally-expected RTX 5080) — verified on real hardware to be unusable with the current toolchain: `torch.cuda.get_arch_list()` lacks `sm_120`, a minimal CUDA op on the second device fails with the same `no kernel image is available` error already seen on a RTX PRO 6000 Blackwell pod. Blocked on a `torch>=2.7`/`cu128` bump (drags the `vllm==0.6.6.post1` pin), not on hardware anymore — compatibility check in progress, see `osx-poc/handoff_rtx5060ti16gb.md` |
 | ~~[#12](https://github.com/danielesalpietro/vMemoryFabric/issues/12)~~ | `make lint`/`test`/`bench` fail on relative paths — container `WORKDIR` (`/workspace`) doesn't match `osx-poc/`'s relative paths | **Closed 2026-08-24** (PR #50) — `working_dir: /workspace/osx-poc` added to the `osx-dev` service in `docker-compose.yml`; no more `cd osx-poc &&` workaround needed |
 | ~~[#48](https://github.com/danielesalpietro/vMemoryFabric/issues/48)~~ | `bench_ddr4_to_vram()` guaranteed CUDA OOM on any single ≤24 GB GPU | **Closed 2026-08-24** (PR #51) — dormant since `N_SHARDS` was raised 20→100 (issue #3 fix above): each promoted shard is a fixed 256 MB slab slot (`SlabAllocator.get_buffer()`), never evicted in the benchmark loop, so 100 shards accumulate 25.6 GB of permanently-resident VRAM. Fixed with an `evict()` call after each timed sample; doesn't touch the separate `promote_live_tensor` numbers already cited for target 4 above |
 | [#41](https://github.com/danielesalpietro/vMemoryFabric/issues/41) | Self-hosted runner (`Z8-G4-RTX3090`) `D:` drive at 83% full (395/477 GB), 81 GB free | Mostly unrelated Docker images/volumes from other projects sharing the box, not vMemoryFabric's own ~49 GB volume — real risk to `full-gpu-tests`/local iteration if it fills further, not yet acted on |
