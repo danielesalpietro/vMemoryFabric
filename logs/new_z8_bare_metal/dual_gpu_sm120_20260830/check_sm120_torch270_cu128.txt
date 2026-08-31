@@ -1,0 +1,18 @@
+# comando: python3.12 check_sm120.py  (dentro container osx-ev-torch27)
+# immagine base: nvidia/cuda:12.1.1-base-ubuntu22.04 + python3.12 + torch
+# GPU esposte: NVIDIA_VISIBLE_DEVICES=all (--gpus all)
+# host: berlin-3eie  data: 2026-08-31T07:53:12Z
+# driver host: 595.84
+
+/usr/local/lib/python3.12/dist-packages/torch/_subclasses/functional_tensor.py:276: UserWarning: Failed to initialize NumPy: No module named 'numpy' (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:81.)
+  cpu = _conversion_method_template(device=torch.device("cpu"))
+torch          : 2.7.0+cu128
+CUDA build     : 12.8
+device_count   : 2
+arch_list      : ['sm_75', 'sm_80', 'sm_86', 'sm_90', 'sm_100', 'sm_120', 'compute_120']
+sm_120 in list : True
+capabilities   : [(8, 6), (12, 0)]
+
+--- operazione CUDA minima: torch.randn(10, device=cuda:i).sum() ---
+cuda:0  NVIDIA GeForce RTX 3090  (24117 MiB)  -> OK  sum=2.7551589012145996
+cuda:1  NVIDIA GeForce RTX 5060 Ti  (15849 MiB)  -> OK  sum=2.0740156173706055

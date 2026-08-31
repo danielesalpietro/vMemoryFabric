@@ -1,0 +1,28 @@
+# comando: python3.12 check_sm120.py  (dentro container osx-ev-torch25)
+# immagine base: nvidia/cuda:12.1.1-base-ubuntu22.04 + python3.12 + torch
+# GPU esposte: NVIDIA_VISIBLE_DEVICES=all (--gpus all)
+# host: berlin-3eie  data: 2026-08-31T07:53:10Z
+# driver host: 595.84
+
+/usr/local/lib/python3.12/dist-packages/torch/_subclasses/functional_tensor.py:295: UserWarning: Failed to initialize NumPy: No module named 'numpy' (Triggered internally at ../torch/csrc/utils/tensor_numpy.cpp:84.)
+  cpu = _conversion_method_template(device=torch.device("cpu"))
+/usr/local/lib/python3.12/dist-packages/torch/cuda/__init__.py:235: UserWarning: 
+NVIDIA GeForce RTX 5060 Ti with CUDA capability sm_120 is not compatible with the current PyTorch installation.
+The current PyTorch install supports CUDA capabilities sm_50 sm_60 sm_70 sm_75 sm_80 sm_86 sm_90.
+If you want to use the NVIDIA GeForce RTX 5060 Ti GPU with PyTorch, please check the instructions at https://pytorch.org/get-started/locally/
+
+  warnings.warn(
+torch          : 2.5.1+cu124
+CUDA build     : 12.4
+device_count   : 2
+arch_list      : ['sm_50', 'sm_60', 'sm_70', 'sm_75', 'sm_80', 'sm_86', 'sm_90']
+sm_120 in list : False
+capabilities   : [(8, 6), (12, 0)]
+
+--- operazione CUDA minima: torch.randn(10, device=cuda:i).sum() ---
+cuda:0  NVIDIA GeForce RTX 3090  (24117 MiB)  -> OK  sum=1.0150420665740967
+cuda:1  NVIDIA GeForce RTX 5060 Ti  (15849 MiB)  -> RuntimeError: CUDA error: no kernel image is available for execution on the device
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+

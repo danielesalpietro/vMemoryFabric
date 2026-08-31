@@ -5,6 +5,110 @@ Dev diary for OSX-PoC — the "how we actually got here" story behind the
 
 ---
 
+## 2026-08-30/31 — Z8 bare-metal: recupero dati grezzi, seconda GPU (RTX 5060 Ti), analisi compatibilità vLLM/torch≥2.7
+
+**Release:** nessuna — recupero dati, verifica hardware e analisi di compatibilità. **Nessun pin toccato.**
+
+Tre compiti consecutivi sulla sessione con accesso diretto alla Z8. Registrati
+insieme perché condividono una lezione sola, in coda a questa entry.
+
+### 1. Recupero dei dati grezzi mai committati (branch `claude/z8-raw-data-recovery`, `-2`)
+
+I file citati in prosa da `LOGBOOK_NEW_Z8.md` (sessione 2026-08-24) ma mai
+committati sono stati recuperati e messi sotto `logs/new_z8_bare_metal/`.
+
+Il presupposto della richiesta era sbagliato in un modo che vale la pena
+registrare: **la macchina su cui gira questa sessione *è* la Z8** (hostname
+`berlin-3eie`, Xeon Gold 6244 2-socket, `/dev/pmem*` presenti). Il
+tentativo di SSH verso il suo stesso indirizzo LAN falliva con
+`Permission denied (publickey)` — nessuna chiave self-loopback in
+`authorized_keys` — ma era irrilevante: nessun trasferimento serviva, i file
+erano già in `~/vMemoryFabric/`, untracked, ai path relativi giusti.
+
+Identità verificata prima di committare, non dedotta dal nome della cartella:
+`hw_z8_baremetal.json` riporta `gflops_at_p50 = 31.604908778112684`, che coincide
+col **31.60** citato nella tabella di confronto a 4 host del logbook.
+
+Emerso durante il lavoro, non risolto: **`osx-poc/LOGBOOK_NEW_Z8.md` non è nel
+worktree del branch `claude/ddr4-ram-processing-unzseh`** pur essendo su
+`develop` (aggiunto in `449171f`/`81a384e`); l'HEAD di quel branch è un merge di
+develop che però non contiene il file. Segnalato, non toccato.
+
+### 2. La seconda GPU è arrivata — RTX 5060 Ti 16GB, non la RTX 5080 attesa
+
+Eseguita la checklist "Da fare prima/durante l'arrivo" dell'issue #8 prima di
+scrivere qualunque codice AER. `nvidia-smi` vede entrambe le schede (indici 0/1,
+24576/16311 MiB, bus PCIe distinti `2D:00.0` e `99:00.0` — root complex separati,
+rilevante per il lavoro AER). `torch==2.5.1+cu124` riporta `arch_list` senza
+`sm_120`, e `torch.randn(10, device='cuda:1').sum()` fallisce con
+`RuntimeError: CUDA error: no kernel image is available for execution on the device`
+— **lo stesso identico errore** già documentato (entry 2026-08-12/13) per la
+RTX PRO 6000 Blackwell su RunPod. La 3090 funziona normalmente.
+
+Scoperto durante la verifica: **l'immagine `osx-poc:dev` non esiste più su questa
+Z8**, verosimile conseguenza della riprovisionatura del 24 agosto verso
+`/mnt/wdc-docker`. I check sono stati fatti su un ambiente equivalente
+ricostruito (stesso base image, stesso Python 3.12.13, stesso wheel torch), non
+sull'immagine del progetto — limite dichiarato, non aggirato.
+
+### 3. Analisi di compatibilità vLLM ↔ `torch>=2.7`/`cu128`
+
+Su handoff dedicato (`osx-poc/handoff_rtx5060ti16gb.md`). Risultato completo in
+`reports/vllm_torch27_compat_analysis.md`; in sintesi: **minimo `vllm==0.9.0`
+con `torch==2.7.0+cu128`, finestra utilizzabile `0.9.0`–`0.10.1`**, che si chiude
+per motivi estranei a torch — `mixtral_quant.py` sparisce in 0.10.2 (rompe
+`_AWQShadowExpert`) e `vllm/worker/worker.py` in 0.11.0 (sparisce la classe base
+di `GCSGWorker`).
+
+Due trappole trovate che non erano nell'ipotesi di partenza:
+
+- **`torch==2.7.0` puro da PyPI è una build cu126** e non contiene `sm_120`. Il
+  pin di vLLM dichiara `torch==2.7.0` senza local version, quindi
+  `pip install vllm==0.9.0` liscio riproduce esattamente l'errore del 30 agosto.
+- **Un allarme rivelatosi falso**: `fused_marlin_moe` cambia firma
+  (`num_bits` → `quant_type_id`) tra 0.6.6.post1 e 0.9.0, ma `gcsg.py` non chiama
+  mai quell'op direttamente — la riga 668 è dentro un docstring. Registrato
+  perché la prossima persona che legge quel docstring farà lo stesso salto.
+
+Un errore fatto e corretto in corsa, lasciato agli atti: una prima passata aveva
+concluso che 0.9.0 fosse la prima release vLLM con arch `12.0` nei kernel, avendo
+campionato solo 4 tag. La bisezione completa mostra che è **0.8.0**. La
+conclusione non cambia (0.8.x pinna `torch==2.6.0`, che non ha wheel cu128) ma il
+motivo sì: vincola torch, non i kernel vLLM.
+
+### Perché queste tre cose stanno nella stessa entry
+
+Tutte e tre sono finite, in prima battuta, **solo in chat o solo su una
+macchina**. I dati del punto 1 esistevano solo sulla Z8; i numeri del punto 2
+sono stati riportati sull'issue #8 in prosa mentre i container che li avevano
+prodotti venivano rimossi; l'analisi del punto 3 non era scritta da nessuna parte
+nel repo. È lo stesso pattern che `handoff_rtx5060ti16gb.md` §0 elenca come i due
+incidenti già capitati — al terzo giro è una regolarità, non una coincidenza.
+
+La correzione applicata qui: **i check dei punti 2 e 3 sono stati ri-eseguiti il
+31 agosto** e i loro output grezzi archiviati sotto
+`logs/new_z8_bare_metal/dual_gpu_sm120_20260830/` e
+`logs/new_z8_bare_metal/vllm_torch27_compat_20260831/`, ciascun file con in testa
+il comando, la fonte, il timestamp e l'host che l'hanno prodotto, più gli script
+(`check_sm120.py`, `collect_vllm_torch_pins.py`) che li rigenerano. Ogni claim
+quantitativa del report punta a un file, non a un ricordo di questa conversazione.
+
+### Cosa resta aperto
+
+- **Nessun run end-to-end**: che `sm_120` sia negli archi e che i simboli
+  esistano ai tag non dimostra che Mixtral-8x7B-AWQ giri su vLLM 0.9.0 con GCSG
+  attivo. `vllm` non è mai stato installato in questa sessione.
+- **Baseline M1/M2 non eseguita** (handoff §2.3): è prerequisito dell'upgrade,
+  non dell'analisi.
+- **`NVIDIA_VISIBLE_DEVICES=0`** in `docker-compose.yml` — blocco indipendente
+  dalla toolchain, la seconda GPU resta invisibile ai container finché resta lì.
+- **Due riferimenti obsoleti nel docstring di `gcsg.py`**
+  (`vllm.executor.gpu_executor.GPUExecutor`, rimosso in 0.7.0; firma `num_bits=`
+  di `fused_marlin_moe`): segnalati, non corretti — scope aggiuntivo rispetto a
+  quanto chiesto dall'handoff.
+
+---
+
 ## 2026-08-26 — Berg, continued: Gate A5 closes 3/4, first beta tag prepared but not pushed — a tooling limit, recorded rather than routed around
 
 **Release:** none shipped — gate/release-prep bookkeeping only.

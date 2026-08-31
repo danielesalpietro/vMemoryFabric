@@ -1,0 +1,96 @@
+# Firme API vLLM usate da gcsg.py — confronto 0.6.6.post1 (pin attuale) vs 0.9.0 (candidata)
+# fonte: sorgenti ai tag su raw.githubusercontent.com
+# generato: 2026-08-31T07:35:39Z  host: berlin-3eie
+
+########## v0.6.6.post1 — AWQMoEMethod.apply()  (chiamata da gcsg.py:840 via quant_method.apply)
+# file: vllm/model_executor/layers/quantization/awq_marlin.py
+    def apply(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        router_logits: torch.Tensor,
+        top_k: int,
+        renormalize: bool,
+        use_grouped_topk: bool = False,
+        topk_group: Optional[int] = None,
+        num_expert_group: Optional[int] = None,
+        custom_routing_function: Optional[Callable] = None,
+        scoring_func: str = "softmax",
+        e_score_correction_bias: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+
+########## v0.6.6.post1 — fused_marlin_moe()  (NON chiamata da gcsg.py: solo citata nel docstring)
+# file: vllm/model_executor/layers/fused_moe/fused_marlin_moe.py
+def fused_marlin_moe(
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w1_scale: torch.Tensor,
+    w2_scale: torch.Tensor,
+    gating_output: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    g_idx1: Optional[torch.Tensor] = None,
+    g_idx2: Optional[torch.Tensor] = None,
+    sort_indices1: Optional[torch.Tensor] = None,
+    sort_indices2: Optional[torch.Tensor] = None,
+    w1_zeros: Optional[torch.Tensor] = None,
+    w2_zeros: Optional[torch.Tensor] = None,
+    num_bits: int = 8,
+    is_k_full: bool = True,
+) -> torch.Tensor:
+def fused_marlin_moe_fake(
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w1_scale: torch.Tensor,
+    w2_scale: torch.Tensor,
+
+########## v0.9.0 — AWQMoEMethod.apply()  (chiamata da gcsg.py:840 via quant_method.apply)
+# file: vllm/model_executor/layers/quantization/awq_marlin.py
+    def apply(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        router_logits: torch.Tensor,
+        top_k: int,
+        renormalize: bool,
+        use_grouped_topk: bool = False,
+        topk_group: Optional[int] = None,
+        num_expert_group: Optional[int] = None,
+        global_num_experts: int = -1,
+        expert_map: Optional[torch.Tensor] = None,
+        custom_routing_function: Optional[Callable] = None,
+        scoring_func: str = "softmax",
+        e_score_correction_bias: Optional[torch.Tensor] = None,
+        apply_router_weight_on_input: bool = False,
+        activation: str = "silu",
+    ) -> torch.Tensor:
+
+########## v0.9.0 — fused_marlin_moe()  (NON chiamata da gcsg.py: solo citata nel docstring)
+# file: vllm/model_executor/layers/fused_moe/fused_marlin_moe.py
+def fused_marlin_moe(hidden_states: torch.Tensor,
+                     w1: torch.Tensor,
+                     w2: torch.Tensor,
+                     w1_scale: torch.Tensor,
+                     w2_scale: torch.Tensor,
+                     gating_output: torch.Tensor,
+                     topk_weights: torch.Tensor,
+                     topk_ids: torch.Tensor,
+                     quant_type_id: int,
+                     global_num_experts: int = -1,
+                     expert_map: Optional[torch.Tensor] = None,
+                     global_scale1: Optional[torch.Tensor] = None,
+                     global_scale2: Optional[torch.Tensor] = None,
+                     g_idx1: Optional[torch.Tensor] = None,
+                     g_idx2: Optional[torch.Tensor] = None,
+                     sort_indices1: Optional[torch.Tensor] = None,
+                     sort_indices2: Optional[torch.Tensor] = None,
+                     w1_zeros: Optional[torch.Tensor] = None,
+                     w2_zeros: Optional[torch.Tensor] = None,
+                     workspace: Optional[torch.Tensor] = None,
+                     is_k_full: bool = True,
+                     inplace: bool = False) -> torch.Tensor:
+    """
+    This function computes a Mixture of Experts (MoE) layer using two sets of
+

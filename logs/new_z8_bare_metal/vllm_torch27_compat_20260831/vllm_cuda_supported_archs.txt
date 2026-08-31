@@ -1,0 +1,73 @@
+# Archi CUDA compilati nei kernel propri di vLLM
+# fonte: CMakeLists.txt di ogni tag su raw.githubusercontent.com
+# comando: curl -sS .../<tag>/CMakeLists.txt | grep -B4 -A2 CUDA_SUPPORTED_ARCHS
+# generato: 2026-08-31T07:34:41Z  host: berlin-3eie
+
+=============== v0.6.6.post1 ===============
+#
+set(PYTHON_SUPPORTED_VERSIONS "3.9" "3.10" "3.11" "3.12")
+
+# Supported NVIDIA architectures.
+set(CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0")
+
+# Supported AMD GPU architectures.
+set(HIP_SUPPORTED_ARCHS "gfx906;gfx908;gfx90a;gfx940;gfx941;gfx942;gfx1030;gfx1100;gfx1101")
+
+=============== v0.8.5 ===============
+#
+set(PYTHON_SUPPORTED_VERSIONS "3.9" "3.10" "3.11" "3.12")
+
+# Supported NVIDIA architectures.
+set(CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0;10.0;10.1;12.0")
+
+# Supported AMD GPU architectures.
+set(HIP_SUPPORTED_ARCHS "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1030;gfx1100;gfx1101;gfx1200;gfx1201")
+
+=============== v0.9.0 ===============
+# Supported NVIDIA architectures.
+# This check must happen after find_package(Torch) because that's when CMAKE_CUDA_COMPILER_VERSION gets defined
+if(DEFINED CMAKE_CUDA_COMPILER_VERSION AND
+   CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8)
+  set(CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0;10.0;10.1;12.0")
+else()
+  set(CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0")
+endif()
+
+#
+
+=============== v0.10.1 ===============
+# Supported NVIDIA architectures.
+# This check must happen after find_package(Torch) because that's when CMAKE_CUDA_COMPILER_VERSION gets defined
+if(DEFINED CMAKE_CUDA_COMPILER_VERSION AND
+   CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8)
+  set(CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0;10.0;10.1;12.0")
+else()
+  set(CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0")
+endif()
+
+#
+
+=============== v0.11.0 ===============
+# Supported NVIDIA architectures.
+# This check must happen after find_package(Torch) because that's when CMAKE_CUDA_COMPILER_VERSION gets defined
+if(DEFINED CMAKE_CUDA_COMPILER_VERSION AND
+   CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8)
+  set(CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0;10.0;10.1;12.0")
+else()
+  set(CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0")
+endif()
+
+#
+
+
+=============== BISEZIONE prima release con arch 12.0 ===============
+# comando: curl -sS .../<tag>/CMakeLists.txt | grep -o 'CUDA_SUPPORTED_ARCHS "[^"]*"' | head -1
+v0.7.3 -> CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0"
+v0.8.0 -> CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0;10.0;10.1;12.0"
+v0.8.1 -> CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0;10.0;10.1;12.0"
+v0.8.5 -> CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0;10.0;10.1;12.0"
+
+RISULTATO: prima release vLLM con arch 12.0 = 0.8.0 (non 0.9.0).
+In 0.8.x l'elenco e' incondizionato; da 0.9.0 e' dietro if(CMAKE_CUDA_COMPILER_VERSION >= 12.8).
+NB: 0.8.x pinna torch==2.6.0, che NON ha wheel cu128 (vedi torch_cu128_wheels.txt)
+    -> nessun sm_120 lato torch. Il vincolo stringente resta torch, non i kernel vLLM.
