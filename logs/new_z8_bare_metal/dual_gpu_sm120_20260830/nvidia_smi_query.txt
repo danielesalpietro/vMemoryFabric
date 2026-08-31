@@ -1,0 +1,10 @@
+# comando: nvidia-smi --query-gpu=index,name,memory.total,pci.bus_id,compute_cap,driver_version --format=csv
+# host: berlin-3eie  data: 2026-08-31T07:33:05Z
+
+index, name, memory.total [MiB], pci.bus_id, compute_cap, driver_version
+0, NVIDIA GeForce RTX 3090, 24576 MiB, 00000000:2D:00.0, 8.6, 595.84
+1, NVIDIA GeForce RTX 5060 Ti, 16311 MiB, 00000000:99:00.0, 12.0, 595.84
+
+# comando: nvidia-smi -L
+GPU 0: NVIDIA GeForce RTX 3090 (UUID: GPU-43a04d95-0acb-c344-96a9-0efd013e32a4)
+GPU 1: NVIDIA GeForce RTX 5060 Ti (UUID: GPU-f8774b4a-bc76-d044-772a-5fbef5d2083c)

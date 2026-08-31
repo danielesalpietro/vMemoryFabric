@@ -1,0 +1,46 @@
+# Punti di aggancio di gcsg.py verificati sul sorgente vLLM 0.9.0
+# comando: curl -sS .../v0.9.0/<file> | grep -n <pattern>
+# generato: 2026-08-31T07:35:59Z  host: berlin-3eie
+
+=== [hook 1] worker_cls stringa qualname — vllm/engine/arg_utils.py ===
+402:    worker_cls: str = ParallelConfig.worker_cls
+634:                                    **parallel_kwargs["worker_cls"])
+1076:            worker_cls=self.worker_cls,
+=== [hook 1] resolve_obj_by_qualname — vllm/worker/worker_base.py ===
+21:                        resolve_obj_by_qualname, run_method,
+147:        cls = resolve_obj_by_qualname(vllm_config.parallel_config.worker_cls)
+558:            worker_class = resolve_obj_by_qualname(
+=== [hook 2] Worker.init_device/load_model + mem_get_info — vllm/worker/worker.py ===
+38:class Worker(LocalOrDistributedWorkerBase):
+133:        free_bytes_before_sleep = torch.cuda.mem_get_info()[0]
+145:        free_bytes_after_sleep, total = torch.cuda.mem_get_info()
+166:    def init_device(self) -> None:
+196:    def load_model(self):
+246:        free_memory_pre_profile, total_gpu_memory = torch.cuda.mem_get_info()
+=== [hook 3] MixtralMoE.gate / router_logits — vllm/model_executor/models/mixtral.py ===
+57:class MixtralMoE(nn.Module):
+81:        self.gate = ReplicatedLinear(hidden_size,
+105:        router_logits, _ = self.gate(hidden_states)
+216:        self.block_sparse_moe = MixtralMoE(
+=== [hook 4] execute_model(ExecuteModelRequest) + seq_group_metadata_list ===
+79:        execute_model_req: Optional[ExecuteModelRequest] = None
+169:        execute_model_req: Optional[ExecuteModelRequest] = None
+342:                execute_model_req.seq_group_metadata_list,
+363:        execute_model_req: Optional[ExecuteModelRequest] = None
+=== [path AWQ ModuleList] MixtralMLP w1/w2/w3 — models/mixtral_quant.py ===
+59:class MixtralMLP(nn.Module):
+73:        self.w1 = ReplicatedLinear(self.hidden_dim,
+77:        self.w2 = ReplicatedLinear(self.ffn_dim,
+81:        self.w3 = ReplicatedLinear(self.hidden_dim,
+122:        self.experts = nn.ModuleList([
+=== [path Marlin] attributi FusedMoE letti da gcsg.py — fused_moe/layer.py ===
+763:        self.top_k = top_k
+769:        self.renormalize = renormalize
+770:        self.use_grouped_topk = use_grouped_topk
+773:        self.num_expert_group = num_expert_group
+774:        self.topk_group = topk_group
+775:        self.custom_routing_function = custom_routing_function
+776:        self.scoring_func = scoring_func
+777:        self.e_score_correction_bias = e_score_correction_bias
+=== [pinning] in_wsl() — vllm/platforms/interface.py ===
+32:def in_wsl() -> bool:
