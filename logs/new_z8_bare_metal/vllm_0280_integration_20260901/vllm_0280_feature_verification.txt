@@ -1,0 +1,107 @@
+# Verifica delle feature vLLM giugno-agosto 2026 contro il sorgente reale
+# Metodo: sdist ufficiali da PyPI (files.pythonhosted.org/packages/source/v/vllm/),
+#         vllm-0.22.1.tar.gz (2026-06-05) e vllm-0.28.0.tar.gz (2026-08-26), estratte
+#         e grep-ate. NESSUN pip install eseguito, nessun run.
+# Data: 2026-09-01
+
+== 1. Nomi citati nella richiesta, cercati case-insensitive nell'albero .py di 0.28.0 ==
+   (n = numero di file .py che contengono il termine)
+
+termine                    n_file   esito
+dflash                         35
+dspark                         37
+p_eagle                         5
+eagle3                         60
+eagle 3.1                       0
+elastic_ep                     27
+decode_context_parallel        33
+DiffusionGemma                  7
+kimi_k3                        40
+deepseek_v4                    67
+minimax_m3                     35
+qwen3_5                        19
+nemotron                       40
+gemma4                         40
+PegaFlow                        0
+novita                          0
+themis                          0
+semantic_router                 0
+
+   NOTA su p_eagle: i 5 file che matchano sono falsi positivi — il match e'
+   la sottostringa in '_setup_eagle3_aux_hidden_state_outputs' / 'drop_eagle_block',
+   non un metodo speculativo chiamato P-EAGLE. Verifica:
+./v1/worker/gpu_model_runner.py:5478:                self._setup_eagle3_aux_hidden_state_outputs()
+./v1/worker/gpu_model_runner.py:5587:    def _setup_eagle3_aux_hidden_state_outputs(self) -> None:
+./v1/worker/cpu_model_runner.py:141:        self._setup_eagle3_aux_hidden_state_outputs()
+./v1/core/kv_cache_coordinator.py:535:            drop_eagle_block=0 in self.eagle_group_ids,
+
+   NOTA su 'eagle 3.1': la stringa non esiste. Il metodo si chiama 'eagle3'.
+
+== 2. Metodi di speculative decoding effettivamente dichiarati (config/speculative.py) ==
+MTPModelTypes = Literal[
+    "deepseek_mtp",
+    "dots3_note_mtp",
+    "mimo_mtp",
+    "mimo_v2_mtp",
+    "glm4_moe_mtp",
+    "glm4_moe_lite_mtp",
+    "glm_ocr_mtp",
+    "ernie_mtp",
+    "nemotron_h_mtp",
+    "exaone_moe_mtp",
+    "exaone4_5_mtp",
+    "qwen3_next_mtp",
+    "qwen3_5_mtp",
+    "longcat_flash_mtp",
+    "bailing_hybrid_v3_mtp",
+    "minimax_m3_mtp",
+    "bailing_hybrid_mtp",
+    "mtp",
+    "kimi_k3_mtp",
+    "pangu_ultra_moe_mtp",
+    "step3p5_mtp",
+    "hy_v3_mtp",
+    "gemma4_mtp",
+    "inkling_mtp",
+]
+NgramGPUTypes = Literal["ngram_gpu"]
+DFlashModelTypes = Literal["dflash"]
+DSparkModelTypes = Literal["dspark"]
+EagleModelTypes = Literal[
+    "eagle", "eagle3", "extract_hidden_states", MTPModelTypes, DFlashModelTypes
+]
+SpeculativeMethod = Literal[
+    "ngram",
+    "medusa",
+    "mlp_speculator",
+    "draft_model",
+    "suffix",
+    "custom_class",
+    EagleModelTypes,
+    NgramGPUTypes,
+    DSparkModelTypes,
+]
+RejectionSampleMethod = Literal["standard", "synthetic", "block"]
+DraftSampleMethod = Literal["greedy", "probabilistic"]
+
+== 3. CUDA_SUPPORTED_ARCHS in 0.28.0 (CMakeLists.txt) ==
+# Supported NVIDIA architectures.
+# This check must happen after find_package(Torch) because that's when CMAKE_CUDA_COMPILER_VERSION gets defined
+if(DEFINED CMAKE_CUDA_COMPILER_VERSION AND
+   CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.4)
+  # Rubin (10.7) can run SM100 family code, but CUDA 13.4 also supports
+  # targeting it directly.
+  set(CUDA_SUPPORTED_ARCHS "7.5;8.0;8.6;8.7;8.9;9.0;10.0;10.7;11.0;12.0")
+elseif(DEFINED CMAKE_CUDA_COMPILER_VERSION AND
+   CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
+   # starting from CUDA 12.9 and Blackwell (10.0), we use family-specific targets (10.0f, 12.0f, etc)
+   # to support the whole generation without specifying all sub-architectures
+   # see: https://developer.nvidia.com/blog/nvidia-blackwell-and-nvidia-cuda-12-9-introduce-family-specific-architecture-features/
+  set(CUDA_SUPPORTED_ARCHS "7.5;8.0;8.6;8.7;8.9;9.0;10.0;11.0;12.0")
+elseif(DEFINED CMAKE_CUDA_COMPILER_VERSION AND
+   CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8)
+  set(CUDA_SUPPORTED_ARCHS "7.5;8.0;8.6;8.7;8.9;9.0;10.0;10.1;10.3;12.0;12.1")
+else()
+  set(CUDA_SUPPORTED_ARCHS "7.0;7.5;8.0;8.6;8.7;8.9;9.0")
+endif()
+

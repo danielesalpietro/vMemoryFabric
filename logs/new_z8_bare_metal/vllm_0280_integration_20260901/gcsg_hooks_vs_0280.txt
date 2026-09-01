@@ -1,0 +1,43 @@
+# Stato in vLLM 0.28.0 delle dipendenze interne di osx-poc/src/scheduler/gcsg.py
+# Aggiorna la tabella di reports/vllm_torch27_compat_analysis.md §2, che si fermava a 0.9.0/0.10.1.
+# Fonte: vllm-0.28.0.tar.gz (PyPI sdist). Data: 2026-09-01. Nessun run eseguito.
+
+== File/moduli richiesti da gcsg.py ==
+  vllm/worker/worker.py                          ASSENTE (rimosso)
+  vllm/worker/worker_base.py                     ASSENTE (rimosso)
+  vllm/model_executor/models/mixtral_quant.py    ASSENTE (rimosso)
+  vllm/model_executor/models/mixtral.py          PRESENTE
+  vllm/platforms/interface.py                    PRESENTE
+
+  Contenuto della directory vllm/worker/ in 0.28.0:
+
+== L'hook sul gate MoE (gcsg.py docstring punto 3) sopravvive? ==
+   vllm/model_executor/models/mixtral.py in 0.28.0:
+     69:class MixtralMoE(nn.Module):
+     109:        self.gate = ReplicatedLinear(
+     139:        router_logits, _ = self.gate(hidden_states)
+     140:        final_hidden_states = self.experts(hidden_states, router_logits)
+   => self.gate esiste ancora, router_logits e' ancora una variabile locale scartata:
+      il forward hook PyTorch su layer_i.block_sparse_moe.gate resta valido.
+      Cio' che non esiste piu' e' il VEICOLO di installazione (GCSGWorker(Worker)).
+
+== in_wsl() — usata da GCSGWorker._should_pin_transfers() ==
+     vllm/platforms/interface.py:62:def in_wsl() -> bool:
+     vllm/platforms/interface.py:62:def in_wsl() -> bool:
+
+== Meccanismo di plugin generale (alternativa supportata a GCSGWorker) ==
+     18:DEFAULT_PLUGINS_GROUP = "vllm.general_plugins"
+     20:IO_PROCESSOR_PLUGINS_GROUP = "vllm.io_processor_plugins"
+     23:PLATFORM_PLUGINS_GROUP = "vllm.platform_plugins"
+     30:ENDPOINT_PLUGINS_GROUP = "vllm.endpoint_plugins"
+     48:    is_default_group = group == DEFAULT_PLUGINS_GROUP
+     87:    plugins = load_plugins_by_group(group=DEFAULT_PLUGINS_GROUP)
+     122:        discovered = entry_points(group=ENDPOINT_PLUGINS_GROUP)
+     132:    factories = load_plugins_by_group(ENDPOINT_PLUGINS_GROUP)
+
+== API del worker V1 (il sostituto di WorkerBase.execute_model) ==
+     1053:    def execute_model(
+     1054-        self, scheduler_output: "SchedulerOutput"
+     1055-    ) -> ModelRunnerOutput | AsyncModelRunnerOutput | None:
+     1056-        # ensure any previous non-blocking PP sends are complete
+     1057-        if self._pp_send_work:

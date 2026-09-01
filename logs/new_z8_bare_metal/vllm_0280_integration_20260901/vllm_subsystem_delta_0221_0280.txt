@@ -1,0 +1,116 @@
+# Delta dei sottosistemi rilevanti per vMemoryFabric, 0.22.1 (2026-06-05) -> 0.28.0 (2026-08-26)
+# cioe' esattamente la finestra giugno-agosto 2026 oggetto della richiesta.
+# Metodo: sdist PyPI estratte, find + wc -l sull'albero .py.
+# Data: 2026-09-01
+
+### v1/kv_offload
+    LOC  : 3556 -> 11459
+    file : 27 -> 46
+    file aggiunti (>) / rimossi (<):
+       > ./config.py
+       > ./cpu/policies/factory.py
+       > ./cpu/swap_blocks_triton.py
+       > ./tiering/async_lookup.py
+       > ./tiering/metrics.py
+       > ./tiering/obj/__init__.py
+       > ./tiering/obj/config.py
+       > ./tiering/obj/manager.py
+       > ./tiering/p2p/__init__.py
+       > ./tiering/p2p/control/__init__.py
+       > ./tiering/p2p/control/base.py
+       > ./tiering/p2p/control/zmq.py
+       > ./tiering/p2p/data/__init__.py
+       > ./tiering/p2p/data/base.py
+       > ./tiering/p2p/data/nixl.py
+       > ./tiering/p2p/manager.py
+       > ./tiering/p2p/session/__init__.py
+       > ./tiering/p2p/session/client.py
+       > ./tiering/p2p/session/protocol.py
+       > ./tiering/p2p/session/server.py
+       > ./tiering/p2p/session/session.py
+       < ./worker/__init__.py
+       < ./worker/worker.py
+
+### model_executor/offloader
+    LOC  : 1163 -> 1163
+    file : 5 -> 5
+    file aggiunti (>) / rimossi (<):
+
+### distributed/elastic_ep
+    LOC  : 1385 -> 1273
+    file : 4 -> 4
+    file aggiunti (>) / rimossi (<):
+
+### distributed/eplb
+    LOC  : 3253 -> 3508
+    file : 9 -> 9
+    file aggiunti (>) / rimossi (<):
+
+### distributed/kv_transfer/kv_connector/v1
+    LOC  : 25465 -> 31837
+    file : 58 -> 65
+    file aggiunti (>) / rimossi (<):
+       > ./mooncake/store/protocol.py
+       > ./moriio/moriio_layout.py
+       > ./nixl/base_scheduler.py
+       > ./nixl/base_worker.py
+       > ./nixl/pull_scheduler.py
+       > ./nixl/pull_worker.py
+       > ./nixl/push_scheduler.py
+       > ./nixl/push_worker.py
+       > ./offloading/canonical_mapping.py
+       > ./offloading/config.py
+       > ./offloading/events.py
+       < ./p2p/__init__.py
+       < ./p2p/p2p_nccl_connector.py
+       < ./p2p/p2p_nccl_engine.py
+       < ./p2p/tensor_memory_pool.py
+
+== Presenza dei sottosistemi gia' in 0.22.1 (inizio finestra) ==
+  v1/kv_offload/tiering                        0.22.1=PRESENTE  0.28.0=PRESENTE
+  v1/kv_offload/cpu/policies                   0.22.1=PRESENTE  0.28.0=PRESENTE
+  model_executor/offloader                     0.22.1=PRESENTE  0.28.0=PRESENTE
+  distributed/elastic_ep                       0.22.1=PRESENTE  0.28.0=PRESENTE
+  distributed/eplb/policy                      0.22.1=PRESENTE  0.28.0=PRESENTE
+  config/offload.py                            0.22.1=PRESENTE  0.28.0=PRESENTE
+
+== Cifre puntuali citate nell'analisi, con il comando che le produce ==
+
+-- LOC del solo tier P2P (novita' della finestra) --
+   find vllm/v1/kv_offload/tiering/p2p -name '*.py' | xargs cat | wc -l
+   -> 4543
+
+-- Metriche dichiarate da TieringOffloadingMetrics --
+   vllm/v1/kv_offload/tiering/base.py
+         LOOKUP_SYNC_DELAY
+         LOOKUP_ASYNC_DELAY
+         READ_BYTES
+         READ_TIME
+         WRITE_BYTES
+         WRITE_TIME
+         PROMOTION_JOB_FAILURES
+         CASCADE_JOB_FAILURES
+         BLOCK_QUERIES
+         BLOCK_HITS
+         PRIMARY_WRITE_USAGE_PERC
+         PRIMARY_READ_USAGE_PERC
+         PROMOTION_ALLOCATION_FAILURES
+         ACTIVE_PROMOTION_JOBS
+         ACTIVE_CASCADE_JOBS
+   -> totale: 15
+
+-- Distanza del pin attuale (vllm==0.6.6.post1) dalla HEAD (0.28.0) --
+     release pubblicate dopo 0.6.6.post1, fino a 0.28.0 inclusa: 49
+     pin torch: 2.5.1 -> 2.13.0
+
+-- _BaseParamOffloader conosce solo il mode 'cpu' --
+   vllm/model_executor/offloader/prefetch.py
+         @staticmethod
+         def create(mode: str, **kwargs) -> "_BaseParamOffloader":
+             """Factory method to create appropriate offloader for mode."""
+             if mode == "cpu":
+                 return _CpuParamOffloader(**kwargs)
+             else:
+                 raise ValueError(f"Unknown offload mode: {mode}")
+     
+         def __init__(self, module: nn.Module, param_name: str):

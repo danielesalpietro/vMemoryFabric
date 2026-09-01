@@ -518,6 +518,29 @@ no-list with explicit re-evaluation conditions
 reminder to monitor how the four upstream projects evolve
 ([#37](https://github.com/danielesalpietro/vMemoryFabric/issues/37)).
 
+A third deliverable extends that outward look to the dependency that matters most —
+vLLM itself:
+[`osx-poc/reports/vllm_2026Q3_integration_analysis.md`](osx-poc/reports/vllm_2026Q3_integration_analysis.md)
+(2026-09-01, Italian), which diffs the June–August 2026 release window
+(0.22.1 → 0.28.0, source-verified from the PyPI sdists, nothing installed and
+nothing run) and asks where vMemoryFabric can plug in. Two findings reset the
+picture: vLLM tripled `v1/kv_offload/` in that window (3,556 → 11,459 LOC) and
+built there the same tier/promotion/eviction-policy architecture as M1+M2, but
+for **KV cache** — while `model_executor/offloader/`, the part that would tier
+**weights**, did not change by a single line and remains static (layer-group or
+byte-budget, never gating-aware). And three of vLLM's registries now load
+out-of-tree classes via a `module_path` with no fork required — secondary tier,
+cache policy, KV connector — so `SEEPolicy` and the PMEM tier (issue
+[#57](https://github.com/danielesalpietro/vMemoryFabric/issues/57)) have a
+supported way in, whereas expert replication (AER) does not: `EPLB_POLICIES` is
+a closed registry and would need an upstream PR. The same analysis extends the
+[`vllm_torch27_compat_analysis.md`](osx-poc/reports/vllm_torch27_compat_analysis.md)
+table to 0.28.0 with a distinction that matters for issue
+[#8](https://github.com/danielesalpietro/vMemoryFabric/issues/8): `GCSGWorker`'s
+base class is gone (`vllm/worker/` no longer exists), but the MoE gate forward
+hook it relies on is still valid verbatim — the mechanism survived, the
+installation vehicle didn't.
+
 Non-functional targets (acceptance criteria for PoC):
 
 - PT-PEP latency < 3 ms p99 on CPU

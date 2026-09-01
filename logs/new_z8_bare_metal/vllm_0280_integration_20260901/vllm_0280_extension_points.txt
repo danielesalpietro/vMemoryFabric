@@ -1,0 +1,276 @@
+# Punti di estensione di vLLM 0.28.0 utilizzabili da vMemoryFabric — estratti dal sorgente
+# Fonte: vllm-0.28.0.tar.gz (PyPI sdist, 2026-08-26). Data verifica: 2026-09-01.
+# Criterio: un punto di estensione conta come 'plugin' SOLO se il sorgente dice
+#           esplicitamente che una classe esterna e' caricabile senza fork/patch di vLLM.
+
+==============================================================================
+A. SecondaryTierFactory — tier secondari out-of-tree  (EMH-2 PMEM / EMH-3 NVMe)
+   File: vllm/v1/kv_offload/tiering/factory.py
+==============================================================================
+class SecondaryTierFactory:
+    """Registry for SecondaryTierManager implementations, resolved by type.
+
+    Mirrors OffloadingSpecFactory (vllm/v1/kv_offload/factory.py): built-in
+    tiers are pre-registered below. External tiers can either
+    register_tier() a friendly short name up front, or skip registration
+    entirely and pass a module_path at lookup time (out-of-tree, no vLLM
+    fork/patch required) -- see get_tier_class.
+    """
+
+    _registry: dict[str, Callable[[], type[SecondaryTierManager]]] = {}
+
+    @classmethod
+    def register_tier(cls, tier_type: str, module_path: str, class_name: str) -> None:
+        if tier_type in cls._registry:
+    def get_tier_class(cls, tier_config: dict) -> type[SecondaryTierManager]:
+        """Get a secondary tier class by type.
+
+        Args:
+            tier_config: Tier configuration dict. Must contain 'type' (the
+                tier name or out-of-tree class name). If 'type' is not a
+                registered tier and 'module_path' is given, the class is
+                imported from there -- an out-of-tree tier needs no
+                register_tier() call, just this module path in the config.
+
+        Returns:
+            The secondary tier manager class.
+
+        Raises:
+            ValueError: If 'type' is missing, or is neither registered nor
+                resolvable via module_path.
+        """
+        tier_type = tier_config.get("type")
+        if not tier_type:
+            raise ValueError("Secondary tier configuration must include 'type'")
+        if tier_type in cls._registry:
+            return cls._registry[tier_type]()
+        module_path = tier_config.get("module_path")
+        if module_path is None:
+            raise ValueError(
+                f"Unknown secondary tier type: {tier_type!r}. "
+                f"Supported types: {list(cls._registry)}. "
+                "For an out-of-tree tier, also set 'module_path'."
+            )
+        logger.warning_once(
+            "Loading out-of-tree secondary tier. This API is "
+            "experimental and subject to change in the future "
+            "as we iterate the design."
+        )
+        logger.info(
+            "Loading out-of-tree secondary tier '%s' from '%s'.",
+            tier_type,
+            module_path,
+        )
+        module = importlib.import_module(module_path)
+        tier_cls = getattr(module, tier_type)
+        assert issubclass(tier_cls, SecondaryTierManager)
+        return tier_cls
+
+   Tier gia' registrati built-in:
+     24-    """
+     31-            raise ValueError(f"Tier '{tier_type}' is already registered.")
+     104-    "example",
+     105-    "vllm.v1.kv_offload.tiering.example.manager",
+     106-    "ExampleSecondaryTierManager",
+     110-    "fs",
+     111-    "vllm.v1.kv_offload.tiering.fs.manager",
+     112-    "FileSystemTierManager",
+     116-    "p2p",
+     117-    "vllm.v1.kv_offload.tiering.p2p.manager",
+     118-    "P2PSecondaryTierManager",
+     122-    "obj",
+     123-    "vllm.v1.kv_offload.tiering.obj.manager",
+     124-    "ObjectStoreSecondaryTierManager",
+
+==============================================================================
+B. CachePolicyFactory — politiche di eviction out-of-tree  (SEEPolicy)
+   File: vllm/v1/kv_offload/cpu/policies/factory.py
+==============================================================================
+class CachePolicyFactory:
+    """Registry for CachePolicy implementations, resolved by name.
+
+    Mirrors OffloadingSpecFactory (vllm/v1/kv_offload/factory.py): built-in
+    policies are pre-registered below. External policies can either
+    register_cache_policy() a friendly short name up front, or skip
+    registration entirely and pass a module path at lookup time (out-of-tree,
+    no vLLM fork/patch required) -- see get_cache_policy_cls.
+    """
+
+    _registry: dict[str, Callable[[], type[CachePolicy]]] = {}
+    @classmethod
+    def get_cache_policy_cls(
+        cls, name: str, module_path: str | None = None
+    ) -> type[CachePolicy]:
+        """Get a cache policy class by name.
+
+        Args:
+            name: Name of the cache policy. Checked against the registry
+                first; if it's not registered and `module_path` is given,
+                `name` is imported from there instead -- an out-of-tree
+                policy needs no register_cache_policy() call at all, just
+                this module path passed through config (mirrors
+                OffloadingSpecFactory.get_spec_cls's spec_module_path
+                fallback).
+            module_path: Python import path to load `name` from when it is
+                not a registered policy.
+
+        Returns:
+            The cache policy class.
+
+        Raises ValueError if the cache policy is neither registered nor
+        resolvable via `module_path`.
+        """
+   Politiche built-in: lru, arc
+
+==============================================================================
+C. KVConnectorFactory — connector out-of-tree via kv_connector_module_path
+   File: vllm/distributed/kv_transfer/kv_connector/factory.py
+==============================================================================
+        if connector_name is None:
+            raise ValueError("Connector name is not set in KVTransferConfig")
+        connector_module_path = kv_transfer_config.kv_connector_module_path
+        if connector_module_path is not None and not connector_module_path:
+            raise ValueError("kv_connector_module_path cannot be an empty string.")
+        if connector_module_path:
+            # External module path takes priority over internal registry.
+            connector_module = importlib.import_module(connector_module_path)
+            try:
+                connector_cls = getattr(connector_module, connector_name)
+            except AttributeError as e:
+                raise AttributeError(
+                    f"Class {connector_name} not found in {connector_module_path}"
+                ) from e
+            connector_cls = cast(type[KVConnectorBaseType], connector_cls)
+            if not supports_kw(connector_cls, "kv_cache_config"):
+
+==============================================================================
+D. BaseOffloader / set_offloader — offloader dei PESI, sostituibile a runtime
+   File: vllm/model_executor/offloader/base.py
+==============================================================================
+
+class BaseOffloader(ABC):
+    """Base class for model parameter offloading strategies.
+
+    Offloaders control how model parameters are stored and loaded during
+    inference. Different strategies trade memory for compute/transfer time.
+    """
+
+    @abstractmethod
+    def wrap_modules(
+        self,
+        modules_generator: Generator[nn.Module, None, None],
+    ) -> list[nn.Module]:
+        """Wrap modules with offloading logic.
+
+        Args:
+            modules_generator: Generator yielding modules to potentially offload.
+
+        Returns:
+            List of modules, potentially with offloading hooks installed.
+        """
+        pass
+
+    def post_init(self):
+        """Called after model construction completes.
+        return list(modules_generator)
+
+
+# Global singleton offloader instance (defaults to no-op).
+_instance: BaseOffloader = NoopOffloader()
+
+
+def get_offloader() -> BaseOffloader:
+    """Get the global offloader instance."""
+    return _instance
+
+
+def set_offloader(instance: BaseOffloader) -> None:
+    """Set the global offloader instance."""
+    global _instance
+    _instance = instance
+    if isinstance(instance, NoopOffloader):
+   Call site che lo installa (sovrascrivibile solo prima di questa riga):
+     vllm/v1/worker/gpu_model_runner.py:988:        set_offloader(create_offloader(self.offload_config))
+     vllm/v1/worker/gpu/model_runner.py:324:        set_offloader(create_offloader(self.vllm_config.offload_config))
+
+==============================================================================
+E. AbstractEplbPolicy — NON out-of-tree (registry chiuso)  <- rilevante per AER
+   File: vllm/distributed/eplb/policy/abstract.py + policy/__init__.py
+==============================================================================
+
+import torch
+
+
+class AbstractEplbPolicy(ABC):
+    @classmethod
+    @abstractmethod
+    def rebalance_experts(
+        cls,
+        weight: torch.Tensor,
+        num_replicas: int,
+        num_groups: int,
+        num_nodes: int,
+        num_ranks: int,
+        old_global_expert_indices: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """
+        Entry point for expert-parallelism load balancer.
+
+        Parameters:
+            weight: [layers, num_logical_experts], the load statistics
+                for all logical experts
+            num_replicas: number of physical experts, must be a multiple of
+                `num_ranks`
+            num_groups: number of expert groups
+            num_nodes: number of server nodes
+            num_ranks: number of ranks, must be a multiple of `num_nodes`
+            old_global_expert_indices: [layers, num_logical_experts], the old global
+                expert indices. Used to avoid unnecessary weight copying
+                for experts moving within one rank.
+        Returns:
+            physical_to_logical_map: [layers, num_replicas], the expert
+                index of each replica
+        """
+        raise NotImplementedError
+   --- policy/__init__.py: il registry e' un dict chiuso, con assert contro un Literal ---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+from typing import get_args
+
+from vllm.config.parallel import EPLBPolicyOption
+
+from .abstract import AbstractEplbPolicy
+from .default import DefaultEplbPolicy
+
+EPLB_POLICIES = {"default": DefaultEplbPolicy}
+
+# Ensure that the EPLB_POLICIES keys match the EPLBPolicyOption values
+assert set(EPLB_POLICIES.keys()) == set(get_args(EPLBPolicyOption))
+
+__all__ = [
+    "AbstractEplbPolicy",
+    "DefaultEplbPolicy",
+    "EPLB_POLICIES",
+]
+   --- config/parallel.py ---
+39:EPLBPolicyOption = Literal["default"]
+89:    policy: EPLBPolicyOption = "default"
+   => nessun module_path: una policy AER esterna richiede una PR upstream, non un plugin.
+
+==============================================================================
+F. Medium enum — non esiste un medium PMEM
+   File: vllm/v1/kv_offload/base.py
+==============================================================================
+class Medium(Enum):
+    """Storage medium of an offloading tier."""
+
+    CPU = "CPU"
+    STORAGE = "STORAGE"
+
+
+class Locality(Enum):
+    """Locality of a tier's storage relative to the publishing instance."""
+
+    LOCAL = "LOCAL"
+    REMOTE = "REMOTE"
+
