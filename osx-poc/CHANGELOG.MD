@@ -20,6 +20,16 @@ Releases are named after cities where significant project milestones were reache
 
 *Named after Berg, Stockholm, where the Sprint 5 planning conversation happened — PoC delivery + paper, two parallel tracks.*
 
+### Added — 2026-09-01 — related work: Elastic Expert Parallelism di vLLM (issue #68, deliverable S0)
+
+- `reports/related_work_elastic_ep.md` (nuovo) — analisi di **Elastic Expert Parallelism** (EEP) di vLLM e del suo rapporto con OSX/EMH, verificata sul codice sorgente (shallow clone `vllm-project/vllm`, HEAD `18c5372` del 2026-09-01) con la stessa disciplina di `related_work_petals_exllama.md`: anchor `file:riga`, no-list con condizioni di rivalutazione, sezione di correzioni esplicite. Nessun benchmark eseguito, nessun pin modificato
+- **Tesi**: EEP e OSX sono ortogonali — EEP scala gli esperti sull'asse orizzontale (quanti rank DP/EP, chi ospita cosa, deciso da EPLB), OSX sull'asse verticale (in quale tier EMH vive uno shard). Si contendono però la stessa VRAM e descrivono lo stesso oggetto con due chiavi che non si parlano: `(logical_expert, physical_slot, ep_rank)` contro `(expert_id, shard_idx, tier)`
+- **Quattro affermazioni di issue #68 smentite dal codice** (§5 del report), la #68 essendo stata scritta da fonti secondarie: (1) il backend Ray non è un vincolo validato — i tre executor implementano tutti `elastic_ep_execute`, Ray è solo il path testato in CI; (2) idem `tensor_parallel_size=1`, mentre l'aritmetica EP è `dp × tp`; (3) il trasferimento pesi a scale-up **esclude esplicitamente** i pesi degli esperti (`elastic_execute.py:84`) — densi via P2P `isend`/`irecv`, esperti solo via reshuffle EPLB, per giunta asincrono; (4) **un nuovo rank non legge mai da disco** (`load_model(load_dummy_weights=True)`, `elastic_execute.py:242-243`)
+- **Conseguenza sull'ipotesi di lavoro**: #68 proponeva di idratare i nuovi rank dal tier warm DDR4/PMEM assumendo che l'alternativa fosse un caricamento da disco. Non lo è: il confronto reale è PCIe locale contro NCCL peer-to-peer già sovrapposto al servizio, e su nodo singolo perdiamo quasi certamente. L'opportunità che sopravvive è lo **scale-down** — gli esperti dei rank rimossi vengono compressi sui superstiti (`rank_mapping` a `-1`) e vLLM non ha nessun tier dove metterli
+- **Vincoli EEP a HEAD**, distinti fra *hard* (validati: richiede `--enable-eplb`, vieta PP>1, incompatibile con external/hybrid LB, EPLB async richiede NIXL, non supportato dal model runner V2) e *de facto* (Ray e TP=1: solo ciò che i test esercitano). Distinzione assente dai sommari divulgativi
+- Decisioni aperte che ne derivano (D1–D6: chiave EAT, invalidazione al cambio di mapping, confine AER/EPLB) tracciate in [discussion #70](https://github.com/danielesalpietro/vMemoryFabric/discussions/70), non in questo file
+
+
 ### Added — 2026-08-30/31 — seconda GPU (RTX 5060 Ti), analisi compatibilità vLLM/torch≥2.7, evidenze archiviate
 
 *Narrativa completa: `LOGBOOK.md`, entry 2026-08-30/31. **Nessun pin modificato** — solo verifica e analisi, come richiesto da `handoff_rtx5060ti16gb.md` §2.2.*
