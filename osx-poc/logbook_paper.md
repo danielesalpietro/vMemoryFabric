@@ -225,3 +225,86 @@ capacità (H5). Se il paper non lo dice, lo dirà il reviewer.
 **Sotto-obiettivo 2 (related-work survey): resta 🟡.** FineMoE va ancora
 letto per intero; questa entry aggiunge il vicino ingegneristico, non
 sostituisce quella lettura.
+
+---
+
+## 2026-09-02 (bis) — FineMoE letto sul codice: i differenziatori di EMH si restringono a GCSG
+
+**Contesto:** richiesta del project owner di leggere FineMoE per intero ("la
+conoscenza è metà della scienza"). **Il PDF è irraggiungibile** dal sandbox:
+`intellisys.haow.us`, `arxiv.org`, `export.arxiv.org`, `ar5iv`, `huggingface.co`,
+Semantic Scholar, `scholar.archive.org`, le GitHub Pages degli autori — tutti
+bloccati dal proxy di egress. Raggiungibile il **repository ufficiale**
+`IntelliSys-Lab/FineMoE-EuroSys26` (commit `5c58468`, "demo implementation of
+the paper") e `EfficientMoE/MoE-Infinity` su cui è costruito. Letto quello,
+riga per riga, con la stessa disciplina dei report precedenti:
+`reports/related_work_finemoe.md`. **Il paper resta da leggere**: numeri,
+baseline e claim quantitativi non sono verificati. I meccanismi sì.
+
+**Cosa fa FineMoE, in una frase.** Traccia il routing **per token** (embedding
+di input, probabilità del router per layer), tiene uno store di coppie
+(embedding → traiettoria), e prefetcha con un kNN sull'embedding **prima del
+primo MoE** più una **correzione a ogni layer** dalla traiettoria parziale
+osservata; sfratta con LFU pesata dalla probabilità del router. Tre tier
+(GPU/host/SSD), esperto intero per layer. Il delta su MoE-Infinity è: token
+invece di sequenza, embedding come chiave, correzione online, eviction pesata.
+
+**Cosa cambia per il paper — la parte scomoda.**
+
+1. *Granularità di esperto*, *prefetch predittivo*, *hotness persistente*: ce
+   li hanno entrambi. **Non sono differenziatori** in questo cluster (lo sono
+   solo contro l'offloader vLLM, entry precedente).
+2. *PT-PEP è meno sofisticato* del meccanismo di FineMoE: predice una volta,
+   dal testo, senza correzione in-flight. La sua unica proprietà distintiva è il
+   **lead time** — può partire prima che la richiesta tocchi il modello — e va
+   misurata in millisecondi, non affermata. Aggiunto **L0b** al test plan:
+   bake-off dei predittori sulle stesse tracce, senza GPU, con H8/H9
+   pre-registrate. Se PT-PEP non batte un kNN sugli embedding a lead time
+   uguale, il claim va ridimensionato.
+3. **GCSG resta l'unico differenziatore forte**: nessuno dei due ha una guardia
+   di qualità sotto quantizzazione. Era già la conclusione dell'entry
+   2026-08-13; ora è confermata sul codice del vicino più pericoloso.
+4. **MoE-Infinity a HEAD è un terzo concorrente vivo**, non un antenato:
+   serving engine con continuous batching e KV paginata, Mixtral supportato,
+   path quantizzati, build sm_120. È l'unico del cluster che potrebbe girare
+   sul nostro banco: aggiunto come braccio **A5** nel test plan, "da
+   verificare" che entri in 24 GB.
+
+**Conseguenza sull'outline (§B2).** La sezione Design non può presentare EMH
+come *contributo* "gerarchia di memoria per esperti con prefetch predittivo":
+è il contributo di MoE-Infinity (2024) e FineMoE (2026). Può presentarla come
+**substrato** su cui GCSG opera — e lì loro non ci sono. Il titolo del paper e
+l'abstract devono spostare il baricentro su GCSG, con EMH come infrastruttura
+necessaria, non come novità.
+
+**Da prendere in prestito, con attribuzione.** L'entropia coarse/fine del
+routing (`demo/process_data.py`) come metrica M9: caratterizza lo skew che
+governa il nostro modello di costo e rende W3 confrontabile con la loro
+Fig. 3. La selezione a massa cumulativa `1 − similarità` come candidato per
+#21. La correzione per layer, che a OSX **manca**.
+
+### Bozza — §8 Related Work, paragrafo "Expert offloading systems" (inglese)
+
+> **Expert offloading systems.** MoE-Infinity [cite] introduced activation-
+> aware expert caching for memory-constrained serving: per-sequence expert
+> activation matrices are matched against a trace store to prefetch experts
+> across GPU, host memory and SSD, and its current release ships a serving
+> engine with continuous batching and paged KV cache. FineMoE [cite] refines
+> the prediction to token granularity: it keys a trajectory store on the
+> model's own input embeddings, prefetches before the first MoE layer, corrects
+> the prediction at every layer from the partially observed routing, and
+> weights eviction by router probability. EMH shares the expert-level
+> granularity and multi-tier structure of both, and does not claim them as
+> contributions. It differs in where prediction runs — PT-PEP operates on the
+> prompt text before tokenization, off the critical path, trading FineMoE's
+> in-flight correction for lead time, a trade-off we quantify in §6 — and, more
+> fundamentally, in what the hierarchy is for: neither system addresses model
+> quality under aggressive quantization, which GCSG guards at runtime with
+> shadow execution. We evaluate against MoE-Infinity on identical hardware
+> (§6) and adopt FineMoE's coarse/fine routing-entropy characterization to
+> report workload skew.
+
+**Sotto-obiettivo 2 (related-work survey): resta 🟡 — ma il rischio è cambiato
+di natura.** Non è più "non sappiamo cosa fa FineMoE"; è "sappiamo che fa
+quello che rivendicavamo, e il paper va riorientato". Il PDF va comunque
+letto appena raggiungibile, per i numeri e le baseline.

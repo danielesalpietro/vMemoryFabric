@@ -117,6 +117,8 @@ obiettivi**: byte/latenza *e* qualità. Un punto Pareto, non un vincitore.
 | M6 | stallo per token | M2 − tempo compute puro (A0 stesso engine) | derivata |
 | M7 | qualità | MMLU 5-shot, stesso sottoinsieme, greedy | `scripts/eval_mmlu_gcsg.py` (già esistente) |
 | M8 | solo EMH | `contamination_rate`, `activation_rate`, hit rate PT-PEP, distribuzione per tier | `GCSGGuard.stats()`, `TierManager.stats()` |
+| **M9** | **entropia del routing, coarse e fine** | coarse: entropia per (sequenza, layer) della matrice cumulativa `[L,E]`; fine: per (token, layer) | stessa definizione di FineMoE `demo/process_data.py::compute_entropy` — rende W3 confrontabile con la loro Fig. 3 e caratterizza lo skew che governa μ |
+| M8-bis | hit rate per esperto | `gpu_hit / visit` per (layer, esperto), come `NodeBody` di MoE-Infinity | allinea M8 alla definizione dei due sistemi vicini |
 
 M4 è la metrica che il modello di costo predice direttamente: è quella su cui si
 valida §1, prima ancora di guardare M1/M2.
@@ -131,6 +133,8 @@ valida §1, prima ancora di guardare M1/M2.
 | **A2** | vLLM ≥ 0.25, `offload_backend=prefetch`, sweep `(group_size, num_in_group, prefetch_step)` | V1 | sì |
 | **A3** | vLLM 0.10.1 + `GCSGWorker` + EMH (`enable_cpu_offload`, TierManager) | V0 | sì |
 | A4 | exllamav3 CPU MoE offload (riferimento esterno, già analizzato in Marstrand) | — | opzionale |
+| **A5** | **MoE-Infinity HEAD** (`b766f8f`), Mixtral 8x7B quantizzato, `device_memory_ratio` a parità di VRAM con A3 | proprio (HF-native, continuous batching) | **da verificare**: supporta Mixtral e sm_86/sm_120, resta da provare che entri in 24 GB |
+| — | FineMoE demo | HF `generate` | **no**: solo Qwen1.5-MoE, ≥ 48 GB VRAM, batch 1 — non è un braccio, è un riferimento di metodo (M9, L0b) |
 
 **EEP non è un braccio.** Richiede più GPU, motore V1, Ray, e risolve capacità di
 throughput, non di memoria. Compare a L2 solo come *controllo negativo documentato*
@@ -165,6 +169,30 @@ stesso dtype, stesso layout), tre primitive:
 
 **Output:** le costanti del modello di costo ($B$, $B_{\text{uva}}$, $\varepsilon$) e la
 verifica di **P1 a livello di primitiva**. Senza L0, §1 è un'ipotesi; con L0 è calibrato.
+
+### L0b — Bake-off dei predittori su tracce, senza GPU — *eseguibile ora*
+
+`related_work_finemoe.md` §3 mostra che il prefetch predittivo non è un differenziatore: lo
+fanno MoE-Infinity (EAM per sequenza + speculativo dai logit) e FineMoE (kNN su embedding +
+correzione per layer). La domanda misurabile è **cosa guadagna PT-PEP rispetto a loro a
+parità di informazione**. Non serve nessun sistema end-to-end: servono tracce.
+
+- **Input**: tracce di routing `(prompt, per token: top-k per layer, probs per layer,
+  embedding di input)` raccolte una volta con i hook GCSG su W1/W2/W3.
+- **Predittori**, tutti reimplementati in poche decine di righe di numpy/torch sulle
+  stesse tracce: (a) PT-PEP com'è; (b) kNN su embedding di input → traiettoria
+  (FineMoE `embed_prefetch`); (c) (b) + correzione per layer da traiettoria parziale
+  (FineMoE `traj_prefetch`); (d) EAM di sequenza + decadimento (MoE-Infinity
+  `ExpertPredictor`); (e) top-2 dai logit del layer corrente per il successivo
+  (MoE-Infinity `speculative_prefetch`); (f) oracolo e (g) frequenza statica, come limiti.
+- **Metrica**: recall@k degli esperti effettivamente usati, in funzione del **lead time**
+  (quanti layer prima, o "prima del forward" per PT-PEP e (b)), e byte prefetchati inutili.
+- **Cosa decide**: se (a) non batte (b) a lead time uguale, PT-PEP va sostituito o
+  ridimensionato nel claim; se (a) batte (b) solo grazie al lead time pre-tokenizzazione,
+  **quello** è il claim, e va detto in millisecondi.
+
+Costo: un giorno con le tracce già raccolte. È l'esperimento con il miglior rapporto
+informazione/costo dell'intero piano.
 
 ### L1 — Serving, singola GPU — *eseguibile ora, tutti i bracci*
 
@@ -220,19 +248,30 @@ Tre carichi, ciascuno con sweep del budget VRAM $c \in \{1,\ 0.75,\ 0.5,\ 0.25\}
 | ID | Ipotesi | Soglia | Se fallisce, significa |
 |---|---|---|---|
 | **H1** | L0: rapporto byte `prefetch`/`uva` per primitiva | $4 \pm 10\%$ | lo strumento M4 è inaffidabile: **fermarsi** |
-| **H2** | L1-W1, $c = 0.5$: $\beta_E \le 0.5\,\beta_P$ | rapporto M4 ≤ 0.5 con IC al 95% sotto 0.6 | la residenza guidata da hotness non cattura lo skew reale di MMLU |
+| **H2** | L1-W1, $c = 0.5$: $\beta_E \le 0.25\,\beta_P$ | rapporto M4 ≤ 0.25 con IC al 95% sotto 0.30 | EMH non fa nemmeno quanto la geometria promette ($k/E$ a hit rate zero, §1.4-P5): la residenza guidata da hotness non cattura lo skew reale di MMLU, oppure lo shard da 256 MB muove troppi vicini (§7.2) |
+| **H2b** | L1-W1, $c = 0.5$: $\beta_E \le 0.15\,\beta_P$ | rapporto M4 ≤ 0.15 | PT-PEP **non aggiunge nulla** oltre la geometria: il prefetch predittivo va giustificato o rimosso dal claim |
 | **H3** | L1-W1, $c = 0.5$: TPOT p95 di EMH ≤ 1.2 × `prefetch` (tolleranza per eager, quantificata da A0 eager/grafo) | $\rho_{M2} \le 1.2$ | il vantaggio in byte non si traduce in latenza: $\varepsilon$ o miss non predetti dominano |
 | **H4** | M7: $\Delta$MMLU EMH vs A0-V0 | ≤ 2 punti | il costo di qualità supera il target README; il Pareto si sposta |
 | **H5** | L1-W3 bucket uniforme: guadagno EMH su `uva` in M4 | ≤ 10 % | **se EMH vince qui, la misura è sbagliata** (P3) |
 | **H6** | L1-W3: $\beta_E$ monotona decrescente in skew, $\beta_P$ piatta | Spearman < −0.9 su ≥ 4 bucket | il modello §1 non descrive il sistema |
 | H7 | L2 (dopo #8): KV budget "min globale" < per-device sul rank grande | misura diretta, nessuna soglia | — |
+| **H8** | L0b: recall@k di PT-PEP ≥ kNN-embedding (b) a lead time uguale | ≥, con IC bootstrap | PT-PEP non aggiunge informazione rispetto a un kNN sugli embedding del modello: va ridimensionato nel claim (resta il lead time, se misurato) |
+| **H9** | L0b: correzione per layer (c) migliora (b) di ≥ 10 punti di recall | ≥ 10 | la correzione online non serve su queste tracce; altrimenti **OSX deve aggiungerla** (#21) |
 
 H1 e H5 sono **test dello strumento e del modello**, non del sistema: se falliscono non si
 pubblica nulla del resto.
 
+**Perché H2 è a 0.25 e non a 0.5** (deciso 2026-09-02, discussion #70). A parità di $c$ e con hit
+rate zero, il rapporto $\beta_E/\beta_P$ a routing uniforme è già $k/E = 0.25$ per pura
+geometria: EMH muove solo gli instradati, `prefetch` muove tutti. Una soglia a 0.5 sarebbe
+superata senza predire nulla — non testerebbe EMH, testerebbe la sparsità del MoE. 0.25 è
+"EMH fa *almeno* quanto la geometria promette"; **H2b** a 0.15 è "PT-PEP aggiunge qualcosa",
+ed è l'ipotesi che, se cade, toglie il prefetch predittivo dal claim del paper.
+
 ## 9. Ordine e costo
 
 1. **L0** — 1–2 giorni, ora, sulla 3090. Sblocca §1.
+1b. **L0b** — un giorno, senza GPU, sulle tracce. Decide il destino di PT-PEP nel claim (H8/H9).
 2. **Immagine V1** — un giorno: `torch>=2.7`/cu128 + vLLM ≥ 0.25, separata dal pin.
 3. **L1-W2** (throughput) → **L1-W1** (qualità + latenza) → **L1-W3** (skew). Circa una
    settimana di macchina, con le run notturne.
