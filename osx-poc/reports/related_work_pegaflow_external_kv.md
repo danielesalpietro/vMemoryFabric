@@ -87,10 +87,14 @@ elasticità di allocazione.
 ### 2.3 "+72% throughput su DeepSeek-V3.2 MLA con TP8"
 
 Questo è il numero **architetturalmente più interessante e il meno trasferibile**. Nasce dal
-memorizzare il KV logico una volta invece di 8 (una per rank TP). Ma MLA ha già un KV latente
-compresso e condiviso tra le teste: la combinazione "MLA + TP8" è il caso di massima
-ridondanza possibile nel baseline. È un numero misurato nel punto in cui la vecchia soluzione
-sprecava di più. Su un modello MHA/GQA con TP2 il fattore di dedup è 2, non 8.
+memorizzare il KV logico una volta invece di 8 (una per rank TP). Ma la ridondanza tra rank
+**esiste solo quando il KV è replicato, non quando è partizionato** (derivazione in §7.2):
+con MHA/GQA vLLM sharda le teste KV fra i rank, quindi con `n_kv ≥ TP` ogni rank possiede
+una fetta *diversa* e il fattore di dedup è **1 — zero beneficio**; la replica compare solo
+per `TP > n_kv` (fattore `TP/n_kv`) oppure con MLA, dove il latente compresso non è shardato
+per testa e ogni rank ne tiene una copia identica (fattore `= TP`). "MLA + TP8" è quindi il
+caso di massima ridondanza possibile nel baseline: il numero è misurato esattamente nel punto
+in cui la vecchia soluzione sprecava di più, e per Llama-70B a TP8 (`n_kv = 8`) sarebbe 0%.
 
 ### 2.4 "~9× TTFT" (572 ms cold → 61 ms warm, H800, Llama-3.1-8B)
 
@@ -304,7 +308,368 @@ al sorgente dell'engine.
 
 ---
 
-## 7. Raccomandazioni operative
+## 7. Approfondimento quantitativo
+
+Questa sezione mette in formule ciò che §2 dice a parole, così che ogni cifra pubblicata
+diventi una conseguenza calcolabile di parametri noti — e si veda esattamente *da quali*
+parametri dipende. Le costanti dei modelli vengono dai config HuggingFace pubblici; il
+resto è derivato.
+
+### 7.1 Notazione e costanti
+
+Per un modello con `L` layer, `n_kv` teste KV, dimensione di testa `d_h` e `s` byte per
+elemento, il KV di **un token in un layer** occupa
+
+```
+b_KV = 2 · n_kv · d_h · s          (K e V)
+B_tok = L · b_KV                    (un token, tutti i layer)
+```
+
+Per MLA (DeepSeek-V2/V3) K e V non esistono separati: per token e layer si memorizza il
+latente compresso `c_kv` (`kv_lora_rank = 512`) più la componente RoPE disaccoppiata
+(`qk_rope_head_dim = 64`), quindi `b_KV = 576 · s`.
+
+| Modello | `L` | `n_kv` | `d_h` | dtype KV | `b_KV` | `B_tok` | blocco 16 token |
+|---|---|---|---|---|---|---|---|
+| Llama-3.1-8B | 32 | 8 | 128 | bf16 | 4 KiB | **128 KiB** | 2 MiB |
+| Llama-3.1-70B | 80 | 8 | 128 | bf16 | 4 KiB | **320 KiB** | 5 MiB |
+| DeepSeek-V3 (MLA) | 61 | — | 576 | FP8 | 576 B | **34.3 KiB** | 549 KiB |
+
+Capacità di un pool host da 500 GiB: **4.0 M token** (Llama-8B), **1.6 M** (Llama-70B),
+**15.2 M** (DeepSeek-V3 dedup) contro **1.9 M** se il latente è memorizzato una volta per
+rank a TP8. L'ordine di grandezza è già la spiegazione di §2.3.
+
+### 7.2 Fattore di replica tra rank TP
+
+Con tensor parallelism vLLM sharda le teste KV: ogni rank possiede `n_kv / TP` teste. Se
+`TP > n_kv` le teste vengono **replicate** per far lavorare ogni rank. Il fattore di
+replica `r` — cioè quante copie identiche dello stesso KV logico esistono nel cluster — è
+
+```
+r_MHA/GQA = max(1, TP / n_kv)
+r_MLA     = TP                       (il latente non è shardato per testa)
+```
+
+e il risparmio di memoria della deduplica è `1 − 1/r`:
+
+| Configurazione | `r` | risparmio |
+|---|---|---|
+| Llama-3.1-70B, TP8 (`n_kv = 8`) | 1 | **0 %** |
+| Llama-3.1-70B, TP16 | 2 | 50 % |
+| Qwen3-8B, TP1 | 1 | 0 % |
+| DeepSeek-V3, TP8 (MLA) | 8 | **87.5 %** |
+
+Il +72 % di §2.3 è la manifestazione di `r = 8`. Su tutta la famiglia GQA con `TP ≤ n_kv`
+— che è il caso normale del deployment single-node — la deduplica cross-rank **non fa
+nulla**. È un beneficio reale ma confinato a MLA e a TP estremi.
+
+### 7.3 Startup: Amdahl sul pinning
+
+Se `T_start = T_pin + T_rest` e l'esternalizzazione azzera solo `T_pin`, lo speedup è
+`S = (T_pin + T_rest) / T_rest`, da cui la frazione di startup spesa in pinning è
+
+```
+f_pin = 1 − 1/S = 1 − 1/2.15 ≈ 0.53
+```
+
+cioè il post dice, in altre parole, che **oltre metà dell'avvio di vLLM con un pool da
+500 GiB è `cudaHostRegister`**. È plausibile? Il nostro soak test (`poc_final_report.md`
+§2.3, 1000 cicli su shard da 256 MiB) dà due numeri utili: pin-alloc **cold 337 ms**
+(≈ 0.8 GB/s: page fault first-touch + pinning su pagine da 4 KiB) e **warm 6–7 ms**
+(≈ 37 GB/s: allocator caldo, pagine già residenti). Un processo fresco è nel caso cold; con
+hugepages da 2 MiB (che `pinned_pool.rs` supporta come opzione) le PTE da bloccare calano di
+512× e il rate sale a qualche GB/s. Quindi 500 GiB costano fra **~1.5 e ~10 minuti** a
+seconda della configurazione — contro i 30–90 s tipici del resto dell'avvio (pesi da NVMe,
+CUDA graph, warm-up). `f_pin ≈ 0.5` è coerente. Il punto resta quello di §2.1: il costo è
+`O(dimensione del pool)` e viene **ammortizzato** sul numero di restart dell'engine durante
+la vita del daemon — vale `n_restart × T_pin`, che per noi è ≈ `1 × T_pin` = niente.
+
+Corollario sistemistico che il post non dice: memoria pinnata è memoria `mlock`ata,
+**sottratta permanentemente al page cache**. 500 GiB pinnati su un host da 1 TB dimezzano il
+page cache di tutto il resto. PegaFlow ne è immune perché il suo tier SSD usa `O_DIRECT`
+(§8.4); il nostro `AsyncNVMeIO` no (§8.4, §6.2).
+
+### 7.4 Hit vs miss: il rapporto TTFT è una proprietà del modello, non della cache
+
+Prefill di `n` token costa `TTFT_cold ≈ n · c_tok` con `c_tok = 2P / (MFU · F_peak)`
+(due FLOP per parametro per token). Caricare il KV degli stessi `n` token costa
+`TTFT_warm ≈ n · B_tok / BW + c_ultimo_blocco`. Il rapporto, per `n` grande, è
+
+```
+ρ = TTFT_cold / TTFT_warm ≈ (2P · BW) / (MFU · F_peak · B_tok)
+```
+
+Per Llama-3.1-8B su H800 (`F_peak ≈ 989 TFLOPS` bf16 dense, `MFU ≈ 0.5`):
+`c_tok ≈ 16 GFLOP / 495 TFLOPS ≈ 32 µs/token`; con PCIe Gen5 x16 a `BW ≈ 40–50 GB/s`
+effettivi: `128 KiB / 45 GB/s ≈ 2.9 µs/token`. **`ρ ≈ 11`**, contro il 9.3× misurato
+(572.5 / 61.5) — la differenza è l'overhead fisso (ultimo blocco ricalcolato, lookup,
+scheduling) che pesa di più a prompt corti. Il numero è riprodotto senza alcun parametro di
+PegaFlow: dipende da `P`, `F_peak`, `BW`, `B_tok`. E **cresce con la taglia del modello**:
+per Llama-70B `c_tok ≈ 283 µs`, `B_tok/BW ≈ 7 µs`, `ρ ≈ 40`.
+
+Il corollario più utile è la **banda di pareggio** sotto cui ricalcolare batte ricaricare:
+
+```
+BW* = B_tok / c_tok
+```
+
+| Modello | `c_tok` (H800, MFU 0.5) | `B_tok` | `BW*` |
+|---|---|---|---|
+| Llama-3.1-8B | 32 µs | 128 KiB | **4.1 GB/s** |
+| Llama-3.1-70B | 283 µs | 320 KiB | 1.2 GB/s |
+| DeepSeek-V3 (37B attivi, MLA) | ~150 µs | 34.3 KiB | **0.23 GB/s** |
+
+Per un MoE con MLA anche un SSD SATA o un link 10 GbE battono il ricalcolo: ecco perché a
+Novita conviene un tier SSD e un tier RDMA, e perché il loro caso d'uso (MoE grandi, MLA,
+FP8) è quello in cui l'external KV cache rende di più. Per un modello denso da 8B il
+margine sul tier SSD è di un fattore ~2: molto meno ovvio.
+
+### 7.5 Pooling: dove sta il +56 %
+
+Sia `h` l'hit rate sui prefissi, `T_pre` il tempo di prefill di una richiesta, `T_dec` il
+suo decode. Tempo per richiesta:
+
+```
+T(h) = T_dec + T_pre · [(1 − h) + h/ρ]
+```
+
+Il guadagno di throughput passando da `h₁` a `h₂` è `T(h₁)/T(h₂)`. Con `φ = T_pre/T(0)`
+frazione di prefill e `ρ ≈ 9`:
+
+```
+gain ≈ 1 / (1 − φ · Δh · (1 − 1/ρ))
+```
+
+Per ottenere **+56 %** serve `φ · Δh ≈ 0.40`: ad esempio `φ = 0.6` (workload
+prefill-heavy, prompt lunghi e risposte corte) e `Δh = 0.67` (due terzi dei prefissi
+diventano hit grazie alla condivisione). Il numero è consistente solo con un workload in
+cui (a) il prefill domina e (b) le otto istanze condividono la maggior parte dei prefissi.
+Con `φ = 0.2` (chat tipica, decode-heavy) lo stesso `Δh` dà +14 %. Il +56 % non è falso: è
+**il valore in un angolo specifico dello spazio dei workload**, e quell'angolo è quello di
+chi serve lo stesso system prompt su otto repliche.
+
+Il perché *strutturale* del guadagno è la concavità della curva di hit rate `h(C)`: con
+popolarità Zipf e richieste indipendenti, `h` è concava crescente nella capacità, quindi un
+pool unico da `C` batte sempre `N` pool da `C/N` sulla stessa distribuzione
+(`h(C) ≥ h(C/N)` per monotonia; il guadagno è massimo quando `C/N` cade sulla parte ripida
+della curva). Con workload **disgiunti** (modelli o prefissi diversi) la condivisione dei
+contenuti sparisce e resta solo il multiplexing statistico sulla domanda: il guadagno si
+riduce all'elasticità di allocazione.
+
+Un dettaglio che il pooling non aggiusta: l'eviction LRU **per blocco** (`cache.rs`) rompe
+la contiguità dei prefissi — l'hit utile è il *prefisso cached più lungo*, non la *frazione*
+di blocchi cached. La loro issue #396 ("preserve contiguous KV prefixes") lo riconosce.
+
+### 7.6 Eviction: perché per il KV basta LRU e per gli esperti no
+
+Il valore di tenere in cache un oggetto `o` è `V_o = p_o · Δ_o`, con `p_o` probabilità di
+riuso nell'orizzonte utile e `Δ_o` il tempo risparmiato in caso di hit.
+
+- **Blocco KV.** `Δ_b = c_blocco · (1 − 1/ρ)`: il costo di ricalcolo di un blocco è quasi
+  costante per un dato modello, quindi `Δ_b ≈ const` e massimizzare `Σ V_b` equivale a
+  massimizzare `Σ p_b`. LRU/LFU sono stimatori ragionevoli di `p_b` stazionaria: **il
+  valore è uniforme, conta solo la probabilità**. Un LRU non è una scelta pigra, è una
+  scelta quasi ottima per questo oggetto.
+- **Shard di esperto.** Non esiste ricalcolo: un miss è uno **stallo** di `T_load(e)` sul
+  path critico del forward. Lo stallo atteso per token è
+
+  ```
+  E[S | x] = Σ_{e ∉ cache} p(e | x) · T_load(e)
+  ```
+
+  dove `x` è il contesto corrente. La differenza decisiva rispetto al KV: `p(e | x)` è
+  **condizionale al contesto** e osservabile *prima* del forward (dal gating, o da un suo
+  predittore come PT-PEP), mentre per il KV `p_b` si scopre solo al lookup.
+
+Questo permette di enunciare la tesi di OSX in una riga verificabile: il vantaggio di una
+policy predittiva su LRU è limitato superiormente dall'**informazione mutua `I(E; X)`** tra
+routing e contesto. Se `I(E; X) = 0` (routing indipendente dal prompt), SEE informata da
+PT-PEP degenera in LRU e non c'è nulla da guadagnare; se `I(E; X) > 0`, il gap di hit rate
+a pari capacità tra LRU e SEE+PT-PEP **è la misura empirica di quell'informazione** — ed è
+il numero che #19/#21 devono produrre. La formula SEE (`score = α·freq + β·recency + γ·σ`,
+`policies.py`) va letta come un proxy lineare di `log p̂(e | x)`: `α·freq + β·recency`
+stima la componente stazionaria, `γ·σ` la componente condizionale. Il paper è forte
+esattamente nella misura in cui `γ·σ` sposta il risultato.
+
+### 7.7 Il side-channel in numeri
+
+`TTFT_warm p99 = 77 ms < TTFT_cold mean = 572 ms`: le due distribuzioni sono disgiunte, un
+singolo campione classifica hit/miss con errore ≈ 0. Granularità dell'oracolo: un blocco
+(16 token). Un attaccante *cieco* dovrebbe indovinare `|V|^16` continuazioni — infattibile;
+ma l'oracolo risponde in `O(1)` query per *candidato noto* (un documento, un system prompt,
+un template), e la risposta è "**qualcun altro nel namespace l'ha inviato di recente**". Con
+il tier RDMA l'oracolo è cluster-wide. Non è estrazione di contenuto; è membership su
+contenuti noti — sufficiente per un'inferenza su chi usa quale prompt, e senza mitigazioni
+(salt per tenant nell'hash, o namespace per tenant) nel codice attuale.
+
+### 7.8 La finestra use-after-free (#403) come problema di code
+
+Timeline: DMA sottomesso a `t₀`; timeout del trasferimento a `t₀ + τ`; il buffer pinned viene
+liberato e può essere riassegnato; il copy engine completa a `t₀ + δ`. Corruzione se
+`δ > τ` **e** il buffer è stato riassegnato nell'intervallo `(τ, δ)`. Sotto carico la coda
+del copy engine cresce, la coda di `δ` si allunga ed è **esattamente sotto carico** che il
+bug si attiva. La correzione corretta non è aumentare `τ`: è rilasciare i buffer **a
+completamento** (`cudaEvent`) e non a timer, o metterli in quarantena finché l'evento non
+arriva. Il nostro `GPUTransfer.to_vram(pin=True)` è oggi immune perché sincrono; la
+pipeline a stream di **#5** introdurrà lo stesso identico rischio, e va progettata con
+rilascio completion-driven fin dal primo commit.
+
+---
+
+## 8. Approfondimento sistemistico
+
+### 8.1 Il data path: chi fa davvero la copia
+
+Il meccanismo che rende PegaFlow "GIL-free" non è il Rust in sé, è **chi emette la copia**.
+vLLM alloca i tensori KV per layer; il connector esporta per ciascuno un handle
+`cudaIpcGetMemHandle` (`ipc_wrapper.py`, con mappatura per UUID della GPU così da
+sopravvivere a `CUDA_VISIBLE_DEVICES` diversi fra processi); il daemon apre gli handle nel
+proprio contesto CUDA e da lì emette `cuMemcpyAsync` H2D/D2H **sui propri stream**
+(`gpu_worker.rs`: un batch di descrittori per layer, uno stream, una sola sincronizzazione).
+Python non tocca il path della copia. Il prezzo: i copy engine (CE) della GPU sono condivisi
+con vLLM, e il daemon compete sullo stesso PCIe con qualunque altro traffico host↔device
+dell'engine. Per un modello denso è irrilevante; **per un MoE con esperti in offload — cioè
+per noi — è la stessa corsia PCIe** (§6.2).
+
+La scelta fra i due backend di trasferimento è un compromesso classico: `memcpy` usa i CE e
+non consuma SM, ma paga un costo di emissione per ogni range; `kernel` (usato per MLA, dove
+gli slot sono piccoli e frammentati) lancia un solo kernel di copia ma **occupa SM** e
+interferisce col decode — la loro issue #408 (picchi di TPOT) è la conseguenza visibile.
+
+### 8.2 Granularità delle copie: perché la patch a vLLM non è opzionale
+
+Da `layout.rs`, ogni blocco di un layer è 1 range contiguo (MLA, o K/V adiacenti) oppure 2
+(K e V in regioni separate, distanti `kv_stride_bytes`). Una richiesta di `n` token su `L`
+layer produce
+
+```
+N_copie = L · seg · n / 16
+```
+
+Per Llama-3.1-8B, 4 096 token: `32 · 2 · 256 = 16 384` `cuMemcpyAsync` da **32 KiB** se i
+blocchi non sono contigui in memoria. A 2–5 µs di costo di emissione ciascuna, sono
+**33–80 ms di CPU solo per accodare le copie** — più del TTFT warm pubblicato (61 ms). Con
+i block ID ordinati, `memcpy.rs::merge()` fonde i range adiacenti — ma solo se sono contigui
+**sia lato device sia lato host** — e nel caso ideale le 16 384 copie diventano `L · 2 = 64`
+da 8 MiB. Due conseguenze:
+
+1. La patch di `docs/vllm-patch.md` (ordinare i blocchi liberi per `block_id`) **non è
+   un'ottimizzazione, è una precondizione** dei numeri pubblicati; e l'RFC upstream è morta.
+2. Il requisito di contiguità *host* vincola il loro allocatore pinned a replicare l'ordine
+   di allocazione dei blocchi di vLLM: il pool non è indipendente dall'engine come la
+   narrativa "sidecar" lascia intendere.
+
+Il confronto col nostro caso è istruttivo per differenza: uno shard da **256 MiB** è una
+copia sola. Siamo **bandwidth-bound, non issue-bound**, e il problema che PegaFlow risolve
+con patch + coalescenza per noi non esiste. I nostri numeri lo confermano: 4 MiB in 194 µs
+pinned (≈ 21.6 GB/s, vicino al pratico di PCIe Gen4 x16) contro 684 µs pageable
+(≈ 6.1 GB/s) — il fattore 3.5× che ha chiuso il sotto-obiettivo 2 di #17.
+
+### 8.3 Il pool pinned: NUMA, hugepages, `mlock`
+
+`pinned_pool.rs`: `mmap` + `cudaHostRegister` (non `cudaHostAlloc`), first-touch eseguito
+da un thread **bound al nodo NUMA** della GPU (`run_on_numa`), hugepages opzionali, **un
+pool per nodo NUMA**, e fail-fast se l'affinità NUMA di una GPU non è determinabile. È il
+pattern giusto e vale la pena spiegare perché: una H2D che attraversa il socket passa
+per UPI/Infinity Fabric (≈ 20–40 GB/s per direzione, condivisi) invece che per il root
+complex locale, e su un dual-socket la banda si dimezza. Le hugepages spiegano anche il
+nostro cold/warm di §7.3: 2 MiB per pagina = 512× meno PTE da bloccare.
+
+Per noi è direttamente rilevante: il Z8 G4 è dual-socket, la PMEM (EMH-2, #57) è sui
+canali di *un* socket, la RTX 3090 è su *un* root complex, e #49 ha già rilevato che il
+framework di perf-test è cieco a `numactl`. Adottare "alloca dal thread pinnato al nodo
+giusto + un pool per nodo" costa poche righe (`os.sched_setaffinity` + first touch) e vale
+potenzialmente un fattore 2 sul tier caldo.
+
+Costo nascosto: `mlock` richiede `ulimit -l` adeguato, e la memoria pinnata **non è
+swappabile né usabile come page cache**. Il tier SSD di PegaFlow è progettato per non
+dipendere dal page cache (§8.4); il nostro EMH-3, che legge con `aiofiles` attraverso il
+page cache, in co-locazione con un daemon che pinna la maggior parte della DDR diventerebbe
+davvero "cold" a ogni lettura.
+
+### 8.4 SSD e `io_uring`: quando serve davvero
+
+`uring.rs`: `cfg.threads` ring, ciascuno con `io_depth` voci, `SQPOLL` opzionale,
+`O_DIRECT` con allineamento imposto a `SSD_ALIGNMENT` e stride dei segmenti host arrotondati
+di conseguenza (gli `iovec` puntano direttamente nel pool pinned). Perché a loro serve:
+per la legge di Little, la concorrenza necessaria a saturare un NVMe è
+`QD = BW · latenza / dimensione_IO`. Con blocchi da 32 KiB, 7 GB/s e ~100 µs di latenza,
+`QD ≈ 21` richieste in volo: senza un'interfaccia asincrona a coda profonda il disco resta
+inutilizzato.
+
+Per noi il conto è diverso: con IO da **256 MiB**, `QD = 7 GB/s · 38 ms / 256 MiB ≈ 1`.
+**Una sola lettura in volo satura già il disco**; un thread pool di `aiofiles` non è il
+collo di bottiglia della banda. Dove `io_uring` ci darebbe qualcosa è altrove:
+
+- **`O_DIRECT`**: evita la copia attraverso il page cache — 256 MiB a 15–25 GB/s di banda
+  memoria single-thread sono **10–17 ms** per shard, sullo stesso ordine del trasferimento
+  PCIe che segue; e rende EMH-3 indipendente dal page cache (§8.3).
+- **Buffer registrati e pinned**: leggere direttamente nel buffer che poi va in H2D elimina
+  uno staging; il passo successivo sarebbe GPUDirect Storage (NVMe → VRAM senza host).
+
+Quindi la risposta quantitativa a D6 di #69: `io_uring` per noi **non è una questione di
+queue depth**; ha senso solo come `O_DIRECT` + buffer pinned registrati, e resta subordinato
+a #24 (se il collo è il forward CPU, il tier NVMe non è sul path critico).
+
+### 8.5 Il control plane: costo di un lookup fuori processo
+
+`get_num_new_matched_tokens` (`scheduler.py:210`) chiama `_tp_shard_client.query()` e, se
+il backend sta ancora caricando, restituisce `None` e memorizza una *probe*: il lookup è
+**non bloccante**, spalmato su più step dello scheduler, con una state machine
+IDLE → Loading → Ready (documentata in `docs/vllm-request-state-machine.md`) e un path
+esplicito per la "deriva di identità" — la richiesta che cambia mentre la risposta è in
+volo (`scheduler.py:274-292`). È una buona progettazione ed è anche **il vero costo di un
+daemon esterno**: ogni domanda fatta a un altro processo può tornare quando lo stato è già
+cambiato, e va gestita. Per D4 di #69 (`osxd`) è esattamente la complessità da mettere in
+conto: una predizione PT-PEP che arriva dopo che il gating ha già deciso è lo stesso
+problema con un altro nome.
+
+### 8.6 RDMA e indice distribuito
+
+Il MetaServer registra gli hash dei blocchi per namespace (`internode/metaserver_client.rs`,
+con batching e cap sulla profondità di coda); un nodo che ha evictato un blocco dopo la
+registrazione produce un fetch fallito — e #401 mostra che oggi un fallimento locale abbatte
+la connessione RDMA sana. È la staleness classica di un indice separato dai dati: servono
+lease o versioni cross-nodo, che localmente esistono (`lease.rs`) ma la roadmap marca
+"MetaServer HA" come lavoro futuro. Efficienza di rete: 194 GB/s su 8 × 400 Gbps
+(= 400 GB/s di line rate) è il **48 %** — nella norma per RDMA con registrazione di memoria
+e messaggi medi, non un numero anomalo. Per noi (§5) resta non applicabile.
+
+### 8.7 Domini di guasto e versioning
+
+Il daemon è il dominio di guasto di tutti gli engine dell'host: se muore, tutti perdono la
+cache e devono degradare a miss senza cadere. Va detto a loro merito che
+`python/tests/test_connector_fault_tolerance.py` e `session_crash_helper.py` testano
+esattamente questo scenario. Il versioning connector ↔ server passa per `pegaflow-proto`;
+un mismatch oggi fallisce in modo oscuro (#338). Sono i due costi ricorrenti di
+qualunque architettura a daemon, e sono i due che un eventuale `osxd` (#69/D4) erediterebbe
+per intero.
+
+### 8.8 Sicurezza, vista dal sistema
+
+Un handle CUDA IPC è una capability senza revoca: una volta aperto, il daemon mappa la
+memoria KV dell'engine per la vita della mappatura. L'esposizione non è però "memoria
+arbitraria" — l'handle mappa solo l'allocazione che il client ha esportato, e `layout.rs`
+valida i range. L'esposizione reale è quella di §4.2 e §7.7: chiunque raggiunga il socket
+gRPC può interrogare e leggere il KV di **altri client nello stesso namespace**, e il
+namespace è una chiave di layout, non di identità. In un container con un solo tenant è
+accettabile; su un host condiviso non lo è, e nel codice non c'è nulla che distingua i due
+casi.
+
+### 8.9 Ricadute concrete per OSX
+
+| Tema | Cosa cambia per noi | Aggancio |
+|---|---|---|
+| `I(E; X)` come claim misurabile | Il gap LRU vs SEE+PT-PEP a pari capacità **è** il risultato del paper | #19, #21 |
+| Rilascio completion-driven dei buffer pinned | Requisito di progetto per la pipeline a stream, prima di scriverla | #5 |
+| Pool pinned per nodo NUMA, first-touch dal thread giusto | Poche righe, fino a 2× sul tier caldo del Z8 dual-socket | #49, #28 |
+| `io_uring` = `O_DIRECT` + buffer registrati, non queue depth | Ridefinisce D6: subordinato a #24, scope più piccolo | #69/D6, #24 |
+| EMH-3 dipende dal page cache | Liability in co-locazione; `O_DIRECT` la rimuove | §6.2 |
+| Contesa PCIe con un daemon KV | Un partizionamento esplicito di banda è un vincolo di progetto, non un dettaglio | #33, #57 |
+
+---
+
+## 9. Raccomandazioni operative
 
 | # | Azione | Priorità | Aggancio |
 |---|---|---|---|
@@ -312,13 +677,16 @@ al sorgente dell'engine.
 | 2 | Riformulare le rivendicazioni di novelty sui 4 punti di §6.3 prima della prossima stesura | **Alta** | Filone B |
 | 3 | Non adottare PegaFlow: prerequisiti assenti (§5) e benefici non applicabili al nostro pattern | **Alta** | — decisione, non lavoro |
 | 4 | Recuperare i numeri dal blog originale da rete non filtrata prima di citarli | Media | §2 |
-| 5 | Valutare `io_uring` per `AsyncNVMeIO` guardando `backing/uring.rs` come riferimento | Media | gap noto README |
-| 6 | Quando #8 si sblocca (`torch>=2.7`/`cu128`), rivalutare *solo* se nel frattempo arriva hardware RDMA | Bassa | issue #8 |
-| 7 | Se un giorno si co-installa: definire partizionamento esplicito di DDR pinned e banda PCIe (§6.2) | Bassa | issue #33, #57 |
+| 5 | Formulare il claim del paper come misura di `I(E; X)`: gap LRU vs SEE+PT-PEP a pari capacità (§7.6) | **Alta** | issue #19, #21 |
+| 6 | Progettare la pipeline a stream con rilascio completion-driven dei buffer pinned, non a timer (§7.8) | Media | issue #5 |
+| 7 | Pool pinned per nodo NUMA con first-touch dal thread bound al nodo della GPU (§8.3) | Media | issue #49, #28 |
+| 8 | `io_uring` per `AsyncNVMeIO` **solo** come `O_DIRECT` + buffer pinned registrati; subordinato a #24 (§8.4) | Bassa | gap noto README, #24 |
+| 9 | Quando #8 si sblocca (`torch>=2.7`/`cu128`), rivalutare *solo* se nel frattempo arriva hardware RDMA | Bassa | issue #8 |
+| 10 | Se un giorno si co-installa: partizionamento esplicito di DDR pinned e banda PCIe, e EMH-3 senza page cache (§6.2, §8.3) | Bassa | issue #33, #57 |
 
 ---
 
-## 8. Giudizio sintetico
+## 10. Giudizio sintetico
 
 Ingegneria seria e tesi architetturale corretta — disaccoppiare la vita della cache dal
 processo dell'engine è la mossa giusta e sarà copiata. Ma "production-grade" è, ad oggi,
@@ -334,7 +702,7 @@ gestire non è tecnico, è di posizionamento — e si gestisce citandolo, non ev
 
 ---
 
-## 9. Fonti
+## 11. Fonti
 
 - [novitalabs/pegaflow](https://github.com/novitalabs/pegaflow) — codice letto a `b5d4acf` (v0.24.0, 2026-08-29), clone shallow
 - [pegaflow/README.md](https://github.com/novitalabs/pegaflow/blob/master/README.md)
