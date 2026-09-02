@@ -112,7 +112,59 @@ esperti prima della mossa. Gli esperti dei rank rimossi vengono quindi **ricollo
 rank superstiti**, non buttati; il rank che esce lo fa solo dopo
 (`switch_and_remove()`, riga 418; il rank uscente notifica `SHUTDOWN_COMPLETE`).
 
-### 1.5 Vincoli reali a HEAD `18c5372`
+### 1.5 Quanti esperti ci sono davvero, e cosa cresce quando si scala
+
+Il conteggio va fatto **per layer MoE**, non per modello: Mixtral 8x7B ha 8 esperti per
+layer × 32 layer = 256 istanze di esperto. EPLB opera per layer — tutti i suoi tensori hanno
+shape `(num_moe_layers, num_physical_experts)` (`eplb/eplb_state.py:111`, `:168`).
+
+La distinzione decisiva è fra esperti **logici** e **fisici**:
+
+```
+num_physical_experts     = num_experts + num_redundant_experts   # routed_experts.py:1074
+num_local_physical_experts = num_physical_experts // ep_size     # rebalance_execute.py:494
+assert num_physical_experts % num_gpus == 0                      # eplb/policy/default.py:131
+```
+
+Gli esperti *logici* sono quelli del modello (8 per layer in Mixtral) e non cambiano mai. Gli
+esperti *fisici* sono gli slot su cui vengono materializzati, e un logico può occupare più
+slot: sono le repliche (`num_redundant_experts`).
+
+Qui sta il punto meno intuitivo di EEP, ed è esplicito nel codice
+(`core_client.py:1641-1655`):
+
+```python
+num_redundant_experts = (
+    num_physical_experts * new_data_parallel_size // cur_data_parallel_size
+) - num_experts
+```
+
+**Lo scaling tiene costante il numero di slot fisici per rank e fa crescere il totale.** Il
+surplus non è composto da esperti nuovi — non ne esistono altri — ma da **repliche di
+quelli esistenti**, distribuite da EPLB in base al carico osservato. Su Mixtral 8x7B,
+partendo da DP=2 senza ridondanza (8 slot fisici, 4 per rank):
+
+| Scale | slot fisici/layer | di cui repliche | slot per rank |
+|---|---|---|---|
+| DP=2 (partenza) | 8 | 0 | 4 |
+| DP=4 | 16 | 8 | 4 |
+| DP=8 | 32 | 24 | 4 |
+
+A DP=8 ogni esperto logico esiste in media in 4 copie. **Le GPU aggiunte non comprano
+frammenti più piccoli: comprano repliche degli esperti caldi.** È coerente con il fatto che
+EEP esista per assorbire picchi di traffico, non per far entrare modelli più grandi — per
+quello serve TP o PP, non DP.
+
+Ne segue anche il pavimento sullo scale-down: quando la formula darebbe
+`num_redundant_experts < 0` i logici non ci starebbero più, e la chiamata fallisce con
+`ValueError` indicando la dimensione minima, `ceil(num_experts × cur_dp / num_physical)`
+(`core_client.py:1648-1655`). Da DP=4 con 16 slot fisici il minimo è 2.
+
+Va detto per completezza che la replica più costosa in VRAM non è quella degli esperti: con
+DP ogni rank tiene **una copia intera dei pesi densi** (attention, embedding, norm) — è
+esattamente ciò che `batch_transfer_weights()` copia P2P a ogni nuovo rank (§1.3).
+
+### 1.6 Vincoli reali a HEAD `18c5372`
 
 Dalla validazione in `config/parallel.py:875-896` e da `config/vllm.py:2598-2599`:
 
@@ -123,17 +175,22 @@ Dalla validazione in `config/parallel.py:875-896` e da `config/vllm.py:2598-2599
 | incompatibile con `data_parallel_external_lb` / `hybrid_lb` | `parallel.py:883-888` | **hard**, `NotImplementedError` — "relies on a single API server and core client" |
 | EPLB async richiede NIXL | `parallel.py:889-896` | **hard**, `ValueError` |
 | non supportato dal **V2 model runner** | `vllm.py:2598-2599` | **hard**, forza il runner V1 |
-| `--data-parallel-backend ray` | test + esempio | **de facto**, non validato nel codice |
+| `--data-parallel-backend ray` | `v1/engine/core_client.py:1636-1638` | **hard**, `assert` sul path di scale |
 | `--tensor-parallel-size 1` | `tests/distributed/test_elastic_ep.py:167-168` | **de facto**, non validato nel codice |
 
-La distinzione fra *hard* e *de facto* è il motivo per cui questo report esiste: il
-sommario divulgativo elenca Ray e TP=1 come requisiti, ma nel codice non c'è nessun
-controllo che li imponga — sono semplicemente l'unica combinazione esercitata dai test e
-dall'esempio. I tre executor (`uniproc`, `multiproc`, `ray`) implementano tutti
+La distinzione fra *hard* e *de facto* conta, ma va cercata in due posti diversi: la
+config (`parallel.py`) **non** valida né Ray né TP, e questo trae in inganno. Il vincolo su
+Ray è imposto altrove, sul path di scale: `DPLBAsyncMPClient.prepare_elastic_ep()` apre con
+`assert parallel_config.data_parallel_backend == "ray"` — *"Only ray DP backend supports
+scaling elastic EP"* (`core_client.py:1636-1638`) — e poco sotto pretende un
+`CoreEngineActorManager`, che è l'actor manager Ray. **Ray è quindi un requisito hard**, solo
+non dichiarato dove uno lo cercherebbe. Che i tre executor implementino tutti
 `elastic_ep_execute` (`uniproc_executor.py:72`, `multiproc_executor.py:678`,
-`ray_executor.py:378`), e l'aritmetica EP tiene conto di `tp_size`
-(`elastic_execute.py:629-633`). Cosa funzioni davvero fuori dal path testato è ignoto, non
-vietato.
+`ray_executor.py:378`) non basta a renderlo opzionale: lo scale non arriva mai fino a loro.
+
+TP=1 invece resta *de facto*: nessuna assert lo impone su nessun path che ho letto, e
+l'aritmetica EP tiene conto di `tp_size` (`elastic_execute.py:629-633`). Cosa funzioni
+davvero con TP>1 è ignoto, non vietato.
 
 Il test end-to-end (`tests/distributed/test_elastic_ep.py`) verifica accuratezza GSM8K
 prima, dopo scale-up e dopo scale-down, con traffico attivo durante lo scale, e copre anche
@@ -199,13 +256,18 @@ esiste per gestire — e vLLM, in quel momento, non ha nessun tier dove metterli
 
 ### 3.3 AER ed EPLB: il confine è più netto di quanto temessi
 
-EPLB opera su `physical_to_logical` con un numero fisso di slot fisici per rank e gestisce
-la replica con i *redundant experts* (`--eplb-config.num_redundant_experts`, esposto
-nell'esempio come `--re`). AER (`scheduler/aer.py`) opera sul `replication_factor` fra
-device locali ed è oggi uno stub deliberato che logga `WOULD_REPLICATE` senza replicare
-(single-GPU, issue #8). Non c'è collisione **oggi** perché AER non alloca nulla. La
-collisione arriverebbe solo quando AER diventa reale su dual-GPU — a quel punto due
-controller scriverebbero sullo stesso budget. Vedi **D5**.
+EPLB opera su `physical_to_logical` con un numero fisso di slot fisici per rank e gestisce la
+replica con i *redundant experts* (`--eplb-config.num_redundant_experts`, esposto
+nell'esempio come `--re`). Attenzione però a §1.5: in EEP la replica **non è un extra
+opzionale, è il meccanismo stesso dello scale-up** — le GPU aggiunte vengono riempite di
+copie degli esperti caldi. EPLB è quindi un controller di replica a pieno titolo, non solo
+un load balancer, e questo rende D5 meno accademica di come l'avevo posta.
+
+AER (`scheduler/aer.py`) opera sul `replication_factor` fra device locali ed è oggi uno stub
+deliberato che logga `WOULD_REPLICATE` senza replicare (single-GPU, issue #8). Non c'è
+collisione **oggi** perché AER non alloca nulla. La collisione arriverebbe solo quando AER
+diventa reale su dual-GPU — a quel punto due controller scriverebbero sullo stesso budget.
+Vedi **D5**.
 
 ---
 
@@ -233,11 +295,12 @@ senza forkare vLLM.
 
 ## 5. Correzioni rispetto a issue #68 (v1, da fonti secondarie)
 
-1. **"Backend Ray obbligatorio"** → falso come vincolo. Nessuna validazione lo impone; i tre
-   executor implementano `elastic_ep_execute`. Ray è il **path testato**, non un requisito
-   (§1.5).
+1. **"Backend Ray obbligatorio"** → **vero**, ma non dove lo si cerca. In `parallel.py` non
+   c'è; l'`assert` sta sul path di scale, in `core_client.py:1636-1638`. Il punto sostanziale
+   di #68 regge; è la mia prima stesura di questo report che sbagliava a derubricarlo a
+   "path testato" dopo aver guardato solo la validazione di config (§1.6).
 2. **"`tensor_parallel_size=1` obbligatorio"** → falso come vincolo. Il codice calcola
-   `ep_size = dp_size × tp_size`. TP=1 è ciò che i test esercitano (§1.5).
+   `ep_size = dp_size × tp_size`. TP=1 è ciò che i test esercitano (§1.6).
 3. **"La fase di reshuffle trasferisce i pesi degli esperti via NCCL"** → impreciso. Sono
    **due path distinti**: i pesi densi via `isend`/`irecv` P2P, che **escludono
    esplicitamente** gli esperti; gli esperti solo via reshuffle EPLB, per giunta asincrono in
@@ -267,9 +330,12 @@ File più rilevanti per verifiche future:
 - `vllm/distributed/elastic_ep/standby_state.py` — gruppi di comunicazione standby
 - `vllm/entrypoints/serve/elastic_ep/api_router.py` — endpoint HTTP
 - `vllm/v1/engine/async_llm.py` (righe 1119-1161) — orchestrazione lato engine
+- `vllm/v1/engine/core_client.py` (righe 1629-1660) — vincolo Ray, contabilità degli
+  esperti fisici/logici e pavimento dello scale-down
 - `vllm/config/parallel.py` (righe 875-896) — validazione dei vincoli
 - `vllm/config/vllm.py` (righe 2543-2599) — feature non supportate dal model runner V2
-- `vllm/distributed/eplb/eplb_state.py`, `rebalance_execute.py` — reshuffle e `rank_mapping`
+- `vllm/distributed/eplb/eplb_state.py`, `rebalance_execute.py`, `policy/default.py` —
+  reshuffle, `rank_mapping`, contabilità fisici/logici
 - `tests/distributed/test_elastic_ep.py` — path realmente esercitato in CI
 - `examples/ray_serving/elastic_ep/` — script di lancio e di scaling
 
