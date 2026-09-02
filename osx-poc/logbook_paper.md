@@ -144,3 +144,84 @@ verificare, non come bibliografia citabile as-is.
 - Piano completo del Filone B: `osx-poc/reports/sprint5_berg_plan.md` §3
 - Materiale da riusare per Design/Evaluation: `osx-poc/reports/gcsg_shadow_execution_report.md`, `osx-poc/reports/poc_final_report.md`
 - Dev diary generale (non paper-specific): `osx-poc/LOGBOOK.md`
+
+---
+
+## 2026-09-02 — Il vicino ingegneristico: l'offloader nativo di vLLM, e il paragrafo che il paper deve contenere
+
+**Contesto:** review della sessione su Elastic Expert Parallelism (issue #68,
+discussion #70). Cercando se vLLM avesse un offload degli esperti nativo — per
+rispondere a "quanto di vMemoryFabric c'è già in vLLM?" — l'ho trovato:
+`vllm/model_executor/offloader/`, presente da v0.25.0 (2026-07-08), assente in
+v0.13.0. Due backend, `uva` (zero-copy da pinned CPU, selezione per nome di
+parametro) e `prefetch` (gruppi di layer, prefetch H2D asincrono un passo
+avanti, buffer statici, custom op nel grafo compilato). Verifica sul codice
+in `reports/related_work_vllm_offloader.md`; piano di misura in
+`reports/test_plan_emh_vs_vllm_offloader.md`.
+
+**Cosa cambia per il Related Work.** L'entry 2026-08-13 ha identificato
+FineMoE come vicino *accademico*. Questo è il vicino *ingegneristico*, ed è
+dentro l'engine da cui dipendiamo: un reviewer che conosce vLLM lo nominerà
+per primo. "Nessuno fa offload di esperti in vLLM" non è più vero. Il claim
+difendibile è più stretto: *nessuno lo fa in modo routing-aware, a
+granularità di esperto, su più di due tier, con eviction dinamica* — quattro
+assi, ognuno verificato con una riga di codice citata nel report. Il fatto
+decisivo è di layout, non di policy: nel `FusedMoE` di vLLM gli esperti di un
+layer sono un solo tensore `w13_weight (num_experts, …)`, e l'offloader
+lavora per parametro. Non può muovere un esperto singolo senza un `FusedMoE`
+diverso — che è ciò che l'EAT `(expert_id, shard_idx)` presuppone.
+
+**Cosa cambia per la Evaluation.** Il confronto giusto è contro `prefetch`,
+non contro `cpu_offload_gb` nudo: è ciò che un utente vLLM competente userebbe
+oggi per far entrare Mixtral in 24 GB. Il piano dei test è pre-registrato
+(ipotesi H1–H7 con soglie) e costruito per essere confrontabile nonostante il
+confondimento di versione (V0 per GCSG, V1 per l'offloader): modello di costo
+comune, normalizzazione per versione, livello L0 senza vLLM.
+
+**Onestà da mettere nel testo, non da scoprire in review.** Gli offloader
+servono gli stessi pesi ($\Delta Q = 0$); EMH con shadow INT4 no. Il
+confronto è a due obiettivi. E il vantaggio di EMH è una funzione dello skew
+del routing: a routing uniforme il modello predice *nessun guadagno* oltre la
+capacità (H5). Se il paper non lo dice, lo dirà il reviewer.
+
+### Bozza — §8 Related Work, paragrafo "Production engines" (inglese, per il draft)
+
+> **Production engines.** vLLM recently added native weight offloading with
+> two backends: a UVA zero-copy path that reads parameters from pinned host
+> memory on demand, and a prefetch path that groups decoder layers, offloads
+> a fixed subset chosen by a static arithmetic pattern, and hides host-to-
+> device copies behind the compute of the preceding layers using static GPU
+> buffers and compiler-visible custom ops. Both operate at parameter
+> granularity; since vLLM's fused MoE layout stores all experts of a layer in
+> a single tensor, neither can place or move an individual expert, and
+> neither consults the router. vLLM's Elastic Expert Parallelism addresses an
+> orthogonal capacity problem — horizontal scaling of the expert-parallel
+> group under traffic variation — by adding data-parallel ranks and filling
+> them with replicas of hot experts; it assumes homogeneous ranks and
+> renegotiates the KV-cache budget to the global minimum. EMH differs from
+> the offloader on three axes: residency decisions are routing-aware and taken
+> at expert-shard granularity, the hierarchy spans more than two tiers, and
+> eviction is dynamic. We do not claim general superiority: the offloader
+> preserves model quality by construction, integrates with CUDA graphs, and
+> — as our cost model predicts and §6 confirms — matches EMH under uniform
+> routing. EMH's advantage is a function of routing skew, and we report it as
+> such.
+
+### Bozza — §7 Limitations, frase da aggiungere
+
+> Our comparison against vLLM's native offloader spans two vLLM releases,
+> because the offloader targets the V1 engine while our worker integrates
+> with V0. We normalize every metric against a no-offload baseline on the same
+> release, calibrate the cost model on engine-free microbenchmarks, and report
+> the cross-release gap explicitly; the confound is reduced, not removed.
+
+**Aggiornamento alla bibliografia di lavoro (Cluster A, nuova riga):**
+
+| Paper / sistema | Riferimento | Nota |
+|---|---|---|
+| vLLM weight offloader (`uva`, `prefetch`) | `vllm-project/vllm`, `vllm/model_executor/offloader/`, ≥ v0.25.0 | codice, non paper — si cita come software con versione e commit; verificato 2026-09-02 |
+| vLLM Elastic Expert Parallelism | RFC vllm#20323; `vllm/distributed/elastic_ep/` | asse ortogonale, non concorrente; `reports/related_work_elastic_ep.md` |
+
+**Sotto-obiettivo 2 (related-work survey): resta 🟡.** FineMoE va ancora
+letto per intero; questa entry aggiunge il vicino ingegneristico, non
+sostituisce quella lettura.
