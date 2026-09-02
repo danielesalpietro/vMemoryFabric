@@ -20,6 +20,13 @@ Releases are named after cities where significant project milestones were reache
 
 *Named after Berg, Stockholm, where the Sprint 5 planning conversation happened — PoC delivery + paper, two parallel tracks.*
 
+### Changed — 2026-09-02 (ter) — outline del paper v2 approvata: GCSG contributo, EMH substrato
+
+- `reports/sprint5_berg_plan.md` §B2 riscritta (v2, approvata dal project owner il 2026-09-02; v1 conservata in calce con la sua motivazione dichiarata smentita dalla verifica sul codice). Titolo di lavoro: *Runtime Quality Guarding for Quantized MoE Serving: Shadow Execution over a Heterogeneous Expert Memory Hierarchy*. Contributi in ordine: GCSG; EMH come substrato eterogeneo; piano di misura pre-registrato e confrontabile. PT-PEP fra i contributi solo se H8 passa. AER fuori dal design. Evaluation = test plan (L0b → L0 → L1), con i negative results raccontati. Related Work in quattro paragrafi, tre già in bozza nel logbook. Ordine di esecuzione: L0b prima di tutto; abstract e introduzione **dopo** L0b
+- §B3 aggiornata: FineMoE e MoE-Infinity verificati sul codice ufficiale (PDF irraggiungibile: meccanismi sì, numeri no); B3 non si chiude senza il PDF per numeri e baseline
+- `logbook_paper.md` (entry 2026-09-02 ter): decisione registrata; sotto-obiettivo 3 ✅; timeline §4 dichiarata scaduta, da riscrivere dopo L0b
+
+
 ### Added — 2026-09-02 (bis) — FineMoE e MoE-Infinity letti sul codice: i differenziatori di EMH si restringono a GCSG; H2 alzata a 0.25; bake-off dei predittori
 
 - `reports/related_work_finemoe.md` (nuovo) — FineMoE (EuroSys '26) verificata sul **repository ufficiale** (`IntelliSys-Lab/FineMoE-EuroSys26`, `5c58468`) e su MoE-Infinity HEAD (`b766f8f`); **il PDF è irraggiungibile** dal sandbox (arXiv, sito autori, HF, Semantic Scholar: tutti bloccati dal proxy) e i numeri del paper restano non verificati. Meccanismo: traccia per **token** (embedding di input + probs del router per layer), store `(embed → traiettoria)`, kNN sull'embedding **prima del primo MoE** + **correzione a ogni layer** dalla traiettoria parziale, selezione a massa cumulativa `1 − similarità`, eviction LFU × probabilità del router (`task_scheduler.cpp:296`, contributo FineMoE rispetto a MoE-Infinity). Tre tier GPU/host/SSD, esperto intero per layer. Demo: solo Qwen1.5-MoE, ≥ 48 GB, batch 1

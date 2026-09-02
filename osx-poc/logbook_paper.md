@@ -308,3 +308,32 @@ Fig. 3. La selezione a massa cumulativa `1 − similarità` come candidato per
 di natura.** Non è più "non sappiamo cosa fa FineMoE"; è "sappiamo che fa
 quello che rivendicavamo, e il paper va riorientato". Il PDF va comunque
 letto appena raggiungibile, per i numeri e le baseline.
+
+---
+
+## 2026-09-02 (ter) — Decisione: baricentro su GCSG, EMH come substrato. Approvata.
+
+**Contesto:** proposta esplicita postata su issue #68 (commento del
+2026-09-02) e come D10 in discussion #70, dopo le tre verifiche sul codice
+(offloader vLLM, MoE-Infinity, FineMoE). **Approvata dal project owner il
+2026-09-02.** Recepita in `sprint5_berg_plan.md` §B2 (v2), con la v1
+conservata in calce per storia e la motivazione della v1 dichiarata
+smentita.
+
+**Cosa è deciso:**
+1. GCSG è il contributo; EMH è il substrato che rende la shadow execution
+   sostenibile in VRAM e si presenta come *diversa*, mai come *in più*.
+2. PT-PEP si rivendica solo se H8 (L0b) passa; altrimenti è un predittore
+   sostituibile e si adotta la correzione per layer (#21).
+3. AER fuori dal design; in Future Work solo come replica fra tier.
+4. Evaluation secondo il test plan pre-registrato; H2 a 0.25.
+5. §2 di #68 riscritto sullo scale-down.
+
+**Cosa cambia nell'ordine dei lavori:** L0b prima di tutto — un giorno,
+senza GPU, sulle tracce dei hook GCSG. Abstract e introduzione **dopo**
+L0b, perché il racconto di PT-PEP dipende da H8. La timeline §4 del piano
+(target 31/8) è scaduta e non è stata riscritta: le date nuove si fissano
+dopo L0b, quando si sa quanto costa il resto.
+
+**Sotto-obiettivo 3 (outline) → ✅ v2 approvata.** Sotto-obiettivo 2
+(related work) resta 🟡 per il solo PDF di FineMoE.

@@ -283,7 +283,100 @@ espansione, non stesura da zero.
 sia la tabella per-subject/i numeri di accuratezza, già pronti per la
 sezione Evaluation.
 
-### B2. Outline paper (bozza di lavoro)
+### B2. Outline paper — v2, approvata dal project owner il 2026-09-02
+
+**Cosa è cambiato e perché.** La v1 (2026-08-12, riportata in fondo a questa
+sezione per storia) metteva l'Expert Memory Hierarchy al centro come
+contributo. La verifica sul codice dei tre sistemi vicini — l'offloader
+nativo di vLLM, MoE-Infinity a HEAD, FineMoE (EuroSys '26) — ha mostrato che
+granularità di esperto, prefetch predittivo e hotness persistente sono già
+lì (`reports/related_work_vllm_offloader.md`, `reports/related_work_finemoe.md`,
+`logbook_paper.md` entry 2026-09-02 e 2026-09-02 bis). L'unico contributo
+che nessuno dei tre può contestare è **GCSG**: la verifica shadow della
+qualità sotto quantizzazione aggressiva, a runtime. Il paper si riorienta
+di conseguenza: **GCSG è il contributo, EMH è il substrato che lo rende
+possibile**, e si presenta come *diversa* dai vicini, mai come *in più*.
+Proposta e motivazione per esteso: issue #68 (commento del 2026-09-02),
+discussion #70 (D10). Approvata.
+
+**Titolo di lavoro** (da confermare in B5): *Runtime Quality Guarding for
+Quantized MoE Serving: Shadow Execution over a Heterogeneous Expert Memory
+Hierarchy*.
+
+1. **Abstract** — il problema è la qualità sotto quantizzazione aggressiva
+   nel serving MoE, non la memoria; GCSG la guarda a runtime con shadow
+   execution; EMH è ciò che rende la shadow execution sostenibile in VRAM;
+   evaluation contro l'offloader di vLLM e MoE-Infinity su hardware
+   identico; nessuna claim sul prefetch predittivo prima del numero.
+2. **Introduction** — motivazione riscritta: i sistemi di expert offloading
+   esistenti preservano la qualità per costruzione perché servono gli stessi
+   pesi; quando i pesi sono quantizzati aggressivamente per entrare in
+   memoria, **nessuno di loro sa se il gating sta degradando**. GCSG chiude
+   quel buco. Contributi elencati in quest'ordine: (i) GCSG; (ii) EMH come
+   substrato eterogeneo (DDR4/PMEM/NVMe come spazio unico) su cui la shadow
+   execution gira senza esplodere la VRAM; (iii) un piano di misura
+   pre-registrato e confrontabile (modello di costo in byte/token,
+   normalizzazione per versione). Il lead time di PT-PEP entra fra i
+   contributi **solo se H8 passa** (§6).
+3. **Background & Motivation** — MoE routing e sparsità (k ≪ E); perché la
+   quantizzazione INT4 degli esperti è il modo in cui si entra in 24 GB;
+   cosa fanno oggi offloader vLLM, MoE-Infinity, FineMoE e cosa **non**
+   guardano (la qualità). Qui entra la caratterizzazione dello skew del
+   routing con l'entropia coarse/fine (M9, definizione di FineMoE, con
+   attribuzione).
+4. **Design** — **4.1 GCSG** (contributo principale): shadow pool, soglie
+   θ_gate/θ_entropy/θ_contamination, contamination rate per richiesta, memory
+   math del pool (da `gcsg_shadow_execution_report.md`, #19). **4.2 EMH come
+   substrato**: EAT (M1), Tier Manager (M2), tier PMEM (#7/#52/#57), SEE
+   policy — presentati per ciò che devono garantire a GCSG (residenza degli
+   shadow expert, budget VRAM), non come novità. **4.3 Predizione e
+   scheduling**: PT-PEP descritto come *un* predittore, con la sua proprietà
+   architetturale distintiva (gira sul testo, prima della tokenizzazione,
+   fuori dal critical path) e il suo limite dichiarato (nessuna correzione
+   in-flight, a differenza di FineMoE). AER **non compare** nel design:
+   citato in Future Work solo come replica *fra tier* su hardware
+   asimmetrico, se D5 lo tiene in vita.
+5. **Implementation** — worker vLLM V0 (0.10.1), `--enforce-eager`, finestra
+   di pin e sue conseguenze (`vllm_torch27_compat_analysis.md`); vincoli
+   dell'ambiente (Docker-on-Windows, WSL2, single-GPU, poi Z8 bare-metal)
+   come parte onesta della storia; i due bug upstream (#10/#16) come
+   root-cause reali.
+6. **Evaluation** — segue `reports/test_plan_emh_vs_vllm_offloader.md`,
+   pre-registrato (H1–H9): **6.1 L0b** bake-off dei predittori sulle stesse
+   tracce (decide come si racconta PT-PEP — è il primo esperimento in
+   ordine di esecuzione); **6.2 L0** primitive di trasferimento, calibra il
+   modello di costo; **6.3 L1** serving su singola GPU contro A0 (nessun
+   offload, due versioni), A1 `uva`, A2 `prefetch`, A3 EMH, A5 MoE-Infinity,
+   a parità di VRAM, con W1 (MMLU), W2 (decode sintetico), W3 (sweep di
+   skew); **6.4 qualità**: MMLU 5-shot con e senza GCSG, contamination rate
+   — è il numero che gli altri sistemi non hanno; **6.5 negative results**
+   raccontati: Bloom filter (rimosso), P3 se EMH "vince" a routing uniforme
+   (misura sbagliata), H8 se PT-PEP non batte il kNN. **6.6 L2** solo se #8
+   si sblocca in tempo (D7: KV cache al minimo globale sull'eterogeneo).
+7. **Discussion / Limitations** — confondimento di versione V0/V1 (ridotto,
+   non eliminato); shard 256 MB vs ≈ 90 MB per esperto INT4; qualità
+   asimmetrica (gli offloader non toccano i pesi); leakage PT-PEP su MMLU;
+   eager vs CUDA graph; RLock (#2); single-GPU; M4 out of scope.
+8. **Related Work** — quattro paragrafi, tre già in bozza in
+   `logbook_paper.md`: *Expert offloading systems* (MoE-Infinity, FineMoE —
+   entry 2026-09-02 bis), *Production engines* (offloader vLLM ed EEP —
+   entry 2026-09-02), *Quantization for MoE* (PagedWeight, AdapMoE, MoEQuant
+   — Cluster B, da verificare alla fonte), *Classic MoE serving*
+   (DeepSpeed-MoE, FasterMoE/Tutel, SwapAdvisor). FineMoE va citata dal PDF
+   appena raggiungibile: oggi i suoi meccanismi sono verificati sul codice
+   ufficiale, i numeri no.
+9. **Future Work** — correzione in-flight della predizione (#21, da FineMoE);
+   PMEM nel path reale (#57); dual-GPU (#8) e con esso D7 e AER fra tier;
+   Sprint 6 telemetria (#47); M4.
+10. **Conclusion**.
+
+**Ordine di esecuzione che ne consegue** (sostituisce la sequenza B1→B5 della
+timeline §4, ormai scaduta): L0b → L0 → immagine V1 → L1-W2 → L1-W1 → L1-W3 →
+draft. Il draft dell'abstract e dell'introduzione si scrive **dopo L0b**, non
+prima, perché il modo in cui si racconta PT-PEP dipende da H8.
+
+<details>
+<summary>B2 v1 (2026-08-12) — superata, conservata per storia</summary>
 
 1. Abstract
 2. Introduction — motivazione: MoE serving non ha un livello di sistema
@@ -306,6 +399,12 @@ sezione Evaluation.
 9. Future Work — Sprint 6 (telemetria), M4, PMEM/dual-GPU quando disponibili
 10. Conclusion
 
+La motivazione della v1 ("MoE serving non ha un livello di sistema dedicato
+al lifecycle degli expert") è stata smentita dalla verifica sul codice:
+MoE-Infinity e FineMoE sono esattamente quel livello. Vedi
+`reports/related_work_finemoe.md` §3.
+</details>
+
 ### B3. Materiale nuovo da produrre (non esiste ancora nel repo)
 
 - **Related work reale con citazioni verificate** — quanto già citato nei
@@ -315,11 +414,16 @@ sezione Evaluation.
   2026-08-13**, tracciata in `osx-poc/logbook_paper.md` (piano a
   sotto-obiettivi + bibliografia di lavoro): la gerarchia di memoria M1/M2
   è in uno spazio affollato (5-6 sistemi simili trovati, inclusa **FineMoE,
-  EuroSys 2026 — stessa venue/anno target**, da leggere per intero e
-  differenziare esplicitamente), mentre GCSG (shadow-verification della
-  qualità sotto quantizzazione) non ha ancora trovato un corrispettivo
-  diretto — non prova di originalità, solo la premessa per una survey più
-  mirata. Non chiudere B3 senza aver letto FineMoE integralmente.
+  EuroSys 2026 — stessa venue/anno target**), mentre GCSG (shadow-verification
+  della qualità sotto quantizzazione) non ha trovato un corrispettivo
+  diretto. **Aggiornamento 2026-09-02:** FineMoE e MoE-Infinity verificati
+  sul **codice ufficiale** (`reports/related_work_finemoe.md`) — il PDF è
+  irraggiungibile dall'ambiente di lavoro, i meccanismi sono verificati, i
+  numeri no; l'offloader nativo di vLLM e EEP verificati sul sorgente
+  (`reports/related_work_vllm_offloader.md`, `reports/related_work_elastic_ep.md`).
+  Esito: GCSG resta senza corrispettivo; EMH no. Da qui la v2 di B2.
+  B3 non si chiude senza la lettura del PDF di FineMoE per i numeri e le
+  baseline.
 - **Figure pulite** — il diagramma di architettura oggi è ASCII nel README,
   serve una figura vettoriale vera; grafici latenza/accuratezza a partire
   dai dati grezzi già presenti (`logs/sprint4_tekniska/misc/gpu_telemetry_20260812.csv`, i vari
